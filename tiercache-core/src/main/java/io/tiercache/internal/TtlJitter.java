@@ -4,9 +4,9 @@ import java.time.Duration;
 import java.util.concurrent.ThreadLocalRandom;
 
 /**
- * TTL jitter (F-24). Jitter only shortens TTLs — the result lies in
+ * TTL jitter. Jitter only shortens TTLs — the result lies in
  * {@code [base * (1 - amplitude), base]} — which keeps the runtime TTL
- * ordering guarantee (F-05) intact by construction.
+ * ordering guarantee (L1 never outlives L2) intact by construction.
  */
 public final class TtlJitter {
 

@@ -4,7 +4,7 @@ import java.time.Duration;
 import java.util.Objects;
 
 /**
- * Per-cache null-caching policy (F-25).
+ * Per-cache null-caching policy.
  *
  * <p>{@code deny} (the default): a loader null result is an uncached miss —
  * every lookup of a nonexistent key reaches the loader.
@@ -15,7 +15,7 @@ import java.util.Objects;
  * defense). The marker is distinguishable from a miss via
  * {@link TierCache#lookup}.
  *
- * <p><b>Incubating:</b> 0.x API, may change until CP-0.
+ * <p><b>Incubating:</b> 0.x API, may change before 1.0.
  */
 public sealed interface NullPolicy {
 

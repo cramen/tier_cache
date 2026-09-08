@@ -33,9 +33,22 @@ try (LettuceRemoteCache<String, String> l2 = LettuceRemoteCache
 }
 ```
 
-Reads cascade L1 → L2 → loader; an L2 hit always warms L1 (F-01). Concurrent loads of the same key share one loader execution — per instance (singleflight, F-20) and cluster-wide via a distributed rebuild lock with watchdog lease extension and mandatory double-check (F-21), on by default. Invalid configuration (e.g. L1 TTL > L2 TTL) fails fast at startup (F-04/F-05). Atomic `putIfAbsent` is backed by the L2 `SET NX PX` primitive (F-03). Null caching (F-25) is available per cache via `NullPolicy.allow(ttl)` — repeated lookups of nonexistent keys are absorbed by an explicit marker; use `lookup(key)` to distinguish miss / cached-null / hit.
+Reads cascade L1 → L2 → loader; an L2 hit always warms L1. Concurrent loads of the same key share one loader execution — per instance (singleflight) and cluster-wide via a distributed rebuild lock with watchdog lease extension and mandatory double-check, on by default. Invalid configuration (e.g. L1 TTL > L2 TTL) fails fast at startup. Atomic `putIfAbsent` is backed by the L2 `SET NX PX` primitive. Null caching is available per cache via `NullPolicy.allow(ttl)` — repeated lookups of nonexistent keys are absorbed by an explicit marker; use `lookup(key)` to distinguish miss / cached-null / hit.
 
-The cache is eventually consistent by design; no strong-consistency guarantees are given or implied (F-15).
+The cache is eventually consistent by design; no strong-consistency guarantees are given or implied.
+
+## Spring Boot quick start
+
+```java
+// application.yml
+tiercache:
+  enabled: true
+  redis-uri: redis://localhost:6379
+```
+
+With `tiercache-spring-boot-starter` on the classpath this replaces the standard cache manager: `@Cacheable/@CachePut/@CacheEvict` code works unchanged, backed by the two-level cache (migration from `RedisCacheManager` = swap the starter + these two lines). Per-cache overrides live under `tiercache.caches.<name>.*`; invalid configuration (e.g. L1 TTL > L2 TTL) aborts startup with an actionable error.
+
+A runnable demo lives in `examples/demo-spring` (docker-compose included).
 
 ## License
 

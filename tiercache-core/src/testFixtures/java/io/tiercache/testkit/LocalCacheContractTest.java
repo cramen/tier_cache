@@ -55,8 +55,18 @@ public abstract class LocalCacheContractTest {
     }
 
     @Test
+    void clearRemovesAllEntries() {
+        LocalCache<String, String> cache = newCache();
+        cache.put("a", StoredEntry.ofValue("1"), Duration.ofMinutes(1));
+        cache.put("b", StoredEntry.ofValue("2"), Duration.ofMinutes(1));
+        cache.clear();
+        assertNull(cache.get("a"));
+        assertNull(cache.get("b"));
+    }
+
+    @Test
     void nullMarkerRoundTrips() {
-        // F-25: markers are stored like any other entry.
+        // Markers are stored like any other entry.
         LocalCache<String, String> cache = newCache();
         cache.put("k", StoredEntry.nullMarker(), Duration.ofMinutes(1));
         StoredEntry<String> entry = cache.get("k");

@@ -17,19 +17,19 @@ import java.time.Duration;
 import java.util.Objects;
 
 /**
- * {@link RemoteCache} over Redis/Valkey via Lettuce (default L2 transport,
- * N-08). Supports per-entry TTLs (F-06, {@code SET ... PX}) and atomic
+ * {@link RemoteCache} over Redis/Valkey via Lettuce (the default L2
+ * transport). Supports per-entry TTLs ({@code SET ... PX}) and atomic
  * {@code setIfAbsent} ({@code SET ... PX NX}).
  *
  * <p>Keys are namespaced as {@code <cacheName>:<serialized-key>} so multiple
  * named caches can share one server.
  *
- * <p>Default timeouts (F-33): 100 ms connect, 250 ms per command — both
- * configurable via the builder. Infrastructure failures surface as Lettuce
- * unchecked exceptions; degradation handling (circuit breaker, F-30) lives
- * in core, not here.
+ * <p>Default timeouts: 100 ms connect, 250 ms per command — both
+ * configurable via the builder and deliberately below a typical business
+ * timeout. Infrastructure failures surface as Lettuce unchecked exceptions;
+ * degradation handling (circuit breaker) lives in core, not here.
  *
- * <p><b>Incubating:</b> 0.x API, may change until CP-0.
+ * <p><b>Incubating:</b> 0.x API, may change before the public API freeze.
  */
 public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockProviderSource, AutoCloseable {
 
@@ -45,7 +45,7 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
     private final CacheSerializer<V> valueSerializer;
 
     // Payload framing: every stored value is prefixed with a tag byte, so a
-    // null-marker (F-25) can never collide with serializer output.
+    // null-marker can never collide with serializer output.
     private static final byte TAG_NULL_MARKER = 0x00;
     private static final byte TAG_VALUE = 0x01;
 
@@ -93,6 +93,22 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
     @Override
     public void evict(K key) {
         commands.del(namespaced(key));
+    }
+
+    @Override
+    public void clear() {
+        // Namespace-scoped clear: SCAN the prefix, UNLINK in batches.
+        String pattern = new String(keyPrefix, java.nio.charset.StandardCharsets.UTF_8) + "*";
+        io.lettuce.core.ScanCursor cursor = io.lettuce.core.ScanCursor.INITIAL;
+        do {
+            io.lettuce.core.KeyScanCursor<byte[]> scanResult = commands.scan(cursor,
+                    io.lettuce.core.ScanArgs.Builder.matches(pattern).limit(200));
+            java.util.List<byte[]> keys = scanResult.getKeys();
+            if (!keys.isEmpty()) {
+                commands.unlink(keys.toArray(new byte[0][]));
+            }
+            cursor = scanResult;
+        } while (!cursor.isFinished());
     }
 
     @Override

@@ -28,10 +28,11 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * T-01 full form: M cache instances (separate factories, L1s, connections)
- * share one real Redis. With rebuild coordination (F-21) the loader runs
- * exactly once cluster-wide; with coordination explicitly disabled it runs
- * at most once per instance (harness sensitivity).
+ * Multi-instance cache stampede: M cache instances (separate factories,
+ * L1s, connections) share one real Redis. With distributed rebuild
+ * coordination the loader runs exactly once cluster-wide; with coordination
+ * explicitly disabled it runs at most once per instance (harness
+ * sensitivity).
  */
 class MultiInstanceStampedeTest {
 

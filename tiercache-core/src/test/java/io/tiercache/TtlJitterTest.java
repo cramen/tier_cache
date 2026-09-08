@@ -12,7 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Spec: cache-configuration — TTL ordering guarantee at runtime (F-05/F-24).
+ * Spec: cache-configuration — TTL ordering guarantee at runtime.
  */
 class TtlJitterTest {
 
@@ -24,7 +24,7 @@ class TtlJitterTest {
 
     @Test
     void jitteredTtlNeverExceedsBaseAcrossLargeSample() {
-        // F-05: with jitter only shortening TTLs, l1 base <= l2Ttl implies the
+        // With jitter only shortening TTLs, l1 base <= l2Ttl implies the
         // effective L1 TTL never exceeds the L2 TTL.
         Duration base = Duration.ofMinutes(10);
         Duration l2Ttl = Duration.ofMinutes(10);

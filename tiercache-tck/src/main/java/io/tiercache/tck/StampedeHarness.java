@@ -16,12 +16,12 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Stampede harness (T-01 shape, in-memory L2): N threads hit one hot key
- * exactly as it expires. Counts loader executions.
+ * Stampede harness (in-memory L2): N threads hit one hot key exactly as it
+ * expires. Counts loader executions.
  *
- * <p>Against a real Redis transport this becomes the chaos test T-01; the
- * harness shape (threads, expiry timing, loader counting) is fixed here so
- * the later change only swaps the L2 implementation.
+ * <p>Against a real Redis transport this becomes the full stampede chaos
+ * test; the harness shape (threads, expiry timing, loader counting) is fixed
+ * here so the later change only swaps the L2 implementation.
  */
 public final class StampedeHarness {
 

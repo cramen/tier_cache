@@ -78,6 +78,11 @@ class CoordinationTest {
             public boolean setIfAbsent(String key, String value, Duration ttl) {
                 return delegate.setIfAbsent(key, value, ttl);
             }
+
+            @Override
+            public void clear() {
+                delegate.clear();
+            }
         }
         TierCacheFactory factory = TierCacheFactory.builder()
                 .remoteCache(new SourcingL2())
@@ -175,6 +180,10 @@ class CoordinationTest {
             @Override
             public boolean setIfAbsent(String key, String value, Duration ttl) {
                 return true;
+            }
+
+            @Override
+            public void clear() {
             }
         };
         TierCache<String, String> cache = new DefaultTierCache<>("dc",

@@ -2,9 +2,9 @@ package io.tiercache;
 
 /**
  * Tri-state result of {@link TierCache#lookup}: distinguishes a hit, a
- * cached-null marker (F-25), and a miss.
+ * cached-null marker, and a miss.
  *
- * <p><b>Incubating:</b> 0.x API, may change until CP-0.
+ * <p><b>Incubating:</b> 0.x API, may change before 1.0.
  */
 public sealed interface LookupResult<V> {
 
@@ -27,7 +27,7 @@ public sealed interface LookupResult<V> {
     }
 
     /**
-     * A null-marker is present: the key is known to have no value (F-25).
+     * A null-marker is present: the key is known to have no value.
      */
     record CachedNull<V>() implements LookupResult<V> {
         private static final CachedNull<?> INSTANCE = new CachedNull<>();

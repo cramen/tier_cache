@@ -1,0 +1,10 @@
+server:
+  port: 8080
+
+tiercache:
+  enabled: true
+  redis-uri: redis://localhost:6379
+  caches:
+    greetings:
+      l1-expire-after-write: 1m
+      l2-ttl: 10m

@@ -15,7 +15,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Spec: null-caching (F-25) + cache-configuration null policy validation.
+ * Spec: null-caching + cache-configuration null policy validation.
  */
 class NullCachingTest {
 

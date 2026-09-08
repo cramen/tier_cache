@@ -13,7 +13,7 @@ java {
 }
 
 dependencies {
-    // N-06: the only dependency visible to consumers. Caffeine is an
+    // The only dependency visible to consumers. Caffeine is an
     // implementation detail, shaded into the jar (see shadowJar below).
     api(libs.slf4j.api)
     implementation(libs.caffeine) {
@@ -38,7 +38,7 @@ tasks.withType<Test> {
 
 // --- Shading (design D3): Caffeine is relocated so it never clashes with a
 // user-managed Caffeine on the classpath. Pinned plugin + disabled manifest
-// timestamps keep the artifact reproducible (S-02).
+// timestamps keep the artifact reproducible.
 tasks.shadowJar {
     // The shaded jar IS the main artifact: tiercache-core-<version>.jar
     archiveClassifier.set("")
@@ -56,7 +56,7 @@ tasks.jar {
 // --- Dependency audit (task 1.4): the runtime classpath may expose only
 // SLF4J API externally; Caffeine is allowed because it is shaded away.
 val dependencyAudit = tasks.register("dependencyAudit") {
-    description = "Fails if tiercache-core exposes mandatory dependencies beyond SLF4J API (N-06)."
+    description = "Fails if tiercache-core exposes mandatory dependencies beyond SLF4J API."
     group = "verification"
 
     val allowed = setOf(
@@ -76,7 +76,7 @@ val dependencyAudit = tasks.register("dependencyAudit") {
         val unexpected = found - allowed
         if (unexpected.isNotEmpty()) {
             throw GradleException(
-                "tiercache-core must not expose mandatory dependencies beyond SLF4J API (N-06). " +
+                "tiercache-core must not expose mandatory dependencies beyond SLF4J API. " +
                     "Unexpected modules on runtime classpath: $unexpected"
             )
         }
@@ -113,7 +113,7 @@ tasks.jacocoTestCoverageVerification {
 
 tasks.check { dependsOn(tasks.jacocoTestCoverageVerification) }
 
-// --- JMH (task 4.2): baseline for the L1-hit hot path (N-01/N-03).
+// --- JMH (task 4.2): baseline for the L1-hit hot path.
 jmh {
     profilers = listOf("gc")
 }

@@ -15,12 +15,12 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * T-02 (seed): cache avalanche. Mass write with an identical base TTL must
- * produce effective L1 TTLs uniformly spread over the jitter band, so
- * entries do not expire simultaneously.
+ * Cache avalanche. Mass write with an identical base TTL must produce
+ * effective L1 TTLs uniformly spread over the jitter band, so entries do
+ * not expire simultaneously.
  *
  * <p>Checked on assigned TTLs (not wall-clock expiry): uniformity of the
- * assignment is the actual defense (F-24).
+ * TTL-jitter assignment is the actual defense.
  */
 class AvalancheTest {
 

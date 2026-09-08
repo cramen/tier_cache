@@ -14,7 +14,7 @@ import java.time.Duration;
  *
  * <p>Per-entry TTLs are carried by a small value holder read by Caffeine's
  * {@link Expiry}. The holder is allocated on write only; the steady-state
- * hit path ({@link #get}) allocates nothing (N-03). Null-markers (F-25) are
+ * hit path ({@link #get}) allocates nothing. Null-markers are
  * stored like any other entry.
  */
 public final class CaffeineLocalCache<K, V> implements LocalCache<K, V> {
@@ -41,7 +41,7 @@ public final class CaffeineLocalCache<K, V> implements LocalCache<K, V> {
                     @Override
                     public long expireAfterRead(K key, Holder<V> value, long currentTime,
                             long currentDuration) {
-                        // expire-after-access (F-04), if configured
+                        // expire-after-access, if configured
                         return settings.l1ExpireAfterAccess() != null
                                 ? settings.l1ExpireAfterAccess().toNanos()
                                 : currentDuration;
@@ -64,6 +64,11 @@ public final class CaffeineLocalCache<K, V> implements LocalCache<K, V> {
     @Override
     public void evict(K key) {
         cache.invalidate(key);
+    }
+
+    @Override
+    public void clear() {
+        cache.invalidateAll();
     }
 
     private static final class Holder<V> {

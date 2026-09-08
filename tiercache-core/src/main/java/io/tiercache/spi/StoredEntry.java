@@ -2,13 +2,13 @@ package io.tiercache.spi;
 
 /**
  * What a cache level stores for a key: either a real value or an explicit
- * null-marker (F-25). Null itself is never stored — absence of an entry is
+ * null-marker. Null itself is never stored — absence of an entry is
  * signaled by {@code null} returns from the SPI getters.
  *
  * <p>Implementations treat this as an opaque holder; the marker flows
  * through storage like any other entry.
  *
- * <p><b>Incubating:</b> 0.x API, may change until CP-0.
+ * <p><b>Incubating:</b> 0.x API, may change before 1.0.
  */
 public final class StoredEntry<V> {
 

@@ -6,9 +6,9 @@ import java.time.Duration;
  * SPI for the L2 (distributed) cache level.
  *
  * <p><b>Incubating:</b> this interface is part of the 0.x API and may change
- * incompatibly until the public API freeze (roadmap checkpoint CP-0).
+ * incompatibly until the public API freeze.
  *
- * <p>Implementations must be thread-safe. TTLs are per entry (F-06): each
+ * <p>Implementations must be thread-safe. TTLs are per entry: each
  * {@link #put} carries the entry TTL. Entries are opaque {@link StoredEntry}
  * holders — implementations must persist null-markers like any other entry.
  * Implementations backed by a remote store must apply their own
@@ -26,7 +26,7 @@ public interface RemoteCache<K, V> {
     StoredEntry<V> get(K key);
 
     /**
-     * Stores {@code entry} under {@code key} with the given TTL (F-06).
+     * Stores {@code entry} under {@code key} with the given TTL.
      */
     void put(K key, StoredEntry<V> entry, Duration ttl);
 
@@ -36,9 +36,15 @@ public interface RemoteCache<K, V> {
     void evict(K key);
 
     /**
+     * Removes all entries of this cache's namespace. Used for
+     * {@code evictAll} / Spring's {@code Cache.clear()}.
+     */
+    void clear();
+
+    /**
      * Atomically stores {@code value} under {@code key} only if the key is
      * absent (or expired), with the given TTL. This is the foundation for
-     * distributed rebuild coordination (F-21) and {@code putIfAbsent} (F-03).
+     * distributed rebuild coordination and {@code putIfAbsent}.
      *
      * <p>Implementations backed by a remote store MUST make this operation
      * atomic across all clients of that store. Note: a stored null-marker

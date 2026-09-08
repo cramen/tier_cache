@@ -23,7 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Spec: redis-l2-transport — cross-instance atomicity, fail-fast timeouts
- * (F-33), pluggable serialization.
+ * kept well below business timeouts, pluggable serialization.
  */
 class LettuceRemoteCacheTest {
 
@@ -77,7 +77,7 @@ class LettuceRemoteCacheTest {
     @Test
     void unreachableServerFailsFast() {
         // Spec scenario: unreachable server -> unchecked exception within the
-        // configured timeout, no indefinite blocking (F-33).
+        // configured timeout, no indefinite blocking.
         try (LettuceRemoteCache<String, String> cache =
                 LettuceRemoteCache.<String, String>builder("redis://127.0.0.1:1")
                         .connectTimeout(Duration.ofMillis(100))

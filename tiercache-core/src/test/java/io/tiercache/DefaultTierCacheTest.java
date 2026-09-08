@@ -21,8 +21,8 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Spec: core-read-path — cascading read with L1 warm-up (F-01) and
- * per-instance singleflight (F-20).
+ * Spec: core-read-path — cascading read with L1 warm-up and
+ * per-instance singleflight.
  */
 class DefaultTierCacheTest {
 

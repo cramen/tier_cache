@@ -12,7 +12,7 @@ import java.util.UUID;
 
 /**
  * Runs the shared {@link RemoteCacheContractTest} suite against a real
- * server in a container (N-08). Subclasses pick the image.
+ * server in a container. Subclasses pick the image.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 abstract class AbstractLettuceContractTest extends RemoteCacheContractTest {

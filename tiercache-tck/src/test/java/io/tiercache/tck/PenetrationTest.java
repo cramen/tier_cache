@@ -14,9 +14,9 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * T-08 (seed): cache penetration. Repeated requests for nonexistent keys
- * must be absorbed by null-markers (F-25, allow policy): the loader sees at
- * most a tiny fraction of the traffic.
+ * Cache penetration. Repeated requests for nonexistent keys must be
+ * absorbed by null-markers (allow policy): the loader sees at most a tiny
+ * fraction of the traffic.
  */
 class PenetrationTest {
 
@@ -41,7 +41,7 @@ class PenetrationTest {
             assertNull(value);
         }
 
-        // T-08 acceptance: loader load <= 1/600 of traffic. We expect ~one
+        // Penetration acceptance: loader load <= 1/600 of traffic. We expect ~one
         // call per distinct key per marker window.
         assertTrue(loaderCalls.get() <= REQUESTS / 600,
                 () -> "loader calls " + loaderCalls.get() + " exceed 1/600 of " + REQUESTS);

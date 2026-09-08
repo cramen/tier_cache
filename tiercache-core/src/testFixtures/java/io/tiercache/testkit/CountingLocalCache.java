@@ -36,4 +36,9 @@ public final class CountingLocalCache<K, V> implements LocalCache<K, V> {
         evicts.incrementAndGet();
         store.remove(key);
     }
+
+    @Override
+    public void clear() {
+        store.clear();
+    }
 }

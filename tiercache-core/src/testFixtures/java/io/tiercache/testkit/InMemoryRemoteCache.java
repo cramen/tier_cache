@@ -40,6 +40,11 @@ public final class InMemoryRemoteCache<K, V> implements RemoteCache<K, V> {
     }
 
     @Override
+    public void clear() {
+        store.clear();
+    }
+
+    @Override
     public boolean setIfAbsent(K key, V value, Duration ttl) {
         long now = System.nanoTime();
         Entry<V> candidate = new Entry<>(StoredEntry.ofValue(value), now + ttl.toNanos());

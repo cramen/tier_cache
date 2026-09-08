@@ -12,7 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Spec: core-read-path — atomic put-if-absent write (F-03).
+ * Spec: core-read-path — atomic put-if-absent write.
  */
 class PutIfAbsentTest {
 

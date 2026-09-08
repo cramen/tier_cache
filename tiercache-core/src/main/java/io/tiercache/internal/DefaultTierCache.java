@@ -22,8 +22,8 @@ import java.util.function.Function;
 
 /**
  * Default {@link TierCache}: cascade read L1 &rarr; L2 &rarr; loader with
- * L1 warm-up (F-01), per-instance singleflight (F-20), null-marker handling
- * (F-25), and distributed rebuild coordination (F-21) when a lock provider
+ * L1 warm-up, per-instance singleflight, null-marker handling,
+ * and distributed rebuild coordination when a lock provider
  * is available.
  *
  * <p>Coordinated load path: acquire rebuild lock &rarr; <b>mandatory
@@ -32,14 +32,14 @@ import java.util.function.Function;
  * attempt a takeover on timeout — they never load uncoordinated unless the
  * overall budget is exhausted (logged safety valve).
  *
- * <p>Hot-path discipline (N-03): a steady-state L1 hit performs exactly one
+ * <p>Hot-path discipline: a steady-state L1 hit performs exactly one
  * {@code LocalCache.get} plus one reference check, and allocates nothing.
  */
 public final class DefaultTierCache<K, V> implements TierCache<K, V> {
 
     private static final Logger log = LoggerFactory.getLogger(DefaultTierCache.class);
 
-    /** Rebuild-lock lease. Internal constant — deliberately not user-configurable (F-21 trap). */
+    /** Rebuild-lock lease. Internal constant — deliberately not user-configurable. */
     static final Duration LOCK_LEASE = Duration.ofSeconds(10);
     /** How long a loser waits for the winner's value before attempting a takeover. */
     static final Duration WAIT_SLICE = Duration.ofSeconds(2);
@@ -137,7 +137,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V> {
 
     @Override
     public void put(K key, V value) {
-        // Write order F-02: L2 first, then L1. Overwrites any marker (F-25).
+        // Write order: L2 first, then L1. Overwrites any marker.
         StoredEntry<V> entry = StoredEntry.ofValue(value);
         l2.put(key, entry, settings.l2Ttl());
         warmL1(key, entry);
@@ -145,7 +145,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V> {
 
     @Override
     public boolean putIfAbsent(K key, V value) {
-        // F-03: atomic at L2; L1 warm-up only for the winner.
+        // Atomic at L2; L1 warm-up only for the winner.
         boolean won = l2.setIfAbsent(key, value, settings.l2Ttl());
         if (won) {
             warmL1(key, StoredEntry.ofValue(value));
@@ -159,7 +159,24 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V> {
         l1.evict(key);
     }
 
-    // --- Load path selection: coordinated (F-21) when possible ---
+    @Override
+    public void evictAll() {
+        l2.clear();
+        l1.clear();
+    }
+
+    @Override
+    public void putNull(K key) {
+        Duration markerTtl = settings.nullPolicy().markerTtl();
+        if (markerTtl == null) {
+            return; // deny policy: nothing to store
+        }
+        StoredEntry<V> marker = StoredEntry.nullMarker();
+        l2.put(key, marker, markerTtl);
+        l1.put(key, marker, TtlJitter.apply(markerTtl, settings.jitterAmplitude()));
+    }
+
+    // --- Load path selection: coordinated when possible ---
 
     private StoredEntry<V> loadPath(K key, Function<? super K, ? extends V> loader) {
         if (lockProvider == null || watchdog == null) {
@@ -176,7 +193,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V> {
             DistributedLock lock = lockProvider.tryLock(lockName, LOCK_LEASE);
             if (lock != null) {
                 try {
-                    // Mandatory double-check (F-21): the value may have
+                    // Mandatory double-check: the value may have
                     // appeared while we were acquiring the lock.
                     StoredEntry<V> entry = readThrough(key);
                     if (entry != null) {
@@ -261,7 +278,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V> {
                 // deny policy: a miss stays uncached
                 return null;
             }
-            // F-25: marker in both levels, jittered like any TTL (F-24).
+            // Null-marker stored in both levels, jittered like any TTL.
             StoredEntry<V> marker = StoredEntry.nullMarker();
             l2.put(key, marker, markerTtl);
             l1.put(key, marker, TtlJitter.apply(markerTtl, settings.jitterAmplitude()));
@@ -273,7 +290,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V> {
         return entry;
     }
 
-    /** Writes into L1 with a jittered TTL that never exceeds the L2 TTL (F-05/F-24). */
+    /** Writes into L1 with a jittered TTL that never exceeds the L2 TTL. */
     private void warmL1(K key, StoredEntry<V> entry) {
         Duration ttl = TtlJitter.apply(settings.l1ExpireAfterWrite(), settings.jitterAmplitude());
         l1.put(key, entry, ttl);

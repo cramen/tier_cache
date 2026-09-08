@@ -48,7 +48,7 @@ class CacheConfigurationTest {
                                 .l1ExpireAfterWrite(Duration.ofHours(2))
                                 .l2Ttl(Duration.ofHours(1)))
                         .build());
-        // Error names the cache, the invariant, and the concrete values (F-04).
+        // Error names the cache, the invariant, and the concrete values.
         assertTrue(e.getMessage().contains("bad"), () -> e.getMessage());
         assertTrue(e.getMessage().contains("PT2H"), () -> e.getMessage());
         assertTrue(e.getMessage().contains("PT1H"), () -> e.getMessage());

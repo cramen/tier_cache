@@ -2,7 +2,7 @@ package io.tiercache.redis;
 
 import org.testcontainers.utility.DockerImageName;
 
-/** Contract suite against Valkey (N-08). */
+/** Contract suite against Valkey. */
 class ValkeyLettuceContractTest extends AbstractLettuceContractTest {
 
     @Override

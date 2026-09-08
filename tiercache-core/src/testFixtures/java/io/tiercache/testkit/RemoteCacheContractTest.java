@@ -49,7 +49,7 @@ public abstract class RemoteCacheContractTest {
 
     @Test
     void entriesOfOneCacheMayHaveDifferentTtls() throws InterruptedException {
-        // F-06: per-entry TTL in L2.
+        // Per-entry TTL in L2.
         RemoteCache<String, String> cache = newCache();
         cache.put("short", StoredEntry.ofValue("v1"), Duration.ofMillis(50));
         cache.put("long", StoredEntry.ofValue("v2"), Duration.ofMinutes(1));
@@ -59,8 +59,18 @@ public abstract class RemoteCacheContractTest {
     }
 
     @Test
+    void clearRemovesAllEntries() {
+        RemoteCache<String, String> cache = newCache();
+        cache.put("a", StoredEntry.ofValue("1"), Duration.ofMinutes(1));
+        cache.put("b", StoredEntry.ofValue("2"), Duration.ofMinutes(1));
+        cache.clear();
+        assertNull(cache.get("a"));
+        assertNull(cache.get("b"));
+    }
+
+    @Test
     void nullMarkerRoundTrips() {
-        // F-25: markers persist like any other entry.
+        // Markers persist like any other entry.
         RemoteCache<String, String> cache = newCache();
         cache.put("k", StoredEntry.nullMarker(), Duration.ofMinutes(1));
         StoredEntry<String> entry = cache.get("k");

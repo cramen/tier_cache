@@ -75,7 +75,7 @@ class AdditionalBehaviorTest {
 
     @Test
     void getWarmsL1WithJitteredTtlWithinL2Ttl() {
-        // F-05 end-to-end: after an L2 hit warms L1, the L1 copy expires no
+        // TTL ordering end-to-end: after an L2 hit warms L1, the L1 copy expires no
         // later than the L2 copy even with jitter enabled.
         InMemoryRemoteCache<String, String> l2 = new InMemoryRemoteCache<>();
         TierCache<String, String> cache = TierCacheFactory.builder()

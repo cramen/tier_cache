@@ -11,7 +11,7 @@ import org.openjdk.jmh.annotations.State;
 import org.openjdk.jmh.infra.Blackhole;
 
 /**
- * Baseline for the L1-hit hot path (N-01 overhead, N-03 allocations).
+ * Baseline for the L1-hit hot path (overhead and allocations).
  * Run short mode: ./gradlew :tiercache-core:jmh -Pjmh.iterations=1 ...
  * or via the {@code jmh} task defaults configured for CI.
  */

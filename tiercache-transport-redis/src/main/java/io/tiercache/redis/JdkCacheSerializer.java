@@ -14,7 +14,7 @@ import java.io.UncheckedIOException;
  * brittle across class changes and unsafe for untrusted data. Provide your
  * own {@link CacheSerializer} (e.g. JSON-based) for real deployments.
  *
- * <p><b>Incubating:</b> 0.x API, may change until CP-0.
+ * <p><b>Incubating:</b> 0.x API, may change before the public API freeze.
  */
 public final class JdkCacheSerializer<T> implements CacheSerializer<T> {
 

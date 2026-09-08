@@ -6,7 +6,7 @@ import java.time.Duration;
  * SPI for the L1 (in-process) cache level.
  *
  * <p><b>Incubating:</b> this interface is part of the 0.x API and may change
- * incompatibly until the public API freeze (roadmap checkpoint CP-0).
+ * incompatibly until the public API freeze.
  *
  * <p>Implementations must be thread-safe. TTLs are per entry: each
  * {@link #put} carries the effective TTL computed by the core (base TTL with
@@ -32,4 +32,10 @@ public interface LocalCache<K, V> {
      * Removes {@code key} if present.
      */
     void evict(K key);
+
+    /**
+     * Removes all entries. Used for {@code evictAll} / Spring's
+     * {@code Cache.clear()}.
+     */
+    void clear();
 }

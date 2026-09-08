@@ -11,7 +11,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * {@link LocalCache} wrapper that records the effective TTL of every write —
- * used by the avalanche TCK test (T-02) to inspect the expiry distribution.
+ * used by the avalanche TCK test to inspect the expiry distribution.
  */
 public final class RecordingLocalCache<K, V> implements LocalCache<K, V> {
 
@@ -32,6 +32,11 @@ public final class RecordingLocalCache<K, V> implements LocalCache<K, V> {
     @Override
     public void evict(K key) {
         store.remove(key);
+    }
+
+    @Override
+    public void clear() {
+        store.clear();
     }
 
     /**

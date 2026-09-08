@@ -12,7 +12,8 @@ import java.time.Duration;
 import java.util.UUID;
 
 /**
- * {@link DistributedLockProvider} over Redis/Valkey via Lettuce (F-21).
+ * {@link DistributedLockProvider} over Redis/Valkey via Lettuce, used for
+ * cluster-wide rebuild coordination.
  *
  * <p>Acquire: {@code SET name token PX lease NX}. Release: Lua
  * compare-and-delete on the ownership token, so a stale holder can never
@@ -20,7 +21,7 @@ import java.util.UUID;
  * Locks live in the {@code tiercache:rebuild:*} keyspace, separate from data
  * entries.
  *
- * <p><b>Incubating:</b> 0.x API, may change until CP-0.
+ * <p><b>Incubating:</b> 0.x API, may change before the public API freeze.
  */
 public final class LettuceLockProvider implements DistributedLockProvider {
 
@@ -32,7 +33,7 @@ public final class LettuceLockProvider implements DistributedLockProvider {
                     + " else return 0 end";
 
     // Token check implies the key exists, so plain PEXPIRE suffices
-    // (PEXPIRE ... XX requires Redis 7.0; our baseline is 6.2, N-08).
+    // (PEXPIRE ... XX requires Redis 7.0; our baseline is 6.2).
     private static final String EXTEND_SCRIPT =
             "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('pexpire', KEYS[1],"
                     + " ARGV[2]) else return 0 end";

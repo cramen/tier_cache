@@ -20,16 +20,16 @@ import java.util.function.BiFunction;
 
 /**
  * Builds {@link TierCache} instances from global defaults plus per-cache
- * overrides (F-04). Configuration is validated at {@link Builder#build()}
+ * overrides. Configuration is validated at {@link Builder#build()}
  * time — an invalid configuration aborts initialization before any cache
- * serves traffic (fail-fast, F-04/F-05).
+ * serves traffic (fail-fast startup validation).
  *
  * <p>The factory owns a daemon watchdog scheduler used for rebuild-lock
- * lease extension (F-21); close the factory when done.
+ * lease extension; close the factory when done.
  *
- * <p><b>Incubating:</b> 0.x API, may change until CP-0.
+ * <p><b>Incubating:</b> 0.x API, may change before 1.0.
  *
- * <p>Consistency model (F-15): caches built here are eventually consistent;
+ * <p>Consistency model: caches built here are eventually consistent;
  * no strong-consistency guarantees are given or implied.
  */
 public final class TierCacheFactory implements AutoCloseable {
@@ -54,7 +54,7 @@ public final class TierCacheFactory implements AutoCloseable {
         this.caches = new LinkedHashMap<>();
         builder.overrides.forEach((name, override) -> caches.put(name, override.resolve(defaults)));
 
-        // Fail-fast validation of every configured cache (F-04).
+        // Fail-fast validation of every configured cache.
         CacheConfigValidator.validate("<global defaults>", defaults);
         caches.forEach(CacheConfigValidator::validate);
 
@@ -66,11 +66,11 @@ public final class TierCacheFactory implements AutoCloseable {
         this.lockProvider = provider;
 
         if (!coordinationEnabled) {
-            log.warn("Distributed rebuild coordination (F-21) disabled by explicit opt-in. "
+            log.warn("Distributed rebuild coordination disabled by explicit opt-in. "
                     + "Concurrent misses of one key across instances will each run the loader "
                     + "(cluster-wide stampede risk).");
         } else if (lockProvider == null) {
-            log.warn("No distributed lock provider available for the configured L2 (F-21). "
+            log.warn("No distributed lock provider available for the configured L2. "
                     + "Falling back to per-instance coalescing only: up to one loader execution "
                     + "per instance per rebuild round.");
         }
@@ -141,7 +141,7 @@ public final class TierCacheFactory implements AutoCloseable {
         /**
          * The L2 implementation shared by all caches. Required. If it
          * implements {@link LockProviderSource}, the rebuild-lock provider
-         * (F-21) is derived automatically unless set explicitly.
+         * is derived automatically unless set explicitly.
          */
         @SuppressWarnings("unchecked")
         public Builder remoteCache(RemoteCache<?, ?> remoteCache) {
@@ -159,7 +159,7 @@ public final class TierCacheFactory implements AutoCloseable {
         }
 
         /**
-         * Explicit lock provider for rebuild coordination (F-21). Usually
+         * Explicit lock provider for rebuild coordination. Usually
          * omitted: derived from the L2 transport when it implements
          * {@link LockProviderSource}.
          */
@@ -169,7 +169,7 @@ public final class TierCacheFactory implements AutoCloseable {
         }
 
         /**
-         * Explicit opt-out of singleflight protection (F-20). Stampede
+         * Explicit opt-out of singleflight protection. Stampede
          * protection is on by default; disabling it is logged as a risk.
          */
         public Builder disableSingleflight() {
@@ -178,7 +178,7 @@ public final class TierCacheFactory implements AutoCloseable {
         }
 
         /**
-         * Explicit opt-out of distributed rebuild coordination (F-21).
+         * Explicit opt-out of distributed rebuild coordination.
          * Coordination is on by default when a lock provider is available;
          * disabling it is logged as a risk.
          */
@@ -190,7 +190,7 @@ public final class TierCacheFactory implements AutoCloseable {
         public TierCacheFactory build() {
             Objects.requireNonNull(remoteCache, "remoteCache is required");
             if (!singleflightEnabled) {
-                log.warn("Singleflight protection (F-20) disabled by explicit opt-in. "
+                log.warn("Singleflight protection disabled by explicit opt-in. "
                         + "Concurrent misses of one key will each invoke the loader "
                         + "(cache stampede risk).");
             }
