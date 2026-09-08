@@ -6,4 +6,4 @@ Status: early development. The project skeleton is not created yet — see `AGEN
 
 ## License
 
-TBD
+[Apache License 2.0](LICENSE)
