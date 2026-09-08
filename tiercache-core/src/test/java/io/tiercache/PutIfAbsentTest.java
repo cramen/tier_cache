@@ -50,7 +50,7 @@ class PutIfAbsentTest {
     void winnerAfterExpirySucceeds() throws InterruptedException {
         TierCacheFactory factory = TierCacheFactory.builder()
                 .defaults(new CacheSettings(10_000, Duration.ofMillis(100), null,
-                        Duration.ofMillis(100), 0.0, NullPolicy.deny()))
+                        Duration.ofMillis(100), 0.0, NullPolicy.deny(), InvalidationMode.INVALIDATE, 64 * 1024))
                 .remoteCache(new InMemoryRemoteCache<>())
                 .build();
         TierCache<String, String> cache = factory.getCache("c");

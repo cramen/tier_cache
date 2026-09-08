@@ -73,6 +73,9 @@ public class TiercacheProperties {
 
         private boolean enabled = true;
 
+        /** Invalidation transport profile: pubsub (default) or streams. */
+        private String profile = "pubsub";
+
         /** Max journal entries kept per cache stream. */
         private int journalCapacity = 10_000;
 
@@ -82,6 +85,14 @@ public class TiercacheProperties {
 
         public void setEnabled(boolean enabled) {
             this.enabled = enabled;
+        }
+
+        public String getProfile() {
+            return profile;
+        }
+
+        public void setProfile(String profile) {
+            this.profile = profile;
         }
 
         public int getJournalCapacity() {
@@ -109,6 +120,8 @@ public class TiercacheProperties {
         private Double jitterAmplitude;
         private Kind nullPolicy;
         private Duration nullMarkerTtl;
+        private io.tiercache.InvalidationMode invalidationMode;
+        private Long payloadCapBytes;
 
         public enum Kind {
             DENY, ALLOW
@@ -162,6 +175,22 @@ public class TiercacheProperties {
             this.nullPolicy = nullPolicy;
         }
 
+        public io.tiercache.InvalidationMode getInvalidationMode() {
+            return invalidationMode;
+        }
+
+        public void setInvalidationMode(io.tiercache.InvalidationMode invalidationMode) {
+            this.invalidationMode = invalidationMode;
+        }
+
+        public Long getPayloadCapBytes() {
+            return payloadCapBytes;
+        }
+
+        public void setPayloadCapBytes(Long payloadCapBytes) {
+            this.payloadCapBytes = payloadCapBytes;
+        }
+
         public Duration getNullMarkerTtl() {
             return nullMarkerTtl;
         }
@@ -206,6 +235,12 @@ public class TiercacheProperties {
             NullPolicy policy = toNullPolicy();
             if (policy != null) {
                 override.nullPolicy(policy);
+            }
+            if (invalidationMode != null) {
+                override.invalidationMode(invalidationMode);
+            }
+            if (payloadCapBytes != null) {
+                override.payloadCapBytes(payloadCapBytes);
             }
             return override;
         }

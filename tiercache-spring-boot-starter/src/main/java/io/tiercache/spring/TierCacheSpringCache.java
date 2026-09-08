@@ -118,6 +118,9 @@ public class TierCacheSpringCache extends AbstractValueAdaptingCache {
         delegate.evictAll();
     }
 
+    // Tags/batch eviction are programmatic-only for now; the annotation
+    // surface does not expose them.
+
     private static final class LoaderException extends RuntimeException {
         LoaderException(Throwable cause) {
             super(cause);

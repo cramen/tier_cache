@@ -65,6 +65,13 @@ public final class InvalidationService implements InvalidationHandler {
     }
 
     @Override
+    public void onLocalUpdate(String cache, Object key, Object value, io.tiercache.Version version) {
+        transport.publish(new InvalidationMessage(cache, key, version, originInstanceId,
+                InvalidationMessage.Type.UPDATE, value));
+        metrics.onInvalidation(cache, CacheMetricsListener.Direction.SENT);
+    }
+
+    @Override
     public void registerTarget(String cache, InvalidationTarget target) {
         targets.put(cache, target);
         subscriptions.computeIfAbsent(cache, c -> {
@@ -91,6 +98,8 @@ public final class InvalidationService implements InvalidationHandler {
         try {
             switch (message.type()) {
                 case INVALIDATE -> target.evictL1IfNewer(message.key(), message.version());
+                case UPDATE -> target.applyUpdateL1(message.key(), message.payload(),
+                        message.version());
                 case EVICT_ALL -> target.evictAllL1();
             }
         } finally {

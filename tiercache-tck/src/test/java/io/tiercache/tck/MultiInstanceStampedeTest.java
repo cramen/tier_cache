@@ -1,5 +1,7 @@
 package io.tiercache.tck;
 
+import io.tiercache.InvalidationMode;
+
 import io.lettuce.core.RedisClient;
 import io.tiercache.CacheSettings;
 import io.tiercache.NullPolicy;
@@ -85,7 +87,7 @@ class MultiInstanceStampedeTest {
                 .<String, String>builder(redisUri).cacheName("winner-death").build();
         TierCacheFactory factory = TierCacheFactory.builder()
                 .defaults(new CacheSettings(10_000, Duration.ofMinutes(1), null,
-                        Duration.ofHours(1), 0.0, NullPolicy.deny()))
+                        Duration.ofHours(1), 0.0, NullPolicy.deny(), InvalidationMode.INVALIDATE, 64 * 1024))
                 .remoteCache(l2)
                 .build();
         TierCache<String, String> cache = factory.getCache("winner-death");
@@ -115,7 +117,7 @@ class MultiInstanceStampedeTest {
             transports.add(l2);
             TierCacheFactory.Builder builder = TierCacheFactory.builder()
                     .defaults(new CacheSettings(10_000, Duration.ofMinutes(1), null,
-                            Duration.ofHours(1), 0.0, NullPolicy.deny()))
+                            Duration.ofHours(1), 0.0, NullPolicy.deny(), InvalidationMode.INVALIDATE, 64 * 1024))
                     .remoteCache(l2);
             if (!coordination) {
                 builder.disableDistributedCoordination();

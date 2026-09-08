@@ -1,5 +1,7 @@
 package io.tiercache.tck;
 
+import io.tiercache.InvalidationMode;
+
 import io.tiercache.CacheSettings;
 import io.tiercache.NullPolicy;
 import io.tiercache.TierCache;
@@ -28,7 +30,7 @@ class PenetrationTest {
         AtomicInteger loaderCalls = new AtomicInteger();
         TierCache<String, String> cache = TierCacheFactory.builder()
                 .defaults(new CacheSettings(DISTINCT_KEYS * 2, Duration.ofMinutes(5), null,
-                        Duration.ofHours(1), 0.10, NullPolicy.allow(Duration.ofSeconds(60))))
+                        Duration.ofHours(1), 0.10, NullPolicy.allow(Duration.ofSeconds(60)), InvalidationMode.INVALIDATE, 64 * 1024))
                 .remoteCache(new InMemoryRemoteCache<>())
                 .build()
                 .getCache("penetration");

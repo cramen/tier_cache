@@ -78,6 +78,19 @@ public final class CircuitBreakerRemoteCache<K, V> implements RemoteCache<K, V> 
         return guard(() -> delegate.setIfAbsent(key, entry, ttl));
     }
 
+    @Override
+    public void putTagged(K key, StoredEntry<V> entry, Duration ttl, String[] tags) {
+        guard(() -> {
+            delegate.putTagged(key, entry, ttl, tags);
+            return null;
+        });
+    }
+
+    @Override
+    public java.util.List<K> keysByTag(String tag) {
+        return guard(() -> delegate.keysByTag(tag));
+    }
+
     private <T> T guard(java.util.concurrent.Callable<T> call) {
         if (!breaker.tryAcquire()) {
             throw L2UnavailableException.OPEN;

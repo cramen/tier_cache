@@ -1,5 +1,7 @@
 package io.tiercache.spring;
 
+import io.tiercache.InvalidationMode;
+
 import io.tiercache.CacheSettings;
 import io.tiercache.NullPolicy;
 import io.tiercache.TierCacheFactory;
@@ -23,7 +25,7 @@ class TierCacheSpringCacheTest {
     private TierCacheSpringCache newCache(String name, NullPolicy nullPolicy) {
         TierCacheFactory factory = TierCacheFactory.builder()
                 .defaults(new CacheSettings(10_000, Duration.ofMinutes(5), null,
-                        Duration.ofHours(1), 0.0, nullPolicy))
+                        Duration.ofHours(1), 0.0, nullPolicy, InvalidationMode.INVALIDATE, 64 * 1024))
                 .remoteCache(new InMemoryRemoteCache<>())
                 .lockProvider(new InMemoryLockProvider())
                 .build();

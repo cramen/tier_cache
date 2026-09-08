@@ -65,6 +65,8 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
     private final CacheSerializer<K> keySerializer;
     private final CacheSerializer<V> valueSerializer;
     private final RedisStreamJournal journal; // null = unversioned mode
+    private io.tiercache.InvalidationMode invalidationMode = io.tiercache.InvalidationMode.INVALIDATE;
+    private long payloadCapBytes = 64 * 1024;
 
     private static final byte TAG_NULL_MARKER = 0x00;
     private static final byte TAG_VALUE = 0x01;
@@ -91,6 +93,8 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
         this.keySerializer = builder.keySerializer;
         this.valueSerializer = builder.valueSerializer;
         this.journal = builder.journal;
+        this.invalidationMode = builder.invalidationMode;
+        this.payloadCapBytes = builder.payloadCapBytes;
     }
 
     public static <K, V> Builder<K, V> builder(String redisUri) {
@@ -152,13 +156,16 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
                 String.valueOf(ttl.toMillis()).getBytes(StandardCharsets.UTF_8),
                 String.valueOf(journal.capacity()).getBytes(StandardCharsets.UTF_8),
                 new byte[]{(byte) InvalidationMessage.Type.INVALIDATE.ordinal()},
-                keySerializer.toBytes(key));
+                keySerializer.toBytes(key),
+                journalPayload(entry));
         return result != null && result == 1L;
     }
 
     @Override
     public void evict(K key) {
-        commands.del(namespaced(key));
+        byte[] namespaced = namespaced(key);
+        commands.del(namespaced);
+        pruneTags(namespaced);
     }
 
     /**
@@ -171,8 +178,10 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
             evict(key);
             return;
         }
+        byte[] namespaced = namespaced(key);
+        pruneTags(namespaced);
         commands.eval(Lua.VERSIONED_EVICT, io.lettuce.core.ScriptOutputType.INTEGER,
-                new byte[][]{namespaced(key), RedisStreamJournal.streamKeyBytes(cacheName)},
+                new byte[][]{namespaced, RedisStreamJournal.streamKeyBytes(cacheName)},
                 version.toWire().getBytes(StandardCharsets.UTF_8),
                 String.valueOf(TOMBSTONE_TTL_MILLIS).getBytes(StandardCharsets.UTF_8),
                 String.valueOf(journal.capacity()).getBytes(StandardCharsets.UTF_8),
@@ -218,8 +227,18 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
                 String.valueOf(journal.capacity()).getBytes(StandardCharsets.UTF_8),
                 new byte[]{(byte) InvalidationMessage.Type.INVALIDATE.ordinal()},
                 keySerializer.toBytes(key),
-                entry.version().toWire().getBytes(StandardCharsets.UTF_8));
+                entry.version().toWire().getBytes(StandardCharsets.UTF_8),
+                journalPayload(entry));
         return result != null && result == 1L;
+    }
+
+    /** Value bytes for the journal row in UPDATE mode (capped); empty otherwise. */
+    private byte[] journalPayload(StoredEntry<V> entry) {
+        if (invalidationMode != io.tiercache.InvalidationMode.UPDATE || entry.isNullMarker()) {
+            return new byte[0];
+        }
+        byte[] bytes = valueSerializer.toBytes(entry.value());
+        return bytes.length <= payloadCapBytes ? bytes : new byte[0];
     }
 
     private byte[] encode(StoredEntry<V> entry) {
@@ -241,6 +260,60 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
         System.arraycopy(versionBytes, 0, out, 5, versionBytes.length);
         System.arraycopy(payload, 0, out, 5 + versionBytes.length, payload.length);
         return out;
+    }
+
+    // --- Tag registry: tiercache:tags:<cache>:<tag> sets + reverse index
+    // tiercache:tagkeys:<cache>:<key> (Redis sets have no per-member TTL;
+    // stale members are pruned on eviction and are harmless otherwise). ---
+
+    private byte[] tagSetKey(String tag) {
+        return ("tiercache:tags:" + cacheName + ":" + tag).getBytes(StandardCharsets.UTF_8);
+    }
+
+    private byte[] keyTagsKey(byte[] namespacedKey) {
+        byte[] prefix = ("tiercache:tagkeys:").getBytes(StandardCharsets.UTF_8);
+        byte[] out = new byte[prefix.length + namespacedKey.length];
+        System.arraycopy(prefix, 0, out, 0, prefix.length);
+        System.arraycopy(namespacedKey, 0, out, prefix.length, namespacedKey.length);
+        return out;
+    }
+
+    @Override
+    public void putTagged(K key, StoredEntry<V> entry, Duration ttl, String[] tags) {
+        put(key, entry, ttl);
+        byte[] namespaced = namespaced(key);
+        byte[] keyTags = keyTagsKey(namespaced);
+        if (tags.length > 0) {
+            commands.del(keyTags);
+            commands.sadd(keyTags, java.util.Arrays.stream(tags)
+                    .map(t -> t.getBytes(StandardCharsets.UTF_8)).toArray(byte[][]::new));
+            for (String tag : tags) {
+                commands.sadd(tagSetKey(tag), namespaced);
+            }
+        }
+    }
+
+    @Override
+    public java.util.List<K> keysByTag(String tag) {
+        java.util.Set<byte[]> members = commands.smembers(tagSetKey(tag));
+        java.util.List<K> out = new java.util.ArrayList<>(members.size());
+        for (byte[] namespaced : members) {
+            byte[] raw = java.util.Arrays.copyOfRange(namespaced, keyPrefix.length, namespaced.length);
+            out.add(keySerializer.fromBytes(raw));
+        }
+        return out;
+    }
+
+    /** Removes tag bookkeeping for an evicted key. */
+    private void pruneTags(byte[] namespaced) {
+        byte[] keyTags = keyTagsKey(namespaced);
+        java.util.Set<byte[]> tags = commands.smembers(keyTags);
+        if (tags != null && !tags.isEmpty()) {
+            for (byte[] tag : tags) {
+                commands.srem(tagSetKey(new String(tag, StandardCharsets.UTF_8)), namespaced);
+            }
+            commands.del(keyTags);
+        }
     }
 
     private byte[] namespaced(K key) {
@@ -291,14 +364,14 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
                         + " + string.byte(bytes,4)*256 + string.byte(bytes,5) "
                         + "return string.sub(bytes, 6, 6 + l - 1) end ";
 
-        /** Conditional value/marker write + journal row. */
+        /** Conditional value/marker write + journal row (payload in 'p' when present). */
         static final String CONDITIONAL_WRITE = VERSION_COMPARE
                 + "local cur = redis.call('get', KEYS[1]) "
                 + "local curVer = curVersion(cur) "
                 + "if curVer and newer(curVer, ARGV[1]) then return 0 end "
                 + "redis.call('set', KEYS[1], ARGV[2], 'PX', ARGV[3]) "
                 + "redis.call('xadd', KEYS[2], 'MAXLEN', '~', ARGV[4], '*',"
-                + " 't', ARGV[5], 'k', ARGV[6], 'v', ARGV[1]) "
+                + " 't', ARGV[5], 'k', ARGV[6], 'v', ARGV[1], 'p', ARGV[7]) "
                 + "return 1";
 
         /** Evict = versioned tombstone write + journal row. */
@@ -312,13 +385,13 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
                 + " 't', ARGV[4], 'k', ARGV[5], 'v', ARGV[1]) "
                 + "return 1";
 
-        /** set-if-absent; a tombstone counts as absent. */
+        /** set-if-absent; a tombstone counts as absent. Payload in 'p' when present. */
         static final String SET_IF_ABSENT = VERSION_COMPARE
                 + "local cur = redis.call('get', KEYS[1]) "
                 + "if cur and string.byte(cur, 1) ~= 4 then return 0 end "
                 + "redis.call('set', KEYS[1], ARGV[1], 'PX', ARGV[2]) "
                 + "redis.call('xadd', KEYS[2], 'MAXLEN', '~', ARGV[3], '*',"
-                + " 't', ARGV[4], 'k', ARGV[5], 'v', ARGV[6]) "
+                + " 't', ARGV[4], 'k', ARGV[5], 'v', ARGV[6], 'p', ARGV[7]) "
                 + "return 1";
     }
 
@@ -336,6 +409,8 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
         private Duration connectTimeout = DEFAULT_CONNECT_TIMEOUT;
         private Duration commandTimeout = DEFAULT_COMMAND_TIMEOUT;
         private RedisStreamJournal journal;
+        private io.tiercache.InvalidationMode invalidationMode = io.tiercache.InvalidationMode.INVALIDATE;
+        private long payloadCapBytes = 64 * 1024;
 
         private Builder(String redisUri) {
             this.redisUri = Objects.requireNonNull(redisUri, "redisUri");
@@ -390,6 +465,17 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
          */
         public Builder<K, V> journal(RedisStreamJournal journal) {
             this.journal = journal;
+            return this;
+        }
+
+        /**
+         * UPDATE invalidation mode for this transport's cache: journal rows
+         * carry the value payload (up to {@code payloadCapBytes}; larger
+         * values fall back to INVALIDATE semantics).
+         */
+        public Builder<K, V> invalidationMode(io.tiercache.InvalidationMode mode, long payloadCapBytes) {
+            this.invalidationMode = mode;
+            this.payloadCapBytes = payloadCapBytes;
             return this;
         }
 

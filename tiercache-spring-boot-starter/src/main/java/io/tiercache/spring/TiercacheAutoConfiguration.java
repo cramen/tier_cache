@@ -60,10 +60,14 @@ public class TiercacheAutoConfiguration {
     @SuppressWarnings("unchecked")
     RemoteCache<Object, Object> tiercacheRemoteCache(TiercacheProperties properties,
             RedisClient tiercacheRedisClient, ObjectProvider<RedisStreamJournal> journal) {
+        io.tiercache.CacheSettings defaultSettings = properties.getDefaults()
+                .toSettings(io.tiercache.CacheSettings.defaults());
         return (RemoteCache<Object, Object>) LettuceRemoteCache.builder(properties.getRedisUri())
                 .client(tiercacheRedisClient)
                 .cacheName("spring")
                 .journal(journal.getIfAvailable())
+                .invalidationMode(defaultSettings.invalidationMode(),
+                        defaultSettings.payloadCapBytes())
                 .build();
     }
 
@@ -82,10 +86,18 @@ public class TiercacheAutoConfiguration {
     @ConditionalOnProperty(name = "tiercache.invalidation.enabled",
             havingValue = "true", matchIfMissing = true)
     Function<VersionGenerator, InvalidationHandler> tiercacheInvalidationHandlerFactory(
-            RedisClient tiercacheRedisClient, RedisStreamJournal journal) {
-        LettucePubSubInvalidationTransport transport =
-                new LettucePubSubInvalidationTransport(tiercacheRedisClient, new JdkCacheSerializer<>());
-        return versions -> new InvalidationService(transport, journal,
+            RedisClient tiercacheRedisClient, RedisStreamJournal journal,
+            TiercacheProperties properties) {
+        io.tiercache.spi.InvalidationTransport transport;
+        if ("streams".equalsIgnoreCase(properties.getInvalidation().getProfile())) {
+            transport = new io.tiercache.redis.LettuceStreamsInvalidationTransport(
+                    tiercacheRedisClient, new JdkCacheSerializer<>(), new JdkCacheSerializer<>());
+        } else {
+            transport = new LettucePubSubInvalidationTransport(tiercacheRedisClient,
+                    new JdkCacheSerializer<>());
+        }
+        io.tiercache.spi.InvalidationTransport selected = transport;
+        return versions -> new InvalidationService(selected, journal,
                 versions.instanceId(), io.tiercache.spi.InvalidationListener.NOOP);
     }
 

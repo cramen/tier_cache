@@ -55,8 +55,10 @@ class MetricsEmissionTest {
 
         cache.put("k", "v");
         cache.get("k");          // L1_HIT
-        TierCache<String, String> cold = factory.getCache("c"); // fresh L1, same L2
-        cold.get("k");           // L2_HIT (warms the fresh L1)
+        // A different named cache (its own L1, same shared L2 namespace in
+        // the in-memory test double) sees the key via L2.
+        TierCache<String, String> cold = factory.getCache("c2");
+        cold.get("k");           // L2_HIT
         cold.get("k");           // L1_HIT
         cache.get("absent");     // MISS (deny policy)
         assertEquals(2, count(recording, Outcome.L1_HIT));
@@ -109,7 +111,7 @@ class MetricsEmissionTest {
     void nullMarkerEmitsEvent() {
         Recording recording = new Recording();
         CacheSettings allow = new CacheSettings(10_000, java.time.Duration.ofMinutes(5), null,
-                java.time.Duration.ofHours(1), 0.0, NullPolicy.allow(java.time.Duration.ofMinutes(1)));
+                java.time.Duration.ofHours(1), 0.0, NullPolicy.allow(java.time.Duration.ofMinutes(1)), InvalidationMode.INVALIDATE, 64 * 1024);
         TierCacheFactory factory = TierCacheFactory.builder()
                 .defaults(allow)
                 .remoteCache(new InMemoryRemoteCache<>())

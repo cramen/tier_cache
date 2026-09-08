@@ -19,7 +19,8 @@ class TailCoverageTest {
     void negativeDurationsRejected() {
         assertThrows(IllegalArgumentException.class, () ->
                 new CacheSettings(10, Duration.ofMinutes(1), null, Duration.ofHours(-1), 0.0,
-                        NullPolicy.deny()));
+                        NullPolicy.deny(),
+                        InvalidationMode.INVALIDATE, 64 * 1024));
         assertThrows(IllegalArgumentException.class, () ->
                 NullPolicy.allow(Duration.ofMinutes(-1)));
     }

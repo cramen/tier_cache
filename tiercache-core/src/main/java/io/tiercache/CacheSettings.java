@@ -3,6 +3,7 @@ package io.tiercache;
 import java.time.Duration;
 import java.util.Objects;
 
+
 /**
  * Fully-resolved settings for one named cache: every field is concrete.
  *
@@ -15,6 +16,9 @@ import java.util.Objects;
  * @param jitterAmplitude    TTL jitter amplitude as a fraction in [0, 1)
  *                           (e.g. 0.1 = up to 10% shorter TTLs)
  * @param nullPolicy         null-caching policy; default {@code deny}
+ * @param invalidationMode   UPDATE to include payloads in invalidation events
+ * @param payloadCapBytes    max payload bytes for UPDATE events; larger
+ *                           writes fall back to plain INVALIDATE
  */
 public record CacheSettings(
         long l1MaxSize,
@@ -22,12 +26,18 @@ public record CacheSettings(
         Duration l1ExpireAfterAccess,
         Duration l2Ttl,
         double jitterAmplitude,
-        NullPolicy nullPolicy) {
+        NullPolicy nullPolicy,
+        InvalidationMode invalidationMode,
+        long payloadCapBytes) {
 
     public CacheSettings {
         Objects.requireNonNull(l1ExpireAfterWrite, "l1ExpireAfterWrite");
         Objects.requireNonNull(l2Ttl, "l2Ttl");
         Objects.requireNonNull(nullPolicy, "nullPolicy");
+        Objects.requireNonNull(invalidationMode, "invalidationMode");
+        if (payloadCapBytes < 1024) {
+            throw new IllegalArgumentException("payloadCapBytes must be >= 1024, got " + payloadCapBytes);
+        }
         if (l1MaxSize <= 0) {
             throw new IllegalArgumentException("l1MaxSize must be positive, got " + l1MaxSize);
         }
@@ -57,6 +67,8 @@ public record CacheSettings(
                 null,
                 Duration.ofHours(1),
                 0.10,
-                NullPolicy.deny());
+                NullPolicy.deny(),
+                InvalidationMode.INVALIDATE,
+                64 * 1024);
     }
 }

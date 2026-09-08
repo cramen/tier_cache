@@ -77,7 +77,7 @@ class DefaultTierCacheEdgeTest {
         assertTrue(breaker.isOpen());
 
         CacheSettings allow = new CacheSettings(10_000, Duration.ofMinutes(5), null,
-                Duration.ofHours(1), 0.0, NullPolicy.allow(Duration.ofMinutes(1)));
+                Duration.ofHours(1), 0.0, NullPolicy.allow(Duration.ofMinutes(1)), InvalidationMode.INVALIDATE, 64 * 1024);
         CountingRemoteCache<String, String> l2 = new CountingRemoteCache<>();
         DefaultTierCache<String, String> cache = new DefaultTierCache<>("c",
                 new CountingLocalCache<>(), l2, allow, true, null, null,

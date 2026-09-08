@@ -46,7 +46,8 @@ class InvalidationEdgeTest {
     @Test
     void cacheSettingsRejectsNullNullPolicy() {
         assertThrows(NullPointerException.class, () ->
-                new CacheSettings(10, Duration.ofMinutes(1), null, Duration.ofHours(1), 0.0, null));
+                new CacheSettings(10, Duration.ofMinutes(1), null, Duration.ofHours(1), 0.0, null,
+                        InvalidationMode.INVALIDATE, 64 * 1024));
     }
 
     @Test

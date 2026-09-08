@@ -1,5 +1,7 @@
 package io.tiercache.tck;
 
+import io.tiercache.InvalidationMode;
+
 import io.tiercache.CacheSettings;
 import io.tiercache.TierCache;
 import io.tiercache.TierCacheFactory;
@@ -35,7 +37,7 @@ class AvalancheTest {
         RecordingLocalCache<String, String> recorder = new RecordingLocalCache<>();
         TierCache<String, String> cache = TierCacheFactory.builder()
                 .defaults(new CacheSettings(WRITES * 2, Duration.ofHours(1), null,
-                        Duration.ofHours(2), amplitude, NullPolicy.deny()))
+                        Duration.ofHours(2), amplitude, NullPolicy.deny(), InvalidationMode.INVALIDATE, 64 * 1024))
                 .remoteCache(new InMemoryRemoteCache<>())
                 .localCacheFactory((name, settings) -> recorder)
                 .build()
@@ -58,7 +60,7 @@ class AvalancheTest {
         RecordingLocalCache<String, String> recorder = new RecordingLocalCache<>();
         TierCache<String, String> cache = TierCacheFactory.builder()
                 .defaults(new CacheSettings(WRITES * 2, Duration.ofHours(1), null,
-                        Duration.ofHours(2), 0.0, NullPolicy.deny()))
+                        Duration.ofHours(2), 0.0, NullPolicy.deny(), InvalidationMode.INVALIDATE, 64 * 1024))
                 .remoteCache(new InMemoryRemoteCache<>())
                 .localCacheFactory((name, settings) -> recorder)
                 .build()

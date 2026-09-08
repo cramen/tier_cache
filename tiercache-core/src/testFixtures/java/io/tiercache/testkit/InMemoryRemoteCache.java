@@ -37,6 +37,15 @@ public final class InMemoryRemoteCache<K, V> implements RemoteCache<K, V> {
     @Override
     public void evict(K key) {
         store.remove(key);
+        java.util.Set<String> tags = keyTags.remove(key);
+        if (tags != null) {
+            for (String tag : tags) {
+                java.util.Set<K> members = tagIndex.get(tag);
+                if (members != null) {
+                    members.remove(key);
+                }
+            }
+        }
     }
 
     @Override
@@ -51,6 +60,23 @@ public final class InMemoryRemoteCache<K, V> implements RemoteCache<K, V> {
         Entry<V> result = store.merge(key, candidate,
                 (existing, candidateEntry) -> now >= existing.expiresAtNanos ? candidateEntry : existing);
         return result == candidate;
+    }
+
+    private final Map<String, java.util.Set<K>> tagIndex = new ConcurrentHashMap<>();
+    private final Map<K, java.util.Set<String>> keyTags = new ConcurrentHashMap<>();
+
+    @Override
+    public void putTagged(K key, StoredEntry<V> entry, Duration ttl, String[] tags) {
+        put(key, entry, ttl);
+        for (String tag : tags) {
+            tagIndex.computeIfAbsent(tag, t -> ConcurrentHashMap.newKeySet()).add(key);
+            keyTags.computeIfAbsent(key, k -> ConcurrentHashMap.newKeySet()).add(tag);
+        }
+    }
+
+    @Override
+    public java.util.List<K> keysByTag(String tag) {
+        return java.util.List.copyOf(tagIndex.getOrDefault(tag, java.util.Set.of()));
     }
 
     public int size() {

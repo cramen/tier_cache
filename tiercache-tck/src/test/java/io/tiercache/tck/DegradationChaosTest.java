@@ -1,5 +1,7 @@
 package io.tiercache.tck;
 
+import io.tiercache.InvalidationMode;
+
 import io.tiercache.CacheSettings;
 import io.tiercache.NullPolicy;
 import io.tiercache.TierCache;
@@ -41,7 +43,7 @@ abstract class AbstractDegradationChaosTest {
                 .build();
         return TierCacheFactory.builder()
                 .defaults(new CacheSettings(10_000, Duration.ofMinutes(5), null,
-                        Duration.ofHours(1), 0.0, NullPolicy.deny()))
+                        Duration.ofHours(1), 0.0, NullPolicy.deny(), InvalidationMode.INVALIDATE, 64 * 1024))
                 .remoteCache(l2)
                 .circuitBreakerConfig(FAST)
                 .build();

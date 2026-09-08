@@ -31,20 +31,20 @@ class MicrometerCacheMetricsTest {
 
         cache.put("k", "v");
         cache.get("k");
-        factory.getCache("c").get("k"); // fresh L1 -> L2 hit
+        factory.getCache("c2").get("k"); // another cache name: L1 miss -> L2 hit
         cache.get("missing");
         cache.getOrCompute("new", key -> "loaded");
 
         assertEquals(1.0, registry.get("tiercache.requests")
                 .tags("cache", "c", "result", "l1_hit").counter().count());
         assertEquals(1.0, registry.get("tiercache.requests")
-                .tags("cache", "c", "result", "l2_hit").counter().count());
+                .tags("cache", "c2", "result", "l2_hit").counter().count());
         assertEquals(1.0, registry.get("tiercache.requests")
                 .tags("cache", "c", "result", "miss").counter().count());
         assertEquals(1.0, registry.get("tiercache.requests")
                 .tags("cache", "c", "result", "load").counter().count());
         assertTrue(registry.get("tiercache.latency")
-                        .tags("cache", "c", "level", "l2").timer().count() > 0);
+                        .tags("cache", "c2", "level", "l2").timer().count() > 0);
         factory.close();
     }
 
@@ -89,13 +89,13 @@ class MicrometerCacheMetricsTest {
         TierCache<String, String> cache = factory.getCache("c");
         cache.put("k", "v");
         cache.get("k");                    // L1 hit: no span
-        factory.getCache("c").get("k");    // fresh L1 -> L2 hit: span
+        factory.getCache("c2").get("k");   // L1 miss -> L2 hit: span
         provider.forceFlush();
 
         assertEquals(1, exporter.getFinishedSpanItems().size());
         var span = exporter.getFinishedSpanItems().get(0);
         assertEquals("tiercache.l2.get", span.getName());
-        assertEquals("c", span.getAttributes().get(io.opentelemetry.api.common.AttributeKey.stringKey("cache.name")));
+        assertEquals("c2", span.getAttributes().get(io.opentelemetry.api.common.AttributeKey.stringKey("cache.name")));
         assertEquals("redis", span.getAttributes().get(io.opentelemetry.api.common.AttributeKey.stringKey("db.system")));
         assertEquals(true, span.getAttributes().get(io.opentelemetry.api.common.AttributeKey.booleanKey("cache.hit")));
         factory.close();

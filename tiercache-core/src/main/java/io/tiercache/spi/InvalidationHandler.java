@@ -18,6 +18,14 @@ public interface InvalidationHandler extends AutoCloseable {
     void onLocalWrite(String cache, Object key, Version version, InvalidationMessage.Type type);
 
     /**
+     * Publishes an UPDATE event carrying the new value (update-mode caches).
+     */
+    default void onLocalUpdate(String cache, Object key, Object value, Version version) {
+        // Default: degrade to plain INVALIDATE.
+        onLocalWrite(cache, key, version, InvalidationMessage.Type.INVALIDATE);
+    }
+
+    /**
      * Registers a cache instance as a receiver of invalidation events.
      */
     void registerTarget(String cache, InvalidationTarget target);

@@ -92,8 +92,25 @@ public interface TierCache<K, V> {
 
     /**
      * Removes all entries of this cache from both levels (supports
-     * {@code @CacheEvict(allEntries = true)}). Local-only in this version:
-     * cross-instance broadcast lands with the invalidation change.
+     * {@code @CacheEvict(allEntries = true)}).
      */
     void evictAll();
+
+    /**
+     * Stores {@code value} under {@code key}, tagging it for later
+     * {@link #evictByTag}. An empty {@code tags} behaves like
+     * {@link #put(Object, Object)}.
+     */
+    void put(K key, V value, String... tags);
+
+    /**
+     * Removes all entries tagged with {@code tag} from both levels, on all
+     * instances (per-key invalidation events).
+     */
+    void evictByTag(String tag);
+
+    /**
+     * Removes the given keys from both levels, on all instances.
+     */
+    void evictAll(java.util.Collection<K> keys);
 }

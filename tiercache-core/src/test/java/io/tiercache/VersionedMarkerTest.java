@@ -20,7 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class VersionedMarkerTest {
 
     private static final CacheSettings ALLOW = new CacheSettings(10_000, Duration.ofMinutes(5),
-            null, Duration.ofHours(1), 0.0, NullPolicy.allow(Duration.ofMinutes(1)));
+            null, Duration.ofHours(1), 0.0, NullPolicy.allow(Duration.ofMinutes(1)), InvalidationMode.INVALIDATE, 64 * 1024);
 
     private record Harness(DefaultTierCache<String, String> cache, List<InvalidationMessage> published,
             CountingLocalCache<String, String> l1, CountingRemoteCache<String, String> l2) {

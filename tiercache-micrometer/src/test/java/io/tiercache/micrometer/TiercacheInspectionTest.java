@@ -28,7 +28,7 @@ class TiercacheInspectionTest {
         TierCache<String, String> cache = factory.getCache("c");
         cache.put("k", "v");
         cache.get("k");                 // L1 hit
-        factory.getCache("c").get("k"); // L2 hit (fresh L1)
+        factory.getCache("c2").get("k"); // L2 hit (cache c2, fresh L1)
         cache.get("absent");            // miss
 
         try (TiercacheInspection inspection = new TiercacheInspection(registry, factory,
@@ -39,12 +39,13 @@ class TiercacheInspectionTest {
             assertArrayEquals(new String[]{"c"},
                     (String[]) server.getAttribute(name, "CacheNames"));
             assertEquals("closed", server.getAttribute(name, "BreakerState"));
+            // c: one L1 hit + one miss; c2: one L2 hit.
             Object l1 = server.invoke(name, "getL1HitRatio",
                     new Object[]{"c"}, new String[]{String.class.getName()});
-            assertEquals(1.0 / 3.0, (double) l1, 0.001);
+            assertEquals(0.5, (double) l1, 0.001);
             Object l2 = server.invoke(name, "getL2HitRatio",
-                    new Object[]{"c"}, new String[]{String.class.getName()});
-            assertEquals(1.0 / 3.0, (double) l2, 0.001);
+                    new Object[]{"c2"}, new String[]{String.class.getName()});
+            assertEquals(1.0, (double) l2, 0.001);
             Object journalSize = server.invoke(name, "getJournalSize",
                     new Object[]{"c"}, new String[]{String.class.getName()});
             assertEquals(-1L, (long) journalSize);

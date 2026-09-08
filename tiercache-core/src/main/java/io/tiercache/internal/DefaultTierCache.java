@@ -1,6 +1,7 @@
 package io.tiercache.internal;
 
 import io.tiercache.CacheSettings;
+import io.tiercache.InvalidationMode;
 import io.tiercache.InvalidationMessage;
 import io.tiercache.LookupResult;
 import io.tiercache.TierCache;
@@ -195,7 +196,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
             return;
         }
         warmL1(key, entry);
-        publish(key, version, InvalidationMessage.Type.INVALIDATE);
+        publishStore(key, entry, version);
     }
 
     @Override
@@ -209,8 +210,9 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
                     TtlJitter.apply(settings.l1ExpireAfterWrite(), settings.jitterAmplitude()));
         }
         if (won) {
-            warmL1(key, StoredEntry.ofValue(value, version));
-            publish(key, version, InvalidationMessage.Type.INVALIDATE);
+            StoredEntry<V> stored = StoredEntry.ofValue(value, version);
+            warmL1(key, stored);
+            publishStore(key, stored, version);
         }
         return won;
     }
@@ -246,6 +248,52 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
                 TtlJitter.apply(markerTtl, settings.jitterAmplitude()));
     }
 
+    @Override
+    public void put(K key, V value, String... tags) {
+        if (tags == null || tags.length == 0) {
+            put(key, value);
+            return;
+        }
+        Version version = nextVersion();
+        StoredEntry<V> entry = StoredEntry.ofValue(value, version);
+        if (breaker != null && breaker.isOpen()) {
+            warmL1(key, entry);
+            return;
+        }
+        try {
+            l2.putTagged(key, entry, settings.l2Ttl(), tags);
+            warmL1(key, entry);
+            publishStore(key, entry, version);
+        } catch (L2UnavailableException e) {
+            warmL1(key, entry);
+        }
+    }
+
+    @Override
+    public void evictByTag(String tag) {
+        for (K key : l2KeysByTag(tag)) {
+            evict(key);
+        }
+    }
+
+    @Override
+    public void evictAll(java.util.Collection<K> keys) {
+        for (K key : keys) {
+            evict(key);
+        }
+    }
+
+    private java.util.List<K> l2KeysByTag(String tag) {
+        if (breaker != null && breaker.isOpen()) {
+            return java.util.List.of();
+        }
+        try {
+            return l2.keysByTag(tag);
+        } catch (L2UnavailableException e) {
+            return java.util.List.of();
+        }
+    }
+
     // --- InvalidationTarget (inbound events, applied last-write-wins) ---
 
     @Override
@@ -274,6 +322,19 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         l1.clear();
     }
 
+    @Override
+    @SuppressWarnings("unchecked")
+    public void applyUpdateL1(Object key, Object value, Version eventVersion) {
+        K typedKey = (K) key;
+        StoredEntry<V> current = l1.get(typedKey);
+        if (current != null && current.version() != null
+                && eventVersion.compareTo(current.version()) <= 0) {
+            return; // stale update
+        }
+        l1.put(typedKey, StoredEntry.ofValue((V) value, eventVersion),
+                TtlJitter.apply(settings.l1ExpireAfterWrite(), settings.jitterAmplitude()));
+    }
+
     private Version nextVersion() {
         return versionGenerator != null ? versionGenerator.next() : null;
     }
@@ -281,6 +342,18 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
     private void publish(Object key, Version version, InvalidationMessage.Type type) {
         if (invalidation != null && version != null) {
             invalidation.onLocalWrite(cacheName, key, version, type);
+        }
+    }
+
+    /** Publish for a stored entry: UPDATE (with payload) in update mode, else INVALIDATE. */
+    private void publishStore(K key, StoredEntry<V> entry, Version version) {
+        if (invalidation == null || version == null) {
+            return;
+        }
+        if (settings.invalidationMode() == InvalidationMode.UPDATE && !entry.isNullMarker()) {
+            invalidation.onLocalUpdate(cacheName, key, entry.value(), version);
+        } else {
+            invalidation.onLocalWrite(cacheName, key, version, InvalidationMessage.Type.INVALIDATE);
         }
     }
 
@@ -441,7 +514,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         } else {
             warmL1(key, entry);
         }
-        publish(key, version, InvalidationMessage.Type.INVALIDATE);
+        publishStore(key, entry, version);
     }
 
     /** Writes into L1 with a jittered TTL that never exceeds the L2 TTL. */

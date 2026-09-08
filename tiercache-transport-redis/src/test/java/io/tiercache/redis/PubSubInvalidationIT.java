@@ -1,5 +1,7 @@
 package io.tiercache.redis;
 
+import io.tiercache.InvalidationMode;
+
 import io.lettuce.core.RedisClient;
 import io.lettuce.core.codec.ByteArrayCodec;
 import io.tiercache.CacheSettings;
@@ -64,7 +66,7 @@ class PubSubInvalidationIT {
                 .build();
         return TierCacheFactory.builder()
                 .defaults(new CacheSettings(10_000, Duration.ofMinutes(5), null,
-                        Duration.ofHours(1), 0.0, NullPolicy.deny()))
+                        Duration.ofHours(1), 0.0, NullPolicy.deny(), InvalidationMode.INVALIDATE, 64 * 1024))
                 .remoteCache(l2)
                 .invalidation(versions -> new InvalidationService(transport, journal,
                         versions.instanceId(), InvalidationListener.NOOP))

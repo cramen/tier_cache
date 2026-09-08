@@ -56,6 +56,7 @@ public final class TierCacheFactory implements AutoCloseable {
     private final InvalidationHandler invalidation; // null = single-node
     private final CircuitBreaker breaker;           // null = unguarded L2 (opt-out)
     private final CacheMetricsListener metricsListener;
+    private final Map<String, TierCache<?, ?>> liveCaches = new java.util.concurrent.ConcurrentHashMap<>();
 
     private TierCacheFactory(Builder builder) {
         this.defaults = builder.defaults;
@@ -135,22 +136,25 @@ public final class TierCacheFactory implements AutoCloseable {
         return new Builder();
     }
 
+
     /**
-     * Returns the named cache, creating it on first access. Unconfigured
-     * names operate with the global defaults.
+     * Returns the named cache. The same instance is returned for repeated
+     * calls with the same name: a cache's L1 is shared, not duplicated.
      */
     @SuppressWarnings("unchecked")
     public <K, V> TierCache<K, V> getCache(String name) {
-        CacheSettings settings = caches.getOrDefault(name, defaults);
-        LocalCache<K, V> l1 = (LocalCache<K, V>) localCacheFactory.apply(name, settings);
-        DefaultTierCache<K, V> cache = new DefaultTierCache<>(name, l1,
-                (RemoteCache<K, V>) remoteCache, settings, singleflightEnabled,
-                coordinationEnabled ? lockProvider : null, watchdog, versionGenerator, invalidation,
-                breaker, metricsListener);
-        if (invalidation != null) {
-            invalidation.registerTarget(name, cache);
-        }
-        return cache;
+        return (TierCache<K, V>) liveCaches.computeIfAbsent(name, n -> {
+            CacheSettings settings = caches.getOrDefault(n, defaults);
+            LocalCache<K, V> l1 = (LocalCache<K, V>) localCacheFactory.apply(n, settings);
+            DefaultTierCache<K, V> cache = new DefaultTierCache<>(n, l1,
+                    (RemoteCache<K, V>) remoteCache, settings, singleflightEnabled,
+                    coordinationEnabled ? lockProvider : null, watchdog, versionGenerator, invalidation,
+                    breaker, metricsListener);
+            if (invalidation != null) {
+                invalidation.registerTarget(n, cache);
+            }
+            return cache;
+        });
     }
 
     /**

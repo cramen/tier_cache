@@ -1,5 +1,7 @@
 package io.tiercache.tck;
 
+import io.tiercache.InvalidationMode;
+
 import io.lettuce.core.RedisClient;
 import io.lettuce.core.codec.ByteArrayCodec;
 import io.tiercache.CacheSettings;
@@ -83,30 +85,47 @@ abstract class AbstractInvalidationChaosTest {
         final TierCacheFactory factory;
         final TierCache<String, String> cache;
         final DroppingTransport transport;
+        final RedisStreamJournal journal;
 
         Side(RedisClient client, String uri, int journalCapacity) {
             this(client, uri, journalCapacity,
-                    io.tiercache.spi.CacheMetricsListener.NOOP, io.tiercache.spi.CacheMetricsListener.NOOP);
+                    io.tiercache.spi.CacheMetricsListener.NOOP,
+                    io.tiercache.spi.CacheMetricsListener.NOOP, null);
         }
 
         Side(RedisClient client, String uri, int journalCapacity,
                 io.tiercache.spi.CacheMetricsListener metrics,
                 io.tiercache.spi.CacheMetricsListener serviceMetrics) {
+            this(client, uri, journalCapacity, metrics, serviceMetrics, null);
+        }
+
+        Side(RedisClient client, String uri, int journalCapacity,
+                io.tiercache.spi.CacheMetricsListener metrics,
+                io.tiercache.spi.CacheMetricsListener serviceMetrics,
+                io.tiercache.CacheOverride cacheOverride) {
             this.client = client;
-            RedisStreamJournal journal = new RedisStreamJournal(
+            this.journal = new RedisStreamJournal(
                     client.connect(ByteArrayCodec.INSTANCE), journalCapacity, new JdkCacheSerializer<>());
-            this.l2 = LettuceRemoteCache.<String, String>builder(uri)
+            var l2Builder = LettuceRemoteCache.<String, String>builder(uri)
                     .client(client)
                     .cacheName(CACHE)
-                    .journal(journal)
-                    .build();
+                    .journal(journal);
+            if (cacheOverride != null) {
+                var resolved = cacheOverride.resolve(CacheSettings.defaults());
+                l2Builder.invalidationMode(resolved.invalidationMode(), resolved.payloadCapBytes());
+            }
+            this.l2 = l2Builder.build();
             this.transport = new DroppingTransport(
                     new LettucePubSubInvalidationTransport(client, new JdkCacheSerializer<>()));
-            this.factory = TierCacheFactory.builder()
+            TierCacheFactory.Builder factoryBuilder = TierCacheFactory.builder()
                     .defaults(new CacheSettings(10_000, Duration.ofMinutes(5), null,
-                            Duration.ofHours(1), 0.0, NullPolicy.deny()))
+                            Duration.ofHours(1), 0.0, NullPolicy.deny(), InvalidationMode.INVALIDATE, 64 * 1024))
                     .remoteCache(l2)
-                    .metricsListener(metrics)
+                    .metricsListener(metrics);
+            if (cacheOverride != null) {
+                factoryBuilder.cache(CACHE, cacheOverride);
+            }
+            this.factory = factoryBuilder
                     .invalidation(versions -> new InvalidationService(transport, journal,
                             versions.instanceId(), InvalidationListener.NOOP, serviceMetrics))
                     .build();

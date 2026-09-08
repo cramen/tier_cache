@@ -27,4 +27,12 @@ public interface InvalidationTarget {
      * Clears the L1 entirely (EVICT_ALL events, journal overflow).
      */
     void evictAllL1();
+
+    /**
+     * Applies an UPDATE event: stores the payload in L1 if the event's
+     * version is newer than the current entry's (or the entry is absent).
+     */
+    default void applyUpdateL1(Object key, Object value, Version eventVersion) {
+        evictL1IfNewer(key, eventVersion); // default: no payload application
+    }
 }

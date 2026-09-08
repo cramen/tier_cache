@@ -22,7 +22,7 @@ class NullCachingTest {
     private TierCacheFactory factoryWith(NullPolicy policy) {
         return TierCacheFactory.builder()
                 .defaults(new CacheSettings(10_000, Duration.ofMinutes(5), null,
-                        Duration.ofHours(1), 0.0, policy))
+                        Duration.ofHours(1), 0.0, policy, InvalidationMode.INVALIDATE, 64 * 1024))
                 .remoteCache(new InMemoryRemoteCache<>())
                 .build();
     }
@@ -134,7 +134,7 @@ class NullCachingTest {
         CountingRemoteCache<String, String> l2 = new CountingRemoteCache<>();
         CountingLocalCache<String, String> l1 = new CountingLocalCache<>();
         CacheSettings settings = new CacheSettings(10_000, Duration.ofMinutes(5), null,
-                Duration.ofHours(1), 0.0, NullPolicy.allow(Duration.ofMinutes(1)));
+                Duration.ofHours(1), 0.0, NullPolicy.allow(Duration.ofMinutes(1)), InvalidationMode.INVALIDATE, 64 * 1024);
         TierCache<String, String> cache =
                 new io.tiercache.internal.DefaultTierCache<>(l1, l2, settings, true);
 

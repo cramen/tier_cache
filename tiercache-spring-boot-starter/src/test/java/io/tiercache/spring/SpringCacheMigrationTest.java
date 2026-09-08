@@ -1,5 +1,7 @@
 package io.tiercache.spring;
 
+import io.tiercache.InvalidationMode;
+
 import io.tiercache.NullPolicy;
 import io.tiercache.CacheOverride;
 import io.tiercache.TierCacheFactory;

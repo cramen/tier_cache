@@ -254,7 +254,7 @@ class CoordinationTest {
         InMemoryLockProvider locks = new InMemoryLockProvider();
         InMemoryRemoteCache<String, String> sharedL2 = new InMemoryRemoteCache<>();
         CacheSettings allowNulls = new CacheSettings(10_000, Duration.ofMinutes(5), null,
-                Duration.ofHours(1), 0.0, NullPolicy.allow(Duration.ofMinutes(1)));
+                Duration.ofHours(1), 0.0, NullPolicy.allow(Duration.ofMinutes(1)), InvalidationMode.INVALIDATE, 64 * 1024);
         TierCache<String, String> a = coordinatedInstance(sharedL2, locks, "c", allowNulls).cache();
         TierCache<String, String> b = coordinatedInstance(sharedL2, locks, "c", allowNulls).cache();
 

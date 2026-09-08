@@ -36,6 +36,21 @@ class InvalidationAutoConfigurationTest {
     }
 
     @Test
+    void streamsProfileIsSelectable() {
+        try (GenericContainer<?> redis = new GenericContainer<>(
+                DockerImageName.parse("redis:6.2-alpine")).withExposedPorts(6379)) {
+            redis.start();
+            String uri = "redis://" + redis.getHost() + ":" + redis.getMappedPort(6379);
+            runner.withPropertyValues("tiercache.enabled=true", "tiercache.redis-uri=" + uri,
+                            "tiercache.invalidation.profile=streams")
+                    .run(context -> {
+                        assertThat(context).hasNotFailed();
+                        context.getBean(TierCacheFactory.class).getCache("s").put("k", "v");
+                    });
+        }
+    }
+
+    @Test
     void invalidationOptOutSkipsBeans() {
         try (GenericContainer<?> redis = new GenericContainer<>(
                 DockerImageName.parse("redis:6.2-alpine")).withExposedPorts(6379)) {

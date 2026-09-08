@@ -35,6 +35,7 @@ public final class RedisStreamJournal implements InvalidationJournal {
     private static final byte[] FIELD_TYPE = "t".getBytes();
     private static final byte[] FIELD_KEY = "k".getBytes();
     private static final byte[] FIELD_VERSION = "v".getBytes();
+    private static final byte[] FIELD_PAYLOAD = "p".getBytes();
 
     private final RedisCommands<byte[], byte[]> commands;
     private final int capacity;
@@ -67,8 +68,13 @@ public final class RedisStreamJournal implements InvalidationJournal {
      */
     void appendQueued(RedisCommands<byte[], byte[]> tx, String cache, byte[] keyBytes,
             Version version, InvalidationMessage.Type type) {
+        appendQueued(tx, cache, keyBytes, version, type, null);
+    }
+
+    void appendQueued(RedisCommands<byte[], byte[]> tx, String cache, byte[] keyBytes,
+            Version version, InvalidationMessage.Type type, byte[] payload) {
         tx.xadd(streamKey(cache), XAddArgs.Builder.maxlen(capacity).approximateTrimming(),
-                fields(keyBytes, version, type));
+                fields(keyBytes, version, type, payload));
     }
 
     @Override
@@ -76,7 +82,7 @@ public final class RedisStreamJournal implements InvalidationJournal {
         byte[] keyBytes = message.key() != null ? keySerializer.toBytes(message.key()) : null;
         return commands.xadd(streamKey(cache),
                 XAddArgs.Builder.maxlen(capacity).approximateTrimming(),
-                fields(keyBytes, message.version(), message.type()));
+                fields(keyBytes, message.version(), message.type(), message.payload() != null ? keySerializer.toBytes(message.payload()) : null));
     }
 
     @Override
@@ -122,22 +128,30 @@ public final class RedisStreamJournal implements InvalidationJournal {
     }
 
     private Map<byte[], byte[]> fields(byte[] keyBytes, Version version,
-            InvalidationMessage.Type type) {
+            InvalidationMessage.Type type, byte[] payload) {
         Map<byte[], byte[]> fields = new LinkedHashMap<>();
         fields.put(FIELD_TYPE, new byte[]{(byte) type.ordinal()});
         fields.put(FIELD_KEY, keyBytes != null ? keyBytes : new byte[0]);
         fields.put(FIELD_VERSION, version.toWire().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        fields.put(FIELD_PAYLOAD, payload != null ? payload : new byte[0]);
         return fields;
     }
 
     private InvalidationMessage toMessage(String cache, Map<byte[], byte[]> body) {
-        byte[] type = get(body, FIELD_TYPE);
+        byte[] typeOrd = get(body, FIELD_TYPE);
         byte[] keyBytes = get(body, FIELD_KEY);
         Version version = Version.fromWire(new String(get(body, FIELD_VERSION),
                 java.nio.charset.StandardCharsets.UTF_8));
         Object key = keyBytes.length > 0 ? keySerializer.fromBytes(keyBytes) : null;
-        return new InvalidationMessage(cache, key, version, version.instanceId(),
-                InvalidationMessage.Type.values()[type[0]]);
+        byte[] payloadBytes = body.entrySet().stream()
+                .filter(e -> java.util.Arrays.equals(e.getKey(), FIELD_PAYLOAD))
+                .map(Map.Entry::getValue).findFirst().orElse(new byte[0]);
+        byte[] payload = payloadBytes.length > 0 ? payloadBytes : null;
+        InvalidationMessage.Type type = InvalidationMessage.Type.values()[typeOrd[0]];
+        if (payload != null && type == InvalidationMessage.Type.INVALIDATE) {
+            type = InvalidationMessage.Type.UPDATE; // payload implies update semantics
+        }
+        return new InvalidationMessage(cache, key, version, version.instanceId(), type, payload);
     }
 
     private static byte[] get(Map<byte[], byte[]> body, byte[] field) {

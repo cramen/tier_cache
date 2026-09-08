@@ -37,6 +37,8 @@ public final class LettucePubSubInvalidationTransport implements InvalidationTra
 
     private final RedisClient client;
     private final CacheSerializer<Object> keySerializer;
+    private final CacheSerializer<Object> valueSerializer;
+    private final long payloadCapBytes;
     private final StatefulRedisPubSubConnection<byte[], byte[]> connection;
     private final Map<String, Consumer<InvalidationMessage>> handlers = new ConcurrentHashMap<>();
     private final ExecutorService dispatcher;
@@ -46,8 +48,16 @@ public final class LettucePubSubInvalidationTransport implements InvalidationTra
 
     public LettucePubSubInvalidationTransport(RedisClient client,
             CacheSerializer<Object> keySerializer) {
+        this(client, keySerializer, keySerializer, 64 * 1024);
+    }
+
+    public LettucePubSubInvalidationTransport(RedisClient client,
+            CacheSerializer<Object> keySerializer, CacheSerializer<Object> valueSerializer,
+            long payloadCapBytes) {
         this.client = client;
         this.keySerializer = keySerializer;
+        this.valueSerializer = valueSerializer;
+        this.payloadCapBytes = payloadCapBytes;
         this.connection = client.connectPubSub(ByteArrayCodec.INSTANCE);
         this.dispatcher = Executors.newSingleThreadExecutor(r -> {
             Thread t = new Thread(r, "tiercache-invalidation");
@@ -78,8 +88,22 @@ public final class LettucePubSubInvalidationTransport implements InvalidationTra
     @Override
     public void publish(InvalidationMessage message) {
         byte[] keyBytes = message.key() != null ? keySerializer.toBytes(message.key()) : null;
+        InvalidationMessage toSend = message;
+        if (message.type() == InvalidationMessage.Type.UPDATE) {
+            byte[] payloadBytes = valueSerializer.toBytes(message.payload());
+            if (payloadBytes.length > payloadCapBytes) {
+                // Oversized payload: degrade to plain INVALIDATE.
+                toSend = new InvalidationMessage(message.cache(), message.key(),
+                        message.version(), message.originInstanceId(),
+                        InvalidationMessage.Type.INVALIDATE);
+            } else {
+                toSend = new InvalidationMessage(message.cache(), message.key(),
+                        message.version(), message.originInstanceId(),
+                        message.type(), payloadBytes);
+            }
+        }
         connection.async().publish(channelName(message.cache()),
-                MessageCodec.encode(message, keyBytes));
+                MessageCodec.encode(toSend, keyBytes));
     }
 
     @Override
@@ -99,8 +123,10 @@ public final class LettucePubSubInvalidationTransport implements InvalidationTra
 
     private InvalidationMessage toMessage(MessageCodec.Decoded decoded) {
         Object key = decoded.keyBytes() != null ? keySerializer.fromBytes(decoded.keyBytes()) : null;
+        Object payload = decoded.payload() != null
+                ? valueSerializer.fromBytes(decoded.payload()) : null;
         return new InvalidationMessage(decoded.cache(), key, decoded.version(),
-                decoded.originInstanceId(), decoded.type());
+                decoded.originInstanceId(), decoded.type(), payload);
     }
 
     private static byte[] channelName(String cache) {

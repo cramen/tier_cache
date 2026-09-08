@@ -16,6 +16,8 @@ public final class CacheOverride {
     private Duration l2Ttl;
     private Double jitterAmplitude;
     private NullPolicy nullPolicy;
+    private InvalidationMode invalidationMode;
+    private Long payloadCapBytes;
 
     public CacheOverride l1MaxSize(long l1MaxSize) {
         this.l1MaxSize = l1MaxSize;
@@ -47,6 +49,16 @@ public final class CacheOverride {
         return this;
     }
 
+    public CacheOverride invalidationMode(InvalidationMode invalidationMode) {
+        this.invalidationMode = invalidationMode;
+        return this;
+    }
+
+    public CacheOverride payloadCapBytes(long payloadCapBytes) {
+        this.payloadCapBytes = payloadCapBytes;
+        return this;
+    }
+
     /**
      * Resolves this override against the given global defaults.
      */
@@ -57,6 +69,8 @@ public final class CacheOverride {
                 l1ExpireAfterAccess != null ? l1ExpireAfterAccess : defaults.l1ExpireAfterAccess(),
                 l2Ttl != null ? l2Ttl : defaults.l2Ttl(),
                 jitterAmplitude != null ? jitterAmplitude : defaults.jitterAmplitude(),
-                nullPolicy != null ? nullPolicy : defaults.nullPolicy());
+                nullPolicy != null ? nullPolicy : defaults.nullPolicy(),
+                invalidationMode != null ? invalidationMode : defaults.invalidationMode(),
+                payloadCapBytes != null ? payloadCapBytes : defaults.payloadCapBytes());
     }
 }

@@ -75,4 +75,19 @@ public interface RemoteCache<K, V> {
      *         the key already existed (not expired)
      */
     boolean setIfAbsent(K key, StoredEntry<V> entry, Duration ttl);
+
+    /**
+     * Stores {@code entry} recording tag membership for later
+     * tag-based eviction. Default: plain put (tags not tracked).
+     */
+    default void putTagged(K key, StoredEntry<V> entry, Duration ttl, String[] tags) {
+        put(key, entry, ttl);
+    }
+
+    /**
+     * Keys currently tagged with {@code tag} (deserialized). Default: none.
+     */
+    default java.util.List<K> keysByTag(String tag) {
+        return java.util.List.of();
+    }
 }

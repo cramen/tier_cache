@@ -1,5 +1,7 @@
 package io.tiercache.tck;
 
+import io.tiercache.InvalidationMode;
+
 import io.tiercache.CacheSettings;
 import io.tiercache.TierCache;
 import io.tiercache.TierCacheFactory;
@@ -43,7 +45,7 @@ public final class StampedeHarness {
     public int run(boolean singleflightEnabled) throws Exception {
         InMemoryRemoteCache<String, String> l2 = new InMemoryRemoteCache<>();
         TierCacheFactory.Builder builder = TierCacheFactory.builder()
-                .defaults(new CacheSettings(10_000, l1Ttl, null, Duration.ofHours(1), 0.0, io.tiercache.NullPolicy.deny()))
+                .defaults(new CacheSettings(10_000, l1Ttl, null, Duration.ofHours(1), 0.0, io.tiercache.NullPolicy.deny(), InvalidationMode.INVALIDATE, 64 * 1024))
                 .remoteCache(l2);
         if (!singleflightEnabled) {
             builder.disableSingleflight();

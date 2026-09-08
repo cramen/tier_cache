@@ -6,19 +6,26 @@ import java.util.UUID;
 /**
  * A cross-instance invalidation message. Carries the write version for
  * last-write-wins application and the origin instance ID so publishers can
- * ignore their own events.
+ * ignore their own events. In UPDATE mode the message also carries the new
+ * value payload, letting receivers warm L1 without an L2 read.
  *
- * <p><b>Incubating:</b> 0.x API, may change before the public API freeze.
+ * <p><b>Incubating:</b> 0.x API, may change before 1.0.
  */
 public record InvalidationMessage(
         String cache,
         Object key,
         Version version,
         UUID originInstanceId,
-        Type type) {
+        Type type,
+        Object payload) {
 
     public enum Type {
-        INVALIDATE, EVICT_ALL
+        INVALIDATE, EVICT_ALL, UPDATE
+    }
+
+    public InvalidationMessage(String cache, Object key, Version version,
+            UUID originInstanceId, Type type) {
+        this(cache, key, version, originInstanceId, type, null);
     }
 
     public InvalidationMessage {
@@ -26,8 +33,11 @@ public record InvalidationMessage(
         Objects.requireNonNull(version, "version");
         Objects.requireNonNull(originInstanceId, "originInstanceId");
         Objects.requireNonNull(type, "type");
-        if (type == Type.INVALIDATE && key == null) {
-            throw new IllegalArgumentException("INVALIDATE requires a key");
+        if (type != Type.EVICT_ALL && key == null) {
+            throw new IllegalArgumentException(type + " requires a key");
+        }
+        if (type == Type.UPDATE && payload == null) {
+            throw new IllegalArgumentException("UPDATE requires a payload");
         }
     }
 }
