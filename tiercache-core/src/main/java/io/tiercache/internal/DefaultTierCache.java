@@ -10,6 +10,7 @@ import io.tiercache.spi.DistributedLock;
 import io.tiercache.spi.DistributedLockProvider;
 import io.tiercache.spi.InvalidationHandler;
 import io.tiercache.spi.InvalidationTarget;
+import io.tiercache.spi.DegradationListener;
 import io.tiercache.spi.LocalCache;
 import io.tiercache.spi.RemoteCache;
 import io.tiercache.spi.StoredEntry;
@@ -63,6 +64,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
     private final ScheduledExecutorService watchdog;
     private final VersionGenerator versionGenerator;   // null = no versioning/publishing
     private final InvalidationHandler invalidation;    // null = single-node
+    private final CircuitBreaker breaker;              // null = unguarded L2 (opt-out)
     private final Map<K, CompletableFuture<StoredEntry<V>>> inflight = new ConcurrentHashMap<>();
 
     /** Legacy constructor: no coordination, no invalidation (used by tests). */
@@ -75,6 +77,15 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
             CacheSettings settings, boolean singleflightEnabled,
             DistributedLockProvider lockProvider, ScheduledExecutorService watchdog,
             VersionGenerator versionGenerator, InvalidationHandler invalidation) {
+        this(cacheName, l1, l2, settings, singleflightEnabled, lockProvider, watchdog,
+                versionGenerator, invalidation, null);
+    }
+
+    public DefaultTierCache(String cacheName, LocalCache<K, V> l1, RemoteCache<K, V> l2,
+            CacheSettings settings, boolean singleflightEnabled,
+            DistributedLockProvider lockProvider, ScheduledExecutorService watchdog,
+            VersionGenerator versionGenerator, InvalidationHandler invalidation,
+            CircuitBreaker breaker) {
         this.cacheName = cacheName;
         this.l1 = l1;
         this.l2 = l2;
@@ -84,6 +95,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         this.watchdog = watchdog;
         this.versionGenerator = versionGenerator;
         this.invalidation = invalidation;
+        this.breaker = breaker;
     }
 
     @Override
@@ -92,7 +104,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         if (entry != null) {
             return entry.isNullMarker() ? null : entry.value();
         }
-        entry = l2.get(key);
+        entry = l2Get(key);
         if (entry != null) {
             warmL1(key, entry);
             return entry.isNullMarker() ? null : entry.value();
@@ -106,7 +118,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         if (entry != null) {
             return toResult(entry);
         }
-        entry = l2.get(key);
+        entry = l2Get(key);
         if (entry != null) {
             warmL1(key, entry);
             return toResult(entry);
@@ -120,7 +132,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         if (entry != null) {
             return entry.isNullMarker() ? null : entry.value();
         }
-        entry = l2.get(key);
+        entry = l2Get(key);
         if (entry != null) {
             warmL1(key, entry);
             return entry.isNullMarker() ? null : entry.value();
@@ -150,20 +162,21 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         // Write order: L2 first, then L1, then publish. Overwrites any marker.
         Version version = nextVersion();
         StoredEntry<V> entry = StoredEntry.ofValue(value, version);
-        if (version != null) {
-            // Versioned write: an older racing write loses at L2; on losing
-            // we converge L1 to the current L2 entry instead of publishing.
-            if (!l2.putIfNewer(key, entry, settings.l2Ttl())) {
-                StoredEntry<V> current = l2.get(key);
-                if (current != null) {
-                    warmL1(key, current);
-                } else {
-                    l1.evict(key);
-                }
-                return;
+        Boolean stored = l2ConditionalPut(key, entry, settings.l2Ttl(), version != null);
+        if (stored == null) {
+            // Degraded: L1 only, no publish (the journal has no row either).
+            warmL1(key, entry);
+            return;
+        }
+        if (!stored) {
+            // Lost version race: converge L1 to the current L2 entry.
+            StoredEntry<V> current = l2Get(key);
+            if (current != null) {
+                warmL1(key, current);
+            } else {
+                l1.evict(key);
             }
-        } else {
-            l2.put(key, entry, settings.l2Ttl());
+            return;
         }
         warmL1(key, entry);
         publish(key, version, InvalidationMessage.Type.INVALIDATE);
@@ -173,7 +186,12 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
     public boolean putIfAbsent(K key, V value) {
         // Atomic at L2; L1 warm-up and publish only for the winner.
         Version version = nextVersion();
-        boolean won = l2.setIfAbsent(key, StoredEntry.ofValue(value, version), settings.l2Ttl());
+        Boolean won = l2SetIfAbsent(key, StoredEntry.ofValue(value, version), settings.l2Ttl());
+        if (won == null) {
+            // Degraded: per-instance atomicity on L1 only.
+            return l1.setIfAbsent(key, StoredEntry.ofValue(value, version),
+                    TtlJitter.apply(settings.l1ExpireAfterWrite(), settings.jitterAmplitude()));
+        }
         if (won) {
             warmL1(key, StoredEntry.ofValue(value, version));
             publish(key, version, InvalidationMessage.Type.INVALIDATE);
@@ -184,17 +202,19 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
     @Override
     public void evict(K key) {
         Version version = nextVersion();
-        l2.evict(key, version);
+        if (l2Evict(key, version)) {
+            publish(key, version, InvalidationMessage.Type.INVALIDATE);
+        }
         l1.evict(key);
-        publish(key, version, InvalidationMessage.Type.INVALIDATE);
     }
 
     @Override
     public void evictAll() {
         Version version = nextVersion();
-        l2.clear();
+        if (l2Clear()) {
+            publish(null, version, InvalidationMessage.Type.EVICT_ALL);
+        }
         l1.clear();
-        publish(null, version, InvalidationMessage.Type.EVICT_ALL);
     }
 
     @Override
@@ -250,7 +270,8 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
     // --- Load path selection: coordinated when possible ---
 
     private StoredEntry<V> loadPath(K key, Function<? super K, ? extends V> loader) {
-        if (lockProvider == null || watchdog == null) {
+        if (lockProvider == null || watchdog == null || !l2Available()) {
+            // No coordination possible (or L2 down): per-instance load.
             return loadAndStore(key, loader);
         }
         return coordinatedLoad(key, loader);
@@ -261,7 +282,12 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         long overallDeadline = System.nanoTime() + OVERALL_BUDGET.toNanos();
         long waitDeadline = System.nanoTime() + WAIT_SLICE.toNanos();
         while (true) {
-            DistributedLock lock = lockProvider.tryLock(lockName, LOCK_LEASE);
+            DistributedLock lock = tryLockGuarded(lockName);
+            if (!l2Available()) {
+                // L2 failed between the availability check and lock
+                // acquisition: fall back to the per-instance load.
+                return loadAndStore(key, loader);
+            }
             if (lock != null) {
                 try {
                     // Mandatory double-check: the value may have
@@ -290,13 +316,25 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         }
     }
 
+    /** Lock acquisition through the breaker: fast-fail when open. */
+    private DistributedLock tryLockGuarded(String lockName) {
+        if (breaker != null && breaker.isOpen()) {
+            return null;
+        }
+        try {
+            return lockProvider.tryLock(lockName, LOCK_LEASE);
+        } catch (L2UnavailableException e) {
+            return null;
+        }
+    }
+
     /** Re-read L1 then L2 (warming L1 on an L2 hit). Returns null on full miss. */
     private StoredEntry<V> readThrough(K key) {
         StoredEntry<V> entry = l1.get(key);
         if (entry != null) {
             return entry;
         }
-        entry = l2.get(key);
+        entry = l2Get(key);
         if (entry != null) {
             warmL1(key, entry);
         }
@@ -320,7 +358,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
     private StoredEntry<V> awaitValue(K key, long deadlineNanos) {
         long backoff = POLL_INITIAL_NANOS;
         while (System.nanoTime() < deadlineNanos) {
-            StoredEntry<V> entry = l2.get(key);
+            StoredEntry<V> entry = l2Get(key);
             if (entry != null) {
                 return entry;
             }
@@ -332,7 +370,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
             }
             backoff = Math.min(backoff * 2, POLL_MAX_NANOS);
         }
-        return l2.get(key); // final attempt at the deadline
+        return l2Get(key); // final attempt at the deadline
     }
 
     /**
@@ -365,18 +403,20 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
     /** L2 store + L1 warm + publish, version-conditional when versioning is on. */
     private void storeVersioned(K key, StoredEntry<V> entry, Duration l2Ttl, Version version,
             Duration l1TtlOverride) {
-        if (version != null) {
-            if (!l2.putIfNewer(key, entry, l2Ttl)) {
-                StoredEntry<V> current = l2.get(key);
-                if (current != null) {
-                    warmL1(key, current);
-                } else {
-                    l1.evict(key);
-                }
-                return;
+        Boolean stored = l2ConditionalPut(key, entry, l2Ttl, version != null);
+        if (stored == null) {
+            l1.put(key, entry, l1TtlOverride != null ? l1TtlOverride
+                    : TtlJitter.apply(settings.l1ExpireAfterWrite(), settings.jitterAmplitude()));
+            return; // degraded: L1 only
+        }
+        if (!stored) {
+            StoredEntry<V> current = l2Get(key);
+            if (current != null) {
+                warmL1(key, current);
+            } else {
+                l1.evict(key);
             }
-        } else {
-            l2.put(key, entry, l2Ttl);
+            return;
         }
         if (l1TtlOverride != null) {
             l1.put(key, entry, l1TtlOverride);
@@ -390,6 +430,80 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
     private void warmL1(K key, StoredEntry<V> entry) {
         Duration ttl = TtlJitter.apply(settings.l1ExpireAfterWrite(), settings.jitterAmplitude());
         l1.put(key, entry, ttl);
+    }
+
+    /** True while the L2 circuit breaker is open (L1-only mode). */
+    public boolean isDegraded() {
+        return breaker != null && breaker.isOpen();
+    }
+
+    private boolean l2Available() {
+        return breaker == null || !breaker.isOpen();
+    }
+
+    /** L2 read through the breaker: null when open or failed (readers fall through to loader). */
+    private StoredEntry<V> l2Get(K key) {
+        if (breaker != null && breaker.isOpen()) {
+            return null;
+        }
+        try {
+            return l2.get(key);
+        } catch (L2UnavailableException e) {
+            return null; // the decorator already accounted the failure
+        }
+    }
+
+    /** @return TRUE stored, FALSE lost a version race, NULL unavailable/failed. */
+    private Boolean l2ConditionalPut(K key, StoredEntry<V> entry, Duration ttl, boolean conditional) {
+        if (breaker != null && breaker.isOpen()) {
+            return null;
+        }
+        try {
+            return conditional ? l2.putIfNewer(key, entry, ttl) : putPlain(key, entry, ttl);
+        } catch (L2UnavailableException e) {
+            return null;
+        }
+    }
+
+    private boolean putPlain(K key, StoredEntry<V> entry, Duration ttl) {
+        l2.put(key, entry, ttl);
+        return true;
+    }
+
+    /** @return TRUE won, FALSE lost, NULL unavailable/failed. */
+    private Boolean l2SetIfAbsent(K key, StoredEntry<V> entry, Duration ttl) {
+        if (breaker != null && breaker.isOpen()) {
+            return null;
+        }
+        try {
+            return l2.setIfAbsent(key, entry, ttl);
+        } catch (L2UnavailableException e) {
+            return null;
+        }
+    }
+
+    private boolean l2Evict(K key, Version version) {
+        if (breaker != null && breaker.isOpen()) {
+            return false;
+        }
+        try {
+            l2.evict(key, version);
+            return true;
+        } catch (L2UnavailableException e) {
+            return false;
+        }
+    }
+
+    private boolean l2Clear() {
+        if (breaker != null && breaker.isOpen()) {
+            return false;
+        }
+        try {
+            l2.clear();
+            return true;
+        } catch (L2UnavailableException e) {
+            return false;
+        }
     }
 
     private static <V> LookupResult<V> toResult(StoredEntry<V> entry) {

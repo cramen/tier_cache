@@ -22,6 +22,14 @@ public interface InvalidationHandler extends AutoCloseable {
      */
     void registerTarget(String cache, InvalidationTarget target);
 
+    /**
+     * Called when L2 recovers after a circuit-breaker episode: the engine
+     * replays the missed journal range for all registered caches. L1 is
+     * never flushed here (only journal-window overflow flushes).
+     */
+    default void onL2Recovery() {
+    }
+
     @Override
     void close();
 }

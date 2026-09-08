@@ -1,9 +1,13 @@
 package io.tiercache;
 
 import io.tiercache.internal.CacheConfigValidator;
+import io.tiercache.internal.BreakerLockProvider;
+import io.tiercache.internal.CircuitBreaker;
+import io.tiercache.internal.CircuitBreakerRemoteCache;
 import io.tiercache.internal.CaffeineLocalCache;
 import io.tiercache.internal.DefaultTierCache;
 import io.tiercache.spi.DistributedLockProvider;
+import io.tiercache.spi.DegradationListener;
 import io.tiercache.spi.InvalidationHandler;
 
 import java.util.function.Function;
@@ -49,10 +53,11 @@ public final class TierCacheFactory implements AutoCloseable {
     private final ScheduledExecutorService watchdog;
     private final VersionGenerator versionGenerator;
     private final InvalidationHandler invalidation; // null = single-node
+    private final CircuitBreaker breaker;           // null = unguarded L2 (opt-out)
 
     private TierCacheFactory(Builder builder) {
         this.defaults = builder.defaults;
-        this.remoteCache = builder.remoteCache;
+        RemoteCache<Object, Object> rawRemoteCache = builder.remoteCache;
         this.localCacheFactory = builder.localCacheFactory;
         this.singleflightEnabled = builder.singleflightEnabled;
         this.coordinationEnabled = builder.coordinationEnabled;
@@ -65,22 +70,21 @@ public final class TierCacheFactory implements AutoCloseable {
 
         DistributedLockProvider provider = builder.lockProvider;
         if (provider == null && coordinationEnabled
-                && remoteCache instanceof LockProviderSource source) {
+                && rawRemoteCache instanceof LockProviderSource source) {
             provider = source.lockProvider();
         }
-        this.lockProvider = provider;
 
         if (!coordinationEnabled) {
             log.warn("Distributed rebuild coordination disabled by explicit opt-in. "
                     + "Concurrent misses of one key across instances will each run the loader "
                     + "(cluster-wide stampede risk).");
-        } else if (lockProvider == null) {
+        } else if (provider == null) {
             log.warn("No distributed lock provider available for the configured L2. "
                     + "Falling back to per-instance coalescing only: up to one loader execution "
                     + "per instance per rebuild round.");
         }
 
-        this.watchdog = coordinationEnabled && lockProvider != null
+        this.watchdog = coordinationEnabled && provider != null
                 ? Executors.newSingleThreadScheduledExecutor(new DaemonThreadFactory())
                 : null;
 
@@ -88,6 +92,40 @@ public final class TierCacheFactory implements AutoCloseable {
         this.invalidation = builder.invalidationFactory != null
                 ? builder.invalidationFactory.apply(versionGenerator)
                 : null;
+
+        DegradationListener degradationListener = builder.degradationListener;
+        if (builder.circuitBreakerEnabled) {
+            this.breaker = new CircuitBreaker(builder.breakerConfig, new CircuitBreaker.Listener() {
+                @Override
+                public void onOpen() {
+                    log.warn("L2 circuit breaker OPEN: cache runs L1-only. Cross-instance "
+                            + "atomicity (putIfAbsent, rebuild coordination) is per-instance "
+                            + "until recovery.");
+                    degradationListener.onDegraded();
+                }
+
+                @Override
+                public void onClose() {
+                    // Recovery: replay missed invalidations BEFORE we report
+                    // recovery; L1 is never flushed here.
+                    if (invalidation != null) {
+                        invalidation.onL2Recovery();
+                    }
+                    log.info("L2 circuit breaker CLOSED: L2 recovered, missed invalidations replayed.");
+                    degradationListener.onRecovered();
+                }
+            });
+            rawRemoteCache = new CircuitBreakerRemoteCache<>(rawRemoteCache, breaker);
+            if (provider != null) {
+                provider = new BreakerLockProvider(provider, breaker);
+            }
+        } else {
+            this.breaker = null;
+            log.warn("L2 circuit breaker disabled by explicit opt-in. Redis failures will "
+                    + "propagate into cache operations (cascade-failure risk).");
+        }
+        this.remoteCache = rawRemoteCache;
+        this.lockProvider = provider;
     }
 
     public static Builder builder() {
@@ -104,7 +142,8 @@ public final class TierCacheFactory implements AutoCloseable {
         LocalCache<K, V> l1 = (LocalCache<K, V>) localCacheFactory.apply(name, settings);
         DefaultTierCache<K, V> cache = new DefaultTierCache<>(name, l1,
                 (RemoteCache<K, V>) remoteCache, settings, singleflightEnabled,
-                coordinationEnabled ? lockProvider : null, watchdog, versionGenerator, invalidation);
+                coordinationEnabled ? lockProvider : null, watchdog, versionGenerator, invalidation,
+                breaker);
         if (invalidation != null) {
             invalidation.registerTarget(name, cache);
         }
@@ -115,6 +154,11 @@ public final class TierCacheFactory implements AutoCloseable {
      * Shuts down the watchdog scheduler. Caches already obtained remain
      * usable but lose lease extension for in-flight coordination.
      */
+    /** True while the L2 circuit breaker is open (L1-only degraded mode). */
+    public boolean isDegraded() {
+        return breaker != null && breaker.isOpen();
+    }
+
     @Override
     public void close() {
         if (watchdog != null) {
@@ -145,6 +189,9 @@ public final class TierCacheFactory implements AutoCloseable {
         private boolean coordinationEnabled = true;
         private DistributedLockProvider lockProvider;
         private Function<VersionGenerator, InvalidationHandler> invalidationFactory;
+        private boolean circuitBreakerEnabled = true;
+        private CircuitBreaker.Config breakerConfig = CircuitBreaker.Config.defaults();
+        private DegradationListener degradationListener = DegradationListener.NOOP;
 
         public Builder defaults(CacheSettings defaults) {
             this.defaults = Objects.requireNonNull(defaults, "defaults");
@@ -196,6 +243,28 @@ public final class TierCacheFactory implements AutoCloseable {
          */
         public Builder invalidation(Function<VersionGenerator, InvalidationHandler> invalidationFactory) {
             this.invalidationFactory = invalidationFactory;
+            return this;
+        }
+
+        /**
+         * Explicit opt-out of the L2 circuit breaker. Degradation protection
+         * is on by default; disabling it lets infrastructure exceptions
+         * escape into business code (cascade-failure risk) and is logged.
+         */
+        public Builder disableCircuitBreaker() {
+            this.circuitBreakerEnabled = false;
+            return this;
+        }
+
+        /** Breaker thresholds. Internal/testing; defaults are safe. */
+        public Builder circuitBreakerConfig(CircuitBreaker.Config config) {
+            this.breakerConfig = Objects.requireNonNull(config, "config");
+            return this;
+        }
+
+        /** Listener for degradation transitions (metrics bind here). */
+        public Builder degradationListener(DegradationListener listener) {
+            this.degradationListener = Objects.requireNonNull(listener, "listener");
             return this;
         }
 

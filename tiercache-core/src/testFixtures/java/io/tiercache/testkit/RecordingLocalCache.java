@@ -39,6 +39,12 @@ public final class RecordingLocalCache<K, V> implements LocalCache<K, V> {
         store.clear();
     }
 
+    @Override
+    public boolean setIfAbsent(K key, StoredEntry<V> entry, Duration ttl) {
+        recordedTtls.add(ttl);
+        return store.putIfAbsent(key, entry) == null;
+    }
+
     /**
      * Effective TTL of every put, in write order.
      */

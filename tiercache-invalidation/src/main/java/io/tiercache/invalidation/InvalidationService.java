@@ -83,6 +83,11 @@ public final class InvalidationService implements InvalidationHandler {
         }
     }
 
+    @Override
+    public void onL2Recovery() {
+        onReconnect();
+    }
+
     private void onReconnect() {
         if (journal == null) {
             // No replay capability: the honest fallback is a full flush.

@@ -38,4 +38,10 @@ public interface LocalCache<K, V> {
      * {@code Cache.clear()}.
      */
     void clear();
+
+    /**
+     * Atomically stores {@code entry} under {@code key} if absent (within
+     * this instance). Used for degraded-mode putIfAbsent.
+     */
+    boolean setIfAbsent(K key, StoredEntry<V> entry, Duration ttl);
 }

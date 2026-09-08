@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 import java.time.Duration;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -52,6 +53,14 @@ public abstract class LocalCacheContractTest {
         cache.put("k", StoredEntry.ofValue("v1"), Duration.ofMinutes(1));
         cache.put("k", StoredEntry.ofValue("v2"), Duration.ofMinutes(1));
         assertEquals("v2", cache.get("k").value());
+    }
+
+    @Test
+    void setIfAbsentStoresOnlyWhenAbsent() {
+        LocalCache<String, String> cache = newCache();
+        assertTrue(cache.setIfAbsent("k", StoredEntry.ofValue("v"), Duration.ofMinutes(1)));
+        assertFalse(cache.setIfAbsent("k", StoredEntry.ofValue("x"), Duration.ofMinutes(1)));
+        assertEquals("v", cache.get("k").value());
     }
 
     @Test

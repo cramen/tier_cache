@@ -71,6 +71,11 @@ public final class CaffeineLocalCache<K, V> implements LocalCache<K, V> {
         cache.invalidateAll();
     }
 
+    @Override
+    public boolean setIfAbsent(K key, StoredEntry<V> entry, Duration ttl) {
+        return cache.asMap().putIfAbsent(key, new Holder<>(entry, ttl.toNanos())) == null;
+    }
+
     private static final class Holder<V> {
         final StoredEntry<V> entry;
         final long ttlNanos;

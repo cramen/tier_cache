@@ -41,4 +41,9 @@ public final class CountingLocalCache<K, V> implements LocalCache<K, V> {
     public void clear() {
         store.clear();
     }
+
+    @Override
+    public boolean setIfAbsent(K key, StoredEntry<V> entry, Duration ttl) {
+        return store.putIfAbsent(key, entry) == null;
+    }
 }
