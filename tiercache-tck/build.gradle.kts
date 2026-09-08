@@ -11,6 +11,7 @@ java {
 dependencies {
     api(project(":tiercache-core"))
     implementation(testFixtures(project(":tiercache-core")))
+    implementation(project(":tiercache-transport-redis"))
 
     implementation(platform(libs.junit.bom))
     implementation(libs.junit.jupiter)

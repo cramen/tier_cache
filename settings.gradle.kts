@@ -1,3 +1,3 @@
 rootProject.name = "tiercache"
 
-include("tiercache-core", "tiercache-tck")
+include("tiercache-core", "tiercache-tck", "tiercache-transport-redis")

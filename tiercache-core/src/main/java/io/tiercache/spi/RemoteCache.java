@@ -32,4 +32,17 @@ public interface RemoteCache<K, V> {
      * Removes {@code key} if present.
      */
     void evict(K key);
+
+    /**
+     * Atomically stores {@code value} under {@code key} only if the key is
+     * absent (or expired), with the given TTL. This is the foundation for
+     * distributed rebuild coordination (F-21).
+     *
+     * <p>Implementations backed by a remote store MUST make this operation
+     * atomic across all clients of that store.
+     *
+     * @return {@code true} if this call created the entry, {@code false} if
+     *         the key already existed (not expired)
+     */
+    boolean setIfAbsent(K key, V value, Duration ttl);
 }

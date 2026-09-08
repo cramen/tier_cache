@@ -1,12 +1,14 @@
 [versions]
 slf4j = "2.0.16"
 caffeine = "3.2.0"
+lettuce = "7.7.0.RELEASE"
 junit = "5.11.4"
 testcontainers = "1.20.4"
 
 [libraries]
 slf4j-api = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }
 caffeine = { module = "com.github.ben-manes.caffeine:caffeine", version.ref = "caffeine" }
+lettuce-core = { module = "io.lettuce:lettuce-core", version.ref = "lettuce" }
 junit-jupiter = { module = "org.junit.jupiter:junit-jupiter", version.ref = "junit" }
 junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
 junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher" }

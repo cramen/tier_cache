@@ -20,13 +20,14 @@ Everything in this repository is **English only**: code, comments, commit messag
 
 ## Repository state
 
-Gradle (Kotlin DSL) multi-module build, Java 17 toolchain. Modules present: `tiercache-core` (cascade read path, singleflight, config validation, shaded Caffeine L1, L1/L2 SPI) and `tiercache-tck` (stampede harness seed). Redis transport, invalidation, Spring starter, and observability modules are not yet created — follow the roadmap below.
+Gradle (Kotlin DSL) multi-module build, Java 17 toolchain. Modules present: `tiercache-core` (cascade read path, singleflight, config validation, shaded Caffeine L1, L1/L2 SPI with atomic `setIfAbsent`), `tiercache-transport-redis` (Lettuce-backed L2, per-entry TTL, Redis 6.2+/Valkey contract-tested) and `tiercache-tck` (stampede harness: single- and multi-instance over real Redis). Invalidation, Spring starter, and observability modules are not yet created — follow the roadmap below.
 
 ## Build & test commands
 
 - `./gradlew build` — compile, unit tests, TCK tests, dependency audit, coverage gate (≥90% branch on `tiercache-core`).
 - `./gradlew :tiercache-core:test` — core unit/contract tests.
-- `./gradlew :tiercache-tck:test` — TCK chaos tests (Testcontainers; the stampede seed currently runs on the in-memory L2).
+- `./gradlew :tiercache-tck:test` — TCK chaos tests (Testcontainers: stampede single- and multi-instance over real Redis).
+- `./gradlew :tiercache-transport-redis:test` — transport contract suite against Redis 6.2 and Valkey containers (needs Docker).
 - `./gradlew :tiercache-core:shadowJar` — shaded artifact: Caffeine relocated under `io.tiercache.internal.caffeine`; the shaded jar is the main artifact, the plain jar keeps the `unshaded` classifier.
 - `./gradlew :tiercache-core:dependencyAudit` — asserts the runtime classpath exposes only SLF4J API (N-06).
 - `./gradlew :tiercache-core:jmh` — JMH baseline for the L1-hit hot path (gc profiler; N-01/N-03); results in `tiercache-core/build/results/jmh/results.txt`.

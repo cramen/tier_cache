@@ -38,6 +38,15 @@ public final class InMemoryRemoteCache<K, V> implements RemoteCache<K, V> {
         store.remove(key);
     }
 
+    @Override
+    public boolean setIfAbsent(K key, V value, Duration ttl) {
+        long now = System.nanoTime();
+        Entry<V> candidate = new Entry<>(value, now + ttl.toNanos());
+        Entry<V> result = store.merge(key, candidate,
+                (existing, candidateEntry) -> now >= existing.expiresAtNanos ? candidateEntry : existing);
+        return result == candidate;
+    }
+
     public int size() {
         return store.size();
     }

@@ -33,4 +33,9 @@ public final class CountingRemoteCache<K, V> implements RemoteCache<K, V> {
         evicts.incrementAndGet();
         delegate.evict(key);
     }
+
+    @Override
+    public boolean setIfAbsent(K key, V value, Duration ttl) {
+        return delegate.setIfAbsent(key, value, ttl);
+    }
 }

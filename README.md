@@ -12,19 +12,25 @@ Build:
 ./gradlew build
 ```
 
-Minimal usage (current milestone: `tiercache-core` with an in-memory L2 test double; the Redis transport lands in a later change):
+Minimal usage (`tiercache-core` + `tiercache-transport-redis`):
 
 ```java
 import io.tiercache.TierCache;
 import io.tiercache.TierCacheFactory;
-import io.tiercache.testkit.InMemoryRemoteCache;
+import io.tiercache.redis.LettuceRemoteCache;
 
-TierCache<String, String> cache = TierCacheFactory.builder()
-        .remoteCache(new InMemoryRemoteCache<String, String>()) // L2 SPI implementation
-        .build()
-        .getCache("users");
+try (LettuceRemoteCache<String, String> l2 = LettuceRemoteCache
+        .<String, String>builder("redis://localhost:6379")
+        .cacheName("users")
+        .build()) {
 
-String name = cache.getOrCompute("user:42", key -> loadFromDatabase(key));
+    TierCache<String, String> cache = TierCacheFactory.builder()
+            .remoteCache(l2)
+            .build()
+            .getCache("users");
+
+    String name = cache.getOrCompute("user:42", key -> loadFromDatabase(key));
+}
 ```
 
 Reads cascade L1 → L2 → loader; an L2 hit always warms L1 (F-01). Concurrent loads of the same key share one loader execution (singleflight, F-20) — on by default. Invalid configuration (e.g. L1 TTL > L2 TTL) fails fast at startup (F-04/F-05).
