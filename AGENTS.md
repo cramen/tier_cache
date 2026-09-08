@@ -20,16 +20,17 @@ Everything in this repository is **English only**: code, comments, commit messag
 
 ## Repository state
 
-The repo currently contains only `research/`. The build system and module skeleton are not yet created. When bootstrapping:
-
-- **Build:** Maven or Gradle multi-module build (decide at skeleton time; Maven groupId `io.tiercache`).
-- **Baseline:** Java 17 (certify on 21/25). Kotlin supported via the `tiercache-kotlin` module.
-
-Update the "Build & test commands" section below as soon as the skeleton exists.
+Gradle (Kotlin DSL) multi-module build, Java 17 toolchain. Modules present: `tiercache-core` (cascade read path, singleflight, config validation, shaded Caffeine L1, L1/L2 SPI) and `tiercache-tck` (stampede harness seed). Redis transport, invalidation, Spring starter, and observability modules are not yet created — follow the roadmap below.
 
 ## Build & test commands
 
-_To be filled in when the project skeleton is created (phase 0/1). Expected: `./mvnw verify` or `./gradlew build`, JMH benchmarks, Testcontainers-based TCK chaos tests (`docker compose` rig), PIT mutation testing on core._
+- `./gradlew build` — compile, unit tests, TCK tests, dependency audit, coverage gate (≥90% branch on `tiercache-core`).
+- `./gradlew :tiercache-core:test` — core unit/contract tests.
+- `./gradlew :tiercache-tck:test` — TCK chaos tests (Testcontainers; the stampede seed currently runs on the in-memory L2).
+- `./gradlew :tiercache-core:shadowJar` — shaded artifact: Caffeine relocated under `io.tiercache.internal.caffeine`; the shaded jar is the main artifact, the plain jar keeps the `unshaded` classifier.
+- `./gradlew :tiercache-core:dependencyAudit` — asserts the runtime classpath exposes only SLF4J API (N-06).
+- `./gradlew :tiercache-core:jmh` — JMH baseline for the L1-hit hot path (gc profiler; N-01/N-03); results in `tiercache-core/build/results/jmh/results.txt`.
+- PIT mutation testing: to be added with the invalidation/degradation phases (gate ≥75% on F-10..F-32 paths).
 
 ## Module structure (target)
 

@@ -6,6 +6,7 @@ openspec/
 target/
 build/
 out/
+.gradle/
 
 # IDE
 .idea/
