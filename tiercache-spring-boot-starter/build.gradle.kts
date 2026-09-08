@@ -11,11 +11,14 @@ java {
 dependencies {
     api(project(":tiercache-core"))
     api(project(":tiercache-transport-redis"))
+    api(project(":tiercache-invalidation"))
     api(libs.spring.boot.starter)
     api(libs.spring.boot.starter.cache)
 
     testImplementation(libs.spring.boot.starter.test)
     testImplementation(testFixtures(project(":tiercache-core")))
+    testImplementation(libs.testcontainers)
+    testImplementation(libs.testcontainers.junit.jupiter)
     testRuntimeOnly(libs.junit.platform.launcher)
 }
 

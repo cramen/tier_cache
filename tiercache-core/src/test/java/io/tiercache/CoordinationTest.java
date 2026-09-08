@@ -42,7 +42,7 @@ class CoordinationTest {
     private static CacheAndL2 coordinatedInstance(InMemoryRemoteCache<String, String> sharedL2,
             InMemoryLockProvider locks, String name, CacheSettings settings) {
         DefaultTierCache<String, String> cache = new DefaultTierCache<>(name,
-                new CountingLocalCache<>(), sharedL2, settings, true, locks, SCHEDULER);
+                new CountingLocalCache<>(), sharedL2, settings, true, locks, SCHEDULER, null, null);
         return new CacheAndL2(cache, sharedL2);
     }
 
@@ -75,8 +75,8 @@ class CoordinationTest {
             }
 
             @Override
-            public boolean setIfAbsent(String key, String value, Duration ttl) {
-                return delegate.setIfAbsent(key, value, ttl);
+            public boolean setIfAbsent(String key, StoredEntry<String> entry, Duration ttl) {
+                return delegate.setIfAbsent(key, entry, ttl);
             }
 
             @Override
@@ -178,7 +178,7 @@ class CoordinationTest {
             }
 
             @Override
-            public boolean setIfAbsent(String key, String value, Duration ttl) {
+            public boolean setIfAbsent(String key, StoredEntry<String> entry, Duration ttl) {
                 return true;
             }
 
@@ -187,7 +187,7 @@ class CoordinationTest {
             }
         };
         TierCache<String, String> cache = new DefaultTierCache<>("dc",
-                new CountingLocalCache<>(), l2, CacheSettings.defaults(), true, locks, SCHEDULER);
+                new CountingLocalCache<>(), l2, CacheSettings.defaults(), true, locks, SCHEDULER, null, null);
 
         String value = cache.getOrCompute("k", key -> {
             throw new AssertionError("loader must not run: double-check must see the value");

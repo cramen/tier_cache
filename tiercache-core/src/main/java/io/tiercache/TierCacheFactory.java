@@ -4,6 +4,9 @@ import io.tiercache.internal.CacheConfigValidator;
 import io.tiercache.internal.CaffeineLocalCache;
 import io.tiercache.internal.DefaultTierCache;
 import io.tiercache.spi.DistributedLockProvider;
+import io.tiercache.spi.InvalidationHandler;
+
+import java.util.function.Function;
 import io.tiercache.spi.LocalCache;
 import io.tiercache.spi.LockProviderSource;
 import io.tiercache.spi.RemoteCache;
@@ -44,6 +47,8 @@ public final class TierCacheFactory implements AutoCloseable {
     private final boolean coordinationEnabled;
     private final DistributedLockProvider lockProvider;
     private final ScheduledExecutorService watchdog;
+    private final VersionGenerator versionGenerator;
+    private final InvalidationHandler invalidation; // null = single-node
 
     private TierCacheFactory(Builder builder) {
         this.defaults = builder.defaults;
@@ -78,6 +83,11 @@ public final class TierCacheFactory implements AutoCloseable {
         this.watchdog = coordinationEnabled && lockProvider != null
                 ? Executors.newSingleThreadScheduledExecutor(new DaemonThreadFactory())
                 : null;
+
+        this.versionGenerator = new VersionGenerator();
+        this.invalidation = builder.invalidationFactory != null
+                ? builder.invalidationFactory.apply(versionGenerator)
+                : null;
     }
 
     public static Builder builder() {
@@ -92,9 +102,13 @@ public final class TierCacheFactory implements AutoCloseable {
     public <K, V> TierCache<K, V> getCache(String name) {
         CacheSettings settings = caches.getOrDefault(name, defaults);
         LocalCache<K, V> l1 = (LocalCache<K, V>) localCacheFactory.apply(name, settings);
-        return new DefaultTierCache<>(name, l1, (RemoteCache<K, V>) remoteCache, settings,
-                singleflightEnabled,
-                coordinationEnabled ? lockProvider : null, watchdog);
+        DefaultTierCache<K, V> cache = new DefaultTierCache<>(name, l1,
+                (RemoteCache<K, V>) remoteCache, settings, singleflightEnabled,
+                coordinationEnabled ? lockProvider : null, watchdog, versionGenerator, invalidation);
+        if (invalidation != null) {
+            invalidation.registerTarget(name, cache);
+        }
+        return cache;
     }
 
     /**
@@ -105,6 +119,9 @@ public final class TierCacheFactory implements AutoCloseable {
     public void close() {
         if (watchdog != null) {
             watchdog.shutdownNow();
+        }
+        if (invalidation != null) {
+            invalidation.close();
         }
     }
 
@@ -127,6 +144,7 @@ public final class TierCacheFactory implements AutoCloseable {
         private boolean singleflightEnabled = true;
         private boolean coordinationEnabled = true;
         private DistributedLockProvider lockProvider;
+        private Function<VersionGenerator, InvalidationHandler> invalidationFactory;
 
         public Builder defaults(CacheSettings defaults) {
             this.defaults = Objects.requireNonNull(defaults, "defaults");
@@ -165,6 +183,19 @@ public final class TierCacheFactory implements AutoCloseable {
          */
         public Builder lockProvider(DistributedLockProvider lockProvider) {
             this.lockProvider = lockProvider;
+            return this;
+        }
+
+        /**
+         * Cross-instance invalidation engine, given as a factory receiving
+         * this factory's {@link VersionGenerator} (so event origin IDs and
+         * write versions share one instance identity). When absent, caches
+         * are single-node: nothing is published, nothing is subscribed.
+         * Typical usage:
+         * {@code .invalidation(versions -> new InvalidationService(transport, journal, versions.instanceId(), listener))}
+         */
+        public Builder invalidation(Function<VersionGenerator, InvalidationHandler> invalidationFactory) {
+            this.invalidationFactory = invalidationFactory;
             return this;
         }
 

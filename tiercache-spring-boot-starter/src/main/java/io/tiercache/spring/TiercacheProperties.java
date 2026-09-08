@@ -29,6 +29,9 @@ public class TiercacheProperties {
     /** Per-cache overrides by cache name. */
     private Map<String, CacheProps> caches = new LinkedHashMap<>();
 
+    /** Cross-instance invalidation settings. */
+    private InvalidationProps invalidation = new InvalidationProps();
+
     public boolean isEnabled() {
         return enabled;
     }
@@ -55,6 +58,39 @@ public class TiercacheProperties {
 
     public Map<String, CacheProps> getCaches() {
         return caches;
+    }
+
+    public InvalidationProps getInvalidation() {
+        return invalidation;
+    }
+
+    public void setInvalidation(InvalidationProps invalidation) {
+        this.invalidation = invalidation;
+    }
+
+    /** Invalidation settings: Pub/Sub profile is on by default when the Redis transport is used. */
+    public static class InvalidationProps {
+
+        private boolean enabled = true;
+
+        /** Max journal entries kept per cache stream. */
+        private int journalCapacity = 10_000;
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public int getJournalCapacity() {
+            return journalCapacity;
+        }
+
+        public void setJournalCapacity(int journalCapacity) {
+            this.journalCapacity = journalCapacity;
+        }
     }
 
     public void setCaches(Map<String, CacheProps> caches) {

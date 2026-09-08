@@ -1,10 +1,15 @@
 package io.tiercache.internal;
 
 import io.tiercache.CacheSettings;
+import io.tiercache.InvalidationMessage;
 import io.tiercache.LookupResult;
 import io.tiercache.TierCache;
+import io.tiercache.Version;
+import io.tiercache.VersionGenerator;
 import io.tiercache.spi.DistributedLock;
 import io.tiercache.spi.DistributedLockProvider;
+import io.tiercache.spi.InvalidationHandler;
+import io.tiercache.spi.InvalidationTarget;
 import io.tiercache.spi.LocalCache;
 import io.tiercache.spi.RemoteCache;
 import io.tiercache.spi.StoredEntry;
@@ -22,9 +27,9 @@ import java.util.function.Function;
 
 /**
  * Default {@link TierCache}: cascade read L1 &rarr; L2 &rarr; loader with
- * L1 warm-up, per-instance singleflight, null-marker handling,
- * and distributed rebuild coordination when a lock provider
- * is available.
+ * L1 warm-up, per-instance singleflight, null-marker handling, distributed
+ * rebuild coordination when a lock provider is available, and invalidation
+ * publishing when an {@link InvalidationHandler} is configured.
  *
  * <p>Coordinated load path: acquire rebuild lock &rarr; <b>mandatory
  * double-check of L1/L2</b> &rarr; load with watchdog lease extension &rarr;
@@ -35,7 +40,7 @@ import java.util.function.Function;
  * <p>Hot-path discipline: a steady-state L1 hit performs exactly one
  * {@code LocalCache.get} plus one reference check, and allocates nothing.
  */
-public final class DefaultTierCache<K, V> implements TierCache<K, V> {
+public final class DefaultTierCache<K, V> implements TierCache<K, V>, InvalidationTarget {
 
     private static final Logger log = LoggerFactory.getLogger(DefaultTierCache.class);
 
@@ -56,17 +61,20 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V> {
     private final boolean singleflightEnabled;
     private final DistributedLockProvider lockProvider; // null = no coordination
     private final ScheduledExecutorService watchdog;
+    private final VersionGenerator versionGenerator;   // null = no versioning/publishing
+    private final InvalidationHandler invalidation;    // null = single-node
     private final Map<K, CompletableFuture<StoredEntry<V>>> inflight = new ConcurrentHashMap<>();
 
-    /** Legacy constructor: no coordination (used by tests). */
+    /** Legacy constructor: no coordination, no invalidation (used by tests). */
     public DefaultTierCache(LocalCache<K, V> l1, RemoteCache<K, V> l2,
             CacheSettings settings, boolean singleflightEnabled) {
-        this("test", l1, l2, settings, singleflightEnabled, null, null);
+        this("test", l1, l2, settings, singleflightEnabled, null, null, null, null);
     }
 
     public DefaultTierCache(String cacheName, LocalCache<K, V> l1, RemoteCache<K, V> l2,
             CacheSettings settings, boolean singleflightEnabled,
-            DistributedLockProvider lockProvider, ScheduledExecutorService watchdog) {
+            DistributedLockProvider lockProvider, ScheduledExecutorService watchdog,
+            VersionGenerator versionGenerator, InvalidationHandler invalidation) {
         this.cacheName = cacheName;
         this.l1 = l1;
         this.l2 = l2;
@@ -74,6 +82,8 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V> {
         this.singleflightEnabled = singleflightEnabled;
         this.lockProvider = lockProvider;
         this.watchdog = watchdog;
+        this.versionGenerator = versionGenerator;
+        this.invalidation = invalidation;
     }
 
     @Override
@@ -137,32 +147,54 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V> {
 
     @Override
     public void put(K key, V value) {
-        // Write order: L2 first, then L1. Overwrites any marker.
-        StoredEntry<V> entry = StoredEntry.ofValue(value);
-        l2.put(key, entry, settings.l2Ttl());
+        // Write order: L2 first, then L1, then publish. Overwrites any marker.
+        Version version = nextVersion();
+        StoredEntry<V> entry = StoredEntry.ofValue(value, version);
+        if (version != null) {
+            // Versioned write: an older racing write loses at L2; on losing
+            // we converge L1 to the current L2 entry instead of publishing.
+            if (!l2.putIfNewer(key, entry, settings.l2Ttl())) {
+                StoredEntry<V> current = l2.get(key);
+                if (current != null) {
+                    warmL1(key, current);
+                } else {
+                    l1.evict(key);
+                }
+                return;
+            }
+        } else {
+            l2.put(key, entry, settings.l2Ttl());
+        }
         warmL1(key, entry);
+        publish(key, version, InvalidationMessage.Type.INVALIDATE);
     }
 
     @Override
     public boolean putIfAbsent(K key, V value) {
-        // Atomic at L2; L1 warm-up only for the winner.
-        boolean won = l2.setIfAbsent(key, value, settings.l2Ttl());
+        // Atomic at L2; L1 warm-up and publish only for the winner.
+        Version version = nextVersion();
+        boolean won = l2.setIfAbsent(key, StoredEntry.ofValue(value, version), settings.l2Ttl());
         if (won) {
-            warmL1(key, StoredEntry.ofValue(value));
+            warmL1(key, StoredEntry.ofValue(value, version));
+            publish(key, version, InvalidationMessage.Type.INVALIDATE);
         }
         return won;
     }
 
     @Override
     public void evict(K key) {
-        l2.evict(key);
+        Version version = nextVersion();
+        l2.evict(key, version);
         l1.evict(key);
+        publish(key, version, InvalidationMessage.Type.INVALIDATE);
     }
 
     @Override
     public void evictAll() {
+        Version version = nextVersion();
         l2.clear();
         l1.clear();
+        publish(null, version, InvalidationMessage.Type.EVICT_ALL);
     }
 
     @Override
@@ -171,9 +203,48 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V> {
         if (markerTtl == null) {
             return; // deny policy: nothing to store
         }
-        StoredEntry<V> marker = StoredEntry.nullMarker();
-        l2.put(key, marker, markerTtl);
-        l1.put(key, marker, TtlJitter.apply(markerTtl, settings.jitterAmplitude()));
+        Version version = nextVersion();
+        StoredEntry<V> marker = StoredEntry.nullMarker(version);
+        storeVersioned(key, marker, markerTtl, version,
+                TtlJitter.apply(markerTtl, settings.jitterAmplitude()));
+    }
+
+    // --- InvalidationTarget (inbound events, applied last-write-wins) ---
+
+    @Override
+    public Version versionOfL1Entry(Object key) {
+        @SuppressWarnings("unchecked")
+        StoredEntry<V> entry = l1.get((K) key);
+        return entry != null ? entry.version() : null;
+    }
+
+    @Override
+    public void evictL1IfNewer(Object key, Version eventVersion) {
+        @SuppressWarnings("unchecked")
+        K typedKey = (K) key;
+        StoredEntry<V> entry = l1.get(typedKey);
+        if (entry == null) {
+            return;
+        }
+        // Entries without a version (legacy/unversioned) lose to any event.
+        if (entry.version() == null || eventVersion.compareTo(entry.version()) > 0) {
+            l1.evict(typedKey);
+        }
+    }
+
+    @Override
+    public void evictAllL1() {
+        l1.clear();
+    }
+
+    private Version nextVersion() {
+        return versionGenerator != null ? versionGenerator.next() : null;
+    }
+
+    private void publish(Object key, Version version, InvalidationMessage.Type type) {
+        if (invalidation != null && version != null) {
+            invalidation.onLocalWrite(cacheName, key, version, type);
+        }
     }
 
     // --- Load path selection: coordinated when possible ---
@@ -279,15 +350,40 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V> {
                 return null;
             }
             // Null-marker stored in both levels, jittered like any TTL.
-            StoredEntry<V> marker = StoredEntry.nullMarker();
-            l2.put(key, marker, markerTtl);
-            l1.put(key, marker, TtlJitter.apply(markerTtl, settings.jitterAmplitude()));
+            Version version = nextVersion();
+            StoredEntry<V> marker = StoredEntry.nullMarker(version);
+            storeVersioned(key, marker, markerTtl, version,
+                    TtlJitter.apply(markerTtl, settings.jitterAmplitude()));
             return marker;
         }
-        StoredEntry<V> entry = StoredEntry.ofValue(loaded);
-        l2.put(key, entry, settings.l2Ttl());
-        warmL1(key, entry);
+        Version version = nextVersion();
+        StoredEntry<V> entry = StoredEntry.ofValue(loaded, version);
+        storeVersioned(key, entry, settings.l2Ttl(), version, null);
         return entry;
+    }
+
+    /** L2 store + L1 warm + publish, version-conditional when versioning is on. */
+    private void storeVersioned(K key, StoredEntry<V> entry, Duration l2Ttl, Version version,
+            Duration l1TtlOverride) {
+        if (version != null) {
+            if (!l2.putIfNewer(key, entry, l2Ttl)) {
+                StoredEntry<V> current = l2.get(key);
+                if (current != null) {
+                    warmL1(key, current);
+                } else {
+                    l1.evict(key);
+                }
+                return;
+            }
+        } else {
+            l2.put(key, entry, l2Ttl);
+        }
+        if (l1TtlOverride != null) {
+            l1.put(key, entry, l1TtlOverride);
+        } else {
+            warmL1(key, entry);
+        }
+        publish(key, version, InvalidationMessage.Type.INVALIDATE);
     }
 
     /** Writes into L1 with a jittered TTL that never exceeds the L2 TTL. */

@@ -59,7 +59,7 @@ class LettuceRemoteCacheTest {
                 String candidate = "v" + i;
                 futures.add(pool.submit(() -> {
                     start.await();
-                    if (instance.setIfAbsent("k", candidate, Duration.ofMinutes(1))) {
+                    if (instance.setIfAbsent("k", io.tiercache.spi.StoredEntry.ofValue(candidate), Duration.ofMinutes(1))) {
                         wins.incrementAndGet();
                     }
                     return null;

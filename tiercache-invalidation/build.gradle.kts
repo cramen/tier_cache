@@ -10,15 +10,11 @@ java {
 
 dependencies {
     api(project(":tiercache-core"))
-    api(project(":tiercache-invalidation"))
-    api(libs.lettuce.core)
 
     testImplementation(platform(libs.junit.bom))
     testImplementation(libs.junit.jupiter)
     testRuntimeOnly(libs.junit.platform.launcher)
     testImplementation(testFixtures(project(":tiercache-core")))
-    testImplementation(libs.testcontainers)
-    testImplementation(libs.testcontainers.junit.jupiter)
 }
 
 tasks.withType<Test> {

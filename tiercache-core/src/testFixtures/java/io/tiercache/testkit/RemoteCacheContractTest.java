@@ -80,7 +80,7 @@ public abstract class RemoteCacheContractTest {
     @Test
     void setIfAbsentCreatesEntryWhenAbsent() {
         RemoteCache<String, String> cache = newCache();
-        assertTrue(cache.setIfAbsent("k", "v", Duration.ofMinutes(1)));
+        assertTrue(cache.setIfAbsent("k", StoredEntry.ofValue("v"), Duration.ofMinutes(1)));
         assertEquals("v", cache.get("k").value());
     }
 
@@ -88,7 +88,7 @@ public abstract class RemoteCacheContractTest {
     void setIfAbsentLosesAndDoesNotOverwriteWhenPresent() {
         RemoteCache<String, String> cache = newCache();
         cache.put("k", StoredEntry.ofValue("original"), Duration.ofMinutes(1));
-        assertFalse(cache.setIfAbsent("k", "intruder", Duration.ofMinutes(1)));
+        assertFalse(cache.setIfAbsent("k", StoredEntry.ofValue("intruder"), Duration.ofMinutes(1)));
         assertEquals("original", cache.get("k").value());
     }
 
@@ -96,7 +96,7 @@ public abstract class RemoteCacheContractTest {
     void setIfAbsentLosesAgainstNullMarker() {
         RemoteCache<String, String> cache = newCache();
         cache.put("k", StoredEntry.nullMarker(), Duration.ofMinutes(1));
-        assertFalse(cache.setIfAbsent("k", "v", Duration.ofMinutes(1)),
+        assertFalse(cache.setIfAbsent("k", StoredEntry.ofValue("v"), Duration.ofMinutes(1)),
                 "a null-marker counts as present");
     }
 
@@ -105,7 +105,7 @@ public abstract class RemoteCacheContractTest {
         RemoteCache<String, String> cache = newCache();
         cache.put("k", StoredEntry.ofValue("old"), Duration.ofMillis(50));
         Thread.sleep(150);
-        assertTrue(cache.setIfAbsent("k", "new", Duration.ofMinutes(1)));
+        assertTrue(cache.setIfAbsent("k", StoredEntry.ofValue("new"), Duration.ofMinutes(1)));
         assertEquals("new", cache.get("k").value());
     }
 
@@ -121,7 +121,7 @@ public abstract class RemoteCacheContractTest {
             String candidate = "v" + i;
             futures.add(pool.submit(() -> {
                 start.await();
-                if (cache.setIfAbsent("k", candidate, Duration.ofMinutes(1))) {
+                if (cache.setIfAbsent("k", StoredEntry.ofValue(candidate), Duration.ofMinutes(1))) {
                     wins.incrementAndGet();
                 }
                 return null;

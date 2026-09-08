@@ -31,9 +31,30 @@ public interface RemoteCache<K, V> {
     void put(K key, StoredEntry<V> entry, Duration ttl);
 
     /**
+     * Stores {@code entry} under {@code key} only if the entry's version is
+     * not older than the currently stored one (unversioned current entries
+     * lose). Returns {@code true} if the write won. The default
+     * implementation writes unconditionally; versioned transports override
+     * with an atomic compare. This is the write side of last-write-wins.
+     */
+    default boolean putIfNewer(K key, StoredEntry<V> entry, Duration ttl) {
+        put(key, entry, ttl);
+        return true;
+    }
+
+    /**
      * Removes {@code key} if present.
      */
     void evict(K key);
+
+    /**
+     * Removes {@code key} if present, stamping the tombstone with the given
+     * write version. Implementations with an invalidation journal use the
+     * version for the journal entry; the default ignores it.
+     */
+    default void evict(K key, io.tiercache.Version version) {
+        evict(key);
+    }
 
     /**
      * Removes all entries of this cache's namespace. Used for
@@ -42,7 +63,7 @@ public interface RemoteCache<K, V> {
     void clear();
 
     /**
-     * Atomically stores {@code value} under {@code key} only if the key is
+     * Atomically stores {@code entry} under {@code key} only if the key is
      * absent (or expired), with the given TTL. This is the foundation for
      * distributed rebuild coordination and {@code putIfAbsent}.
      *
@@ -53,5 +74,5 @@ public interface RemoteCache<K, V> {
      * @return {@code true} if this call created the entry, {@code false} if
      *         the key already existed (not expired)
      */
-    boolean setIfAbsent(K key, V value, Duration ttl);
+    boolean setIfAbsent(K key, StoredEntry<V> entry, Duration ttl);
 }

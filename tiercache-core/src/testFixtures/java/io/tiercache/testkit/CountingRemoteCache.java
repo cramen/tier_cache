@@ -41,7 +41,7 @@ public final class CountingRemoteCache<K, V> implements RemoteCache<K, V> {
     }
 
     @Override
-    public boolean setIfAbsent(K key, V value, Duration ttl) {
-        return delegate.setIfAbsent(key, value, ttl);
+    public boolean setIfAbsent(K key, StoredEntry<V> entry, Duration ttl) {
+        return delegate.setIfAbsent(key, entry, ttl);
     }
 }
