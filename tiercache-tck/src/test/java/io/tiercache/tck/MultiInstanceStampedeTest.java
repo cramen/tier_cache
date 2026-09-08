@@ -2,9 +2,12 @@ package io.tiercache.tck;
 
 import io.lettuce.core.RedisClient;
 import io.tiercache.CacheSettings;
+import io.tiercache.NullPolicy;
 import io.tiercache.TierCache;
 import io.tiercache.TierCacheFactory;
+import io.tiercache.redis.LettuceLockProvider;
 import io.tiercache.redis.LettuceRemoteCache;
+import io.tiercache.spi.DistributedLock;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -25,12 +28,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * T-01 multi-instance: M cache instances (separate factories, separate L1s,
- * separate connections) share one real Redis. N threads per instance hit
- * one missing hot key simultaneously.
- *
- * <p>With per-instance singleflight the loader runs at most M times
- * (cluster-wide coordination is F-21, a later change).
+ * T-01 full form: M cache instances (separate factories, L1s, connections)
+ * share one real Redis. With rebuild coordination (F-21) the loader runs
+ * exactly once cluster-wide; with coordination explicitly disabled it runs
+ * at most once per instance (harness sensitivity).
  */
 class MultiInstanceStampedeTest {
 
@@ -39,14 +40,15 @@ class MultiInstanceStampedeTest {
 
     private static GenericContainer<?> server;
     private static RedisClient client;
+    private static String redisUri;
 
     @BeforeAll
     static void startServer() {
         server = new GenericContainer<>(DockerImageName.parse("redis:6.2-alpine"))
                 .withExposedPorts(6379);
         server.start();
-        client = RedisClient.create(
-                "redis://" + server.getHost() + ":" + server.getMappedPort(6379));
+        redisUri = "redis://" + server.getHost() + ":" + server.getMappedPort(6379);
+        client = RedisClient.create(redisUri);
     }
 
     @AfterAll
@@ -56,25 +58,70 @@ class MultiInstanceStampedeTest {
     }
 
     @Test
-    @SuppressWarnings("unchecked")
-    void stampedeAcrossInstancesIsBoundedPerInstance() throws Exception {
-        AtomicInteger loaderCalls = new AtomicInteger();
+    void stampedeAcrossInstancesLoadsExactlyOnce() throws Exception {
+        int loaderCalls = runStampede(true, "stampede-coordinated");
+        assertEquals(1, loaderCalls,
+                "coordination must collapse the stampede to a single cluster-wide load");
+    }
 
+    @Test
+    void stampedeWithoutCoordinationRevertsToPerInstance() throws Exception {
+        int loaderCalls = runStampede(false, "stampede-uncoordinated");
+        assertTrue(loaderCalls >= 1 && loaderCalls <= INSTANCES,
+                "without coordination: at most one load per instance, got " + loaderCalls);
+    }
+
+    @Test
+    void winnerDeathIsSurvived() throws Exception {
+        // A "dead winner" holds the rebuild lock with a short lease and never
+        // releases it; a live instance must take over after the lease expiry.
+        LettuceLockProvider locks = new LettuceLockProvider(client.connect());
+        DistributedLock deadWinnersLock = locks.tryLock(
+                "winner-death:hot", Duration.ofMillis(500));
+        assertTrue(deadWinnersLock != null);
+
+        LettuceRemoteCache<String, String> l2 = LettuceRemoteCache
+                .<String, String>builder(redisUri).cacheName("winner-death").build();
+        TierCacheFactory factory = TierCacheFactory.builder()
+                .defaults(new CacheSettings(10_000, Duration.ofMinutes(1), null,
+                        Duration.ofHours(1), 0.0, NullPolicy.deny()))
+                .remoteCache(l2)
+                .build();
+        TierCache<String, String> cache = factory.getCache("winner-death");
+
+        long startNanos = System.nanoTime();
+        String value = cache.getOrCompute("hot", key -> "recovered");
+        long elapsedMillis = (System.nanoTime() - startNanos) / 1_000_000;
+        l2.close();
+        factory.close();
+
+        assertEquals("recovered", value);
+        assertTrue(elapsedMillis < 30_000,
+                "takeover must complete within the coordination budget, took " + elapsedMillis + " ms");
+    }
+
+    private int runStampede(boolean coordination, String cacheName) throws Exception {
+        AtomicInteger loaderCalls = new AtomicInteger();
+        List<TierCacheFactory> factories = new ArrayList<>();
         List<TierCache<String, String>> caches = new ArrayList<>();
         List<LettuceRemoteCache<String, String>> transports = new ArrayList<>();
         for (int i = 0; i < INSTANCES; i++) {
             LettuceRemoteCache<String, String> l2 = LettuceRemoteCache
-                    .<String, String>builder("redis://unused")
+                    .<String, String>builder(redisUri)
                             .client(client)
-                            .cacheName("stampede-multi")
+                            .cacheName(cacheName)
                             .build();
             transports.add(l2);
-            caches.add(TierCacheFactory.builder()
+            TierCacheFactory.Builder builder = TierCacheFactory.builder()
                     .defaults(new CacheSettings(10_000, Duration.ofMinutes(1), null,
-                            Duration.ofHours(1), 0.0, io.tiercache.NullPolicy.deny()))
-                    .remoteCache(l2)
-                    .build()
-                    .getCache("stampede-multi"));
+                            Duration.ofHours(1), 0.0, NullPolicy.deny()))
+                    .remoteCache(l2);
+            if (!coordination) {
+                builder.disableDistributedCoordination();
+            }
+            TierCacheFactory factory = builder.build();
+            factories.add(factory);
+            caches.add(factory.getCache(cacheName));
         }
 
         int totalThreads = INSTANCES * THREADS_PER_INSTANCE;
@@ -108,9 +155,7 @@ class MultiInstanceStampedeTest {
         }
         pool.shutdown();
         transports.forEach(LettuceRemoteCache::close);
-
-        int calls = loaderCalls.get();
-        assertTrue(calls >= 1 && calls <= INSTANCES,
-                "expected at most " + INSTANCES + " loader calls (one per instance), got " + calls);
+        factories.forEach(TierCacheFactory::close);
+        return loaderCalls.get();
     }
 }

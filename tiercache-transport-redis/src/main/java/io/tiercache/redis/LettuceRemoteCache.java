@@ -8,6 +8,8 @@ import io.lettuce.core.SocketOptions;
 import io.lettuce.core.TimeoutOptions;
 import io.lettuce.core.api.StatefulRedisConnection;
 import io.lettuce.core.api.sync.RedisCommands;
+import io.tiercache.spi.DistributedLockProvider;
+import io.tiercache.spi.LockProviderSource;
 import io.tiercache.spi.RemoteCache;
 import io.tiercache.spi.StoredEntry;
 
@@ -29,7 +31,7 @@ import java.util.Objects;
  *
  * <p><b>Incubating:</b> 0.x API, may change until CP-0.
  */
-public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, AutoCloseable {
+public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockProviderSource, AutoCloseable {
 
     public static final Duration DEFAULT_CONNECT_TIMEOUT = Duration.ofMillis(100);
     public static final Duration DEFAULT_COMMAND_TIMEOUT = Duration.ofMillis(250);
@@ -117,6 +119,12 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, AutoCl
         System.arraycopy(keyPrefix, 0, out, 0, keyPrefix.length);
         System.arraycopy(serialized, 0, out, keyPrefix.length, serialized.length);
         return out;
+    }
+
+    @Override
+    public DistributedLockProvider lockProvider() {
+        // Shares the client; the provider owns its String-codec connection.
+        return new LettuceLockProvider(client.connect());
     }
 
     @Override
