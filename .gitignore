@@ -1,0 +1,22 @@
+# Research material (Russian source docs, not part of the public repo)
+research/
+openspec/
+
+# Build output
+target/
+build/
+out/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.classpath
+.project
+.settings/
+
+# OS
+.DS_Store
+
+# Local tooling
+.kimi-code/
