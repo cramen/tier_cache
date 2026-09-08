@@ -36,4 +36,12 @@ public interface InvalidationJournal {
      * unrecoverable — receiver must flush L1).
      */
     boolean isTrimmed(String cache, String cursor);
+
+    /**
+     * Current number of journal entries for the cache (for the journal-size
+     * gauge). -1 if unknown.
+     */
+    default long size(String cache) {
+        return -1;
+    }
 }

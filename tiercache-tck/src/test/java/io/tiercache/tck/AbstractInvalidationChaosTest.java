@@ -85,6 +85,13 @@ abstract class AbstractInvalidationChaosTest {
         final DroppingTransport transport;
 
         Side(RedisClient client, String uri, int journalCapacity) {
+            this(client, uri, journalCapacity,
+                    io.tiercache.spi.CacheMetricsListener.NOOP, io.tiercache.spi.CacheMetricsListener.NOOP);
+        }
+
+        Side(RedisClient client, String uri, int journalCapacity,
+                io.tiercache.spi.CacheMetricsListener metrics,
+                io.tiercache.spi.CacheMetricsListener serviceMetrics) {
             this.client = client;
             RedisStreamJournal journal = new RedisStreamJournal(
                     client.connect(ByteArrayCodec.INSTANCE), journalCapacity, new JdkCacheSerializer<>());
@@ -99,8 +106,9 @@ abstract class AbstractInvalidationChaosTest {
                     .defaults(new CacheSettings(10_000, Duration.ofMinutes(5), null,
                             Duration.ofHours(1), 0.0, NullPolicy.deny()))
                     .remoteCache(l2)
+                    .metricsListener(metrics)
                     .invalidation(versions -> new InvalidationService(transport, journal,
-                            versions.instanceId(), InvalidationListener.NOOP))
+                            versions.instanceId(), InvalidationListener.NOOP, serviceMetrics))
                     .build();
             this.cache = factory.getCache(CACHE);
         }

@@ -10,7 +10,7 @@ import io.tiercache.spi.DistributedLock;
 import io.tiercache.spi.DistributedLockProvider;
 import io.tiercache.spi.InvalidationHandler;
 import io.tiercache.spi.InvalidationTarget;
-import io.tiercache.spi.DegradationListener;
+import io.tiercache.spi.CacheMetricsListener;
 import io.tiercache.spi.LocalCache;
 import io.tiercache.spi.RemoteCache;
 import io.tiercache.spi.StoredEntry;
@@ -65,6 +65,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
     private final VersionGenerator versionGenerator;   // null = no versioning/publishing
     private final InvalidationHandler invalidation;    // null = single-node
     private final CircuitBreaker breaker;              // null = unguarded L2 (opt-out)
+    private final CacheMetricsListener metrics;
     private final Map<K, CompletableFuture<StoredEntry<V>>> inflight = new ConcurrentHashMap<>();
 
     /** Legacy constructor: no coordination, no invalidation (used by tests). */
@@ -78,14 +79,14 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
             DistributedLockProvider lockProvider, ScheduledExecutorService watchdog,
             VersionGenerator versionGenerator, InvalidationHandler invalidation) {
         this(cacheName, l1, l2, settings, singleflightEnabled, lockProvider, watchdog,
-                versionGenerator, invalidation, null);
+                versionGenerator, invalidation, null, CacheMetricsListener.NOOP);
     }
 
     public DefaultTierCache(String cacheName, LocalCache<K, V> l1, RemoteCache<K, V> l2,
             CacheSettings settings, boolean singleflightEnabled,
             DistributedLockProvider lockProvider, ScheduledExecutorService watchdog,
             VersionGenerator versionGenerator, InvalidationHandler invalidation,
-            CircuitBreaker breaker) {
+            CircuitBreaker breaker, CacheMetricsListener metrics) {
         this.cacheName = cacheName;
         this.l1 = l1;
         this.l2 = l2;
@@ -96,19 +97,23 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         this.versionGenerator = versionGenerator;
         this.invalidation = invalidation;
         this.breaker = breaker;
+        this.metrics = metrics;
     }
 
     @Override
     public V get(K key) {
         StoredEntry<V> entry = l1.get(key);
         if (entry != null) {
+            metrics.onRequest(cacheName, CacheMetricsListener.Outcome.L1_HIT);
             return entry.isNullMarker() ? null : entry.value();
         }
         entry = l2Get(key);
         if (entry != null) {
+            metrics.onRequest(cacheName, CacheMetricsListener.Outcome.L2_HIT);
             warmL1(key, entry);
             return entry.isNullMarker() ? null : entry.value();
         }
+        metrics.onRequest(cacheName, CacheMetricsListener.Outcome.MISS);
         return null;
     }
 
@@ -116,13 +121,16 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
     public LookupResult<V> lookup(K key) {
         StoredEntry<V> entry = l1.get(key);
         if (entry != null) {
+            metrics.onRequest(cacheName, CacheMetricsListener.Outcome.L1_HIT);
             return toResult(entry);
         }
         entry = l2Get(key);
         if (entry != null) {
+            metrics.onRequest(cacheName, CacheMetricsListener.Outcome.L2_HIT);
             warmL1(key, entry);
             return toResult(entry);
         }
+        metrics.onRequest(cacheName, CacheMetricsListener.Outcome.MISS);
         return LookupResult.miss();
     }
 
@@ -130,23 +138,31 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
     public V getOrCompute(K key, Function<? super K, ? extends V> loader) {
         StoredEntry<V> entry = l1.get(key);
         if (entry != null) {
+            metrics.onRequest(cacheName, CacheMetricsListener.Outcome.L1_HIT);
             return entry.isNullMarker() ? null : entry.value();
         }
         entry = l2Get(key);
         if (entry != null) {
+            metrics.onRequest(cacheName, CacheMetricsListener.Outcome.L2_HIT);
             warmL1(key, entry);
             return entry.isNullMarker() ? null : entry.value();
         }
         if (!singleflightEnabled) {
-            return unwrap(loadPath(key, loader));
+            StoredEntry<V> result = loadPath(key, loader);
+            metrics.onRequest(cacheName, result != null && !result.isNullMarker()
+                    ? CacheMetricsListener.Outcome.LOAD : CacheMetricsListener.Outcome.MISS);
+            return unwrap(result);
         }
         CompletableFuture<StoredEntry<V>> future = new CompletableFuture<>();
         CompletableFuture<StoredEntry<V>> existing = inflight.putIfAbsent(key, future);
         if (existing != null) {
+            metrics.onRequest(cacheName, CacheMetricsListener.Outcome.COALESCED);
             return unwrap(existing.join());
         }
         try {
             StoredEntry<V> loaded = loadPath(key, loader);
+            metrics.onRequest(cacheName, loaded != null && !loaded.isNullMarker()
+                    ? CacheMetricsListener.Outcome.LOAD : CacheMetricsListener.Outcome.MISS);
             future.complete(loaded);
             return unwrap(loaded);
         } catch (RuntimeException e) {
@@ -225,6 +241,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         }
         Version version = nextVersion();
         StoredEntry<V> marker = StoredEntry.nullMarker(version);
+        metrics.onNullEntry(cacheName);
         storeVersioned(key, marker, markerTtl, version,
                 TtlJitter.apply(markerTtl, settings.jitterAmplitude()));
     }
@@ -390,6 +407,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
             // Null-marker stored in both levels, jittered like any TTL.
             Version version = nextVersion();
             StoredEntry<V> marker = StoredEntry.nullMarker(version);
+            metrics.onNullEntry(cacheName);
             storeVersioned(key, marker, markerTtl, version,
                     TtlJitter.apply(markerTtl, settings.jitterAmplitude()));
             return marker;
@@ -446,10 +464,18 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         if (breaker != null && breaker.isOpen()) {
             return null;
         }
+        long start = System.nanoTime();
+        Object span = metrics.onL2OperationStart(cacheName, "get");
+        boolean hit = false;
         try {
-            return l2.get(key);
+            StoredEntry<V> result = l2.get(key);
+            hit = result != null;
+            metrics.onLatency(cacheName, CacheMetricsListener.Level.L2, System.nanoTime() - start);
+            return result;
         } catch (L2UnavailableException e) {
             return null; // the decorator already accounted the failure
+        } finally {
+            metrics.onL2OperationEnd(cacheName, "get", hit, span);
         }
     }
 

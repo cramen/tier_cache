@@ -1,0 +1,35 @@
+# Alert rules for Tiercache (Prometheus rule format)
+
+groups:
+  - name: tiercache
+    rules:
+      # Miss growth at stable traffic: requests miss rate grows while total traffic is flat.
+      - alert: TiercacheMissGrowth
+        expr: |
+          sum(rate(tiercache_requests_total{result="miss"}[10m]))
+            > 2 * sum(rate(tiercache_requests_total{result="miss"}[10m] offset 30m))
+          and sum(rate(tiercache_requests_total[10m]))
+            < 1.2 * sum(rate(tiercache_requests_total[10m] offset 30m))
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Cache misses growing at stable traffic"
+
+      # Any dropped invalidation is a staleness incident.
+      - alert: TiercacheDroppedInvalidations
+        expr: sum(rate(tiercache_invalidation_total{direction="dropped"}[5m])) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Invalidation events dropped (journal window overflow)"
+
+      # Degraded mode longer than 5 minutes.
+      - alert: TiercacheDegraded
+        expr: max(tiercache_degraded) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Cache in L1-only degraded mode > 5 minutes"

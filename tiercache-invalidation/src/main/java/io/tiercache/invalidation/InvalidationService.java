@@ -1,6 +1,7 @@
 package io.tiercache.invalidation;
 
 import io.tiercache.InvalidationMessage;
+import io.tiercache.spi.CacheMetricsListener;
 import io.tiercache.spi.InvalidationHandler;
 import io.tiercache.spi.InvalidationJournal;
 import io.tiercache.spi.InvalidationListener;
@@ -39,13 +40,20 @@ public final class InvalidationService implements InvalidationHandler {
     private final Map<String, InvalidationTarget> targets = new ConcurrentHashMap<>();
     private final Map<String, AutoCloseable> subscriptions = new ConcurrentHashMap<>();
     private final Map<String, String> cursors = new ConcurrentHashMap<>();
+    private final CacheMetricsListener metrics;
 
     public InvalidationService(InvalidationTransport transport, InvalidationJournal journal,
             UUID originInstanceId, InvalidationListener listener) {
+        this(transport, journal, originInstanceId, listener, CacheMetricsListener.NOOP);
+    }
+
+    public InvalidationService(InvalidationTransport transport, InvalidationJournal journal,
+            UUID originInstanceId, InvalidationListener listener, CacheMetricsListener metrics) {
         this.transport = transport;
         this.journal = journal;
         this.originInstanceId = originInstanceId;
         this.listener = listener != null ? listener : InvalidationListener.NOOP;
+        this.metrics = metrics;
         transport.setReconnectListener(this::onReconnect);
     }
 
@@ -53,6 +61,7 @@ public final class InvalidationService implements InvalidationHandler {
     public void onLocalWrite(String cache, Object key, io.tiercache.Version version,
             InvalidationMessage.Type type) {
         transport.publish(new InvalidationMessage(cache, key, version, originInstanceId, type));
+        metrics.onInvalidation(cache, CacheMetricsListener.Direction.SENT);
     }
 
     @Override
@@ -77,9 +86,15 @@ public final class InvalidationService implements InvalidationHandler {
         if (target == null) {
             return;
         }
-        switch (message.type()) {
-            case INVALIDATE -> target.evictL1IfNewer(message.key(), message.version());
-            case EVICT_ALL -> target.evictAllL1();
+        Object span = metrics.onInvalidationStart(message.cache());
+        metrics.onInvalidation(message.cache(), CacheMetricsListener.Direction.RECEIVED);
+        try {
+            switch (message.type()) {
+                case INVALIDATE -> target.evictL1IfNewer(message.key(), message.version());
+                case EVICT_ALL -> target.evictAllL1();
+            }
+        } finally {
+            metrics.onInvalidationEnd(message.cache(), span);
         }
     }
 
@@ -106,11 +121,13 @@ public final class InvalidationService implements InvalidationHandler {
                         + "disconnect; flushing L1 entirely.", cache);
                 target.evictAllL1();
                 listener.onJournalOverflow(cache);
+                metrics.onInvalidation(cache, CacheMetricsListener.Direction.DROPPED);
                 cursors.put(cache, journal.endCursor(cache));
                 return;
             }
             List<InvalidationMessage> missed = journal.readRange(cache, cursor);
             missed.forEach(this::onMessage);
+            missed.forEach(m -> metrics.onInvalidation(cache, CacheMetricsListener.Direction.REPLAYED));
             if (!missed.isEmpty()) {
                 // readRange is ordered; the last entry's cursor is the new mark.
                 cursors.put(cache, journal.endCursor(cache));

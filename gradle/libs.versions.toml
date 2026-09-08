@@ -2,6 +2,8 @@
 slf4j = "2.0.16"
 caffeine = "3.2.0"
 lettuce = "7.7.0.RELEASE"
+micrometer = "1.14.14"
+otel = "1.49.0"
 spring-boot = "3.5.16"
 junit = "5.11.4"
 testcontainers = "1.21.4"
@@ -10,6 +12,10 @@ testcontainers = "1.21.4"
 slf4j-api = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }
 caffeine = { module = "com.github.ben-manes.caffeine:caffeine", version.ref = "caffeine" }
 lettuce-core = { module = "io.lettuce:lettuce-core", version.ref = "lettuce" }
+micrometer-core = { module = "io.micrometer:micrometer-core", version.ref = "micrometer" }
+otel-api = { module = "io.opentelemetry:opentelemetry-api", version.ref = "otel" }
+otel-sdk-testing = { module = "io.opentelemetry:opentelemetry-sdk-testing", version.ref = "otel" }
+otel-sdk = { module = "io.opentelemetry:opentelemetry-sdk", version.ref = "otel" }
 spring-boot-starter = { module = "org.springframework.boot:spring-boot-starter", version.ref = "spring-boot" }
 spring-boot-starter-cache = { module = "org.springframework.boot:spring-boot-starter-cache", version.ref = "spring-boot" }
 spring-boot-starter-test = { module = "org.springframework.boot:spring-boot-starter-test", version.ref = "spring-boot" }

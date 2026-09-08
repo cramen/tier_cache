@@ -1,1 +1,2 @@
 io.tiercache.spring.TiercacheAutoConfiguration
+io.tiercache.spring.TiercacheMetricsAutoConfiguration

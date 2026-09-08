@@ -61,6 +61,11 @@ public final class InMemoryJournal implements InvalidationJournal {
         return trimmed != null && Long.parseLong(cursor) < trimmed;
     }
 
+    @Override
+    public synchronized long size(String cache) {
+        return journals.getOrDefault(cache, List.of()).size();
+    }
+
     private record Entry(long cursor, InvalidationMessage message) {
     }
 }

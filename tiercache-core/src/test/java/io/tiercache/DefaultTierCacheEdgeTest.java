@@ -81,7 +81,7 @@ class DefaultTierCacheEdgeTest {
         CountingRemoteCache<String, String> l2 = new CountingRemoteCache<>();
         DefaultTierCache<String, String> cache = new DefaultTierCache<>("c",
                 new CountingLocalCache<>(), l2, allow, true, null, null,
-                new VersionGenerator(), null, breaker);
+                new VersionGenerator(), null, breaker, io.tiercache.spi.CacheMetricsListener.NOOP);
         assertNull(cache.getOrCompute("k", key -> null));
         assertEquals(0, l2.puts.get(), "degraded marker must not touch L2");
         assertEquals(LookupResult.CachedNull.instance().getClass(), cache.lookup("k").getClass());
@@ -147,7 +147,7 @@ class DefaultTierCacheEdgeTest {
         CountingRemoteCache<String, String> l2 = new CountingRemoteCache<>();
         DefaultTierCache<String, String> cache = new DefaultTierCache<>("c",
                 new CountingLocalCache<>(), l2, CacheSettings.defaults(), true,
-                null, null, new VersionGenerator(), null, breaker);
+                null, null, new VersionGenerator(), null, breaker, io.tiercache.spi.CacheMetricsListener.NOOP);
         cache.evict("k");
         cache.evictAll();
         assertEquals(0, l2.evicts.get(), "degraded evict must not touch L2");
@@ -186,7 +186,7 @@ class DefaultTierCacheEdgeTest {
         l2.put("k", StoredEntry.ofValue("v"), Duration.ofMinutes(1));
         DefaultTierCache<String, String> cache = new DefaultTierCache<>("c",
                 new CountingLocalCache<>(), l2, CacheSettings.defaults(), true,
-                null, null, new VersionGenerator(), null, breaker);
+                null, null, new VersionGenerator(), null, breaker, io.tiercache.spi.CacheMetricsListener.NOOP);
         assertEquals(LookupResult.Miss.instance().getClass(), cache.lookup("k").getClass(),
                 "miss: L2 skipped while degraded");
         assertEquals(0, l2.gets.get(), "no L2 access while open");

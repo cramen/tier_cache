@@ -106,6 +106,12 @@ public final class RedisStreamJournal implements InvalidationJournal {
     }
 
     @Override
+    public long size(String cache) {
+        Long size = commands.xlen(streamKey(cache));
+        return size != null ? size : 0;
+    }
+
+    @Override
     public boolean isTrimmed(String cache, String cursor) {
         List<StreamMessage<byte[], byte[]>> first = commands.xrange(streamKey(cache),
                 Range.unbounded(), Limit.from(1));

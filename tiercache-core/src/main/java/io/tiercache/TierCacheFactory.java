@@ -7,6 +7,7 @@ import io.tiercache.internal.CircuitBreakerRemoteCache;
 import io.tiercache.internal.CaffeineLocalCache;
 import io.tiercache.internal.DefaultTierCache;
 import io.tiercache.spi.DistributedLockProvider;
+import io.tiercache.spi.CacheMetricsListener;
 import io.tiercache.spi.DegradationListener;
 import io.tiercache.spi.InvalidationHandler;
 
@@ -54,6 +55,7 @@ public final class TierCacheFactory implements AutoCloseable {
     private final VersionGenerator versionGenerator;
     private final InvalidationHandler invalidation; // null = single-node
     private final CircuitBreaker breaker;           // null = unguarded L2 (opt-out)
+    private final CacheMetricsListener metricsListener;
 
     private TierCacheFactory(Builder builder) {
         this.defaults = builder.defaults;
@@ -92,6 +94,7 @@ public final class TierCacheFactory implements AutoCloseable {
         this.invalidation = builder.invalidationFactory != null
                 ? builder.invalidationFactory.apply(versionGenerator)
                 : null;
+        this.metricsListener = builder.metricsListener;
 
         DegradationListener degradationListener = builder.degradationListener;
         if (builder.circuitBreakerEnabled) {
@@ -143,7 +146,7 @@ public final class TierCacheFactory implements AutoCloseable {
         DefaultTierCache<K, V> cache = new DefaultTierCache<>(name, l1,
                 (RemoteCache<K, V>) remoteCache, settings, singleflightEnabled,
                 coordinationEnabled ? lockProvider : null, watchdog, versionGenerator, invalidation,
-                breaker);
+                breaker, metricsListener);
         if (invalidation != null) {
             invalidation.registerTarget(name, cache);
         }
@@ -192,6 +195,7 @@ public final class TierCacheFactory implements AutoCloseable {
         private boolean circuitBreakerEnabled = true;
         private CircuitBreaker.Config breakerConfig = CircuitBreaker.Config.defaults();
         private DegradationListener degradationListener = DegradationListener.NOOP;
+        private CacheMetricsListener metricsListener = CacheMetricsListener.NOOP;
 
         public Builder defaults(CacheSettings defaults) {
             this.defaults = Objects.requireNonNull(defaults, "defaults");
@@ -265,6 +269,12 @@ public final class TierCacheFactory implements AutoCloseable {
         /** Listener for degradation transitions (metrics bind here). */
         public Builder degradationListener(DegradationListener listener) {
             this.degradationListener = Objects.requireNonNull(listener, "listener");
+            return this;
+        }
+
+        /** Metrics events listener (bind a registry via the metrics module). */
+        public Builder metricsListener(CacheMetricsListener listener) {
+            this.metricsListener = Objects.requireNonNull(listener, "listener");
             return this;
         }
 

@@ -1,0 +1,71 @@
+{
+  "title": "Tiercache Overview",
+  "uid": "tiercache-overview",
+  "schemaVersion": 39,
+  "panels": [
+    {
+      "id": 1,
+      "title": "Request outcomes",
+      "type": "timeseries",
+      "targets": [
+        {"expr": "sum by (result) (rate(tiercache_requests_total[$5m]))", "legendFormat": "{{result}}"}
+      ]
+    },
+    {
+      "id": 2,
+      "title": "L2 latency (p99)",
+      "type": "timeseries",
+      "targets": [
+        {"expr": "histogram_quantile(0.99, sum by (le, cache) (rate(tiercache_latency_seconds_bucket{level=\"l2\"}[$5m])))", "legendFormat": "{{cache}}"}
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Invalidation flow",
+      "type": "timeseries",
+      "targets": [
+        {"expr": "sum by (direction) (rate(tiercache_invalidation_total[$5m]))", "legendFormat": "{{direction}}"}
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Degraded",
+      "type": "stat",
+      "targets": [
+        {"expr": "max(tiercache_degraded)", "legendFormat": "degraded"}
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Breaker state",
+      "type": "stat",
+      "targets": [
+        {"expr": "max(tiercache_breaker_state)", "legendFormat": "breaker"}
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Journal size",
+      "type": "timeseries",
+      "targets": [
+        {"expr": "tiercache_journal_size", "legendFormat": "{{cache}}"}
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Max entry age (ms)",
+      "type": "timeseries",
+      "targets": [
+        {"expr": "tiercache_entry_age_max", "legendFormat": "{{cache}}"}
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Null entries",
+      "type": "timeseries",
+      "targets": [
+        {"expr": "sum by (cache) (rate(tiercache_null_entries_total[$5m]))", "legendFormat": "{{cache}}"}
+      ]
+    }
+  ]
+}

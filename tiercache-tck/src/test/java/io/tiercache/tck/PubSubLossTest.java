@@ -3,8 +3,12 @@ package io.tiercache.tck;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.utility.DockerImageName;
 
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import io.tiercache.micrometer.MicrometerCacheMetrics;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Pub/Sub loss: a disconnected receiver misses invalidations. Within the
@@ -43,9 +47,11 @@ abstract class AbstractPubSubLossTest extends AbstractInvalidationChaosTest {
     void windowOverflowFlushesL1() throws Exception {
         try (var server = startServer(image())) {
             String uri = uri(server);
+            SimpleMeterRegistry registry = new SimpleMeterRegistry();
+            MicrometerCacheMetrics metricsB = new MicrometerCacheMetrics(registry);
             // Tiny journal window: 2 entries.
             Side a = new Side(io.lettuce.core.RedisClient.create(uri), uri, 2);
-            Side b = new Side(io.lettuce.core.RedisClient.create(uri), uri, 2);
+            Side b = new Side(io.lettuce.core.RedisClient.create(uri), uri, 2, metricsB, metricsB);
             try {
                 a.cache.put("keep", "v");
                 assertEquals("v", b.cache.get("keep")); // warm B's L1

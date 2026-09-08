@@ -37,6 +37,8 @@ Reads cascade L1 → L2 → loader; an L2 hit always warms L1. Concurrent loads 
 
 When Redis fails, a built-in circuit breaker switches the cache to L1-only mode: business operations never see infrastructure exceptions. The degraded mode is honest — cross-instance atomicity narrows to per-instance, and every transition is logged and signaled. Recovery replays the missed invalidation journal and never flushes L1 on reconnect (no healing-partition stampede).
 
+Every failure mode has a metric: request outcomes per level, L2 latency, invalidation flow (sent/received/replayed/dropped), journal size, degraded state, breaker state, entry age, null entries — via Micrometer (`tiercache-micrometer` module; the Spring Boot starter binds to your MeterRegistry automatically). OpenTelemetry spans cover L2 operations and invalidation processing. A reference Grafana dashboard and alert rules live in `docs/grafana/`.
+
 The cache is eventually consistent by design; no strong-consistency guarantees are given or implied.
 
 ## Spring Boot quick start

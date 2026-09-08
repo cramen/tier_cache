@@ -93,7 +93,8 @@ public class TiercacheAutoConfiguration {
     @ConditionalOnMissingBean
     TierCacheFactory tierCacheFactory(TiercacheProperties properties,
             RemoteCache<Object, Object> remoteCache,
-            ObjectProvider<Function<VersionGenerator, InvalidationHandler>> invalidation) {
+            ObjectProvider<Function<VersionGenerator, InvalidationHandler>> invalidation,
+            ObjectProvider<io.tiercache.spi.CacheMetricsListener> metrics) {
         TierCacheFactory.Builder builder = TierCacheFactory.builder()
                 .defaults(properties.getDefaults().toSettings(io.tiercache.CacheSettings.defaults()))
                 .remoteCache(remoteCache);
@@ -101,6 +102,10 @@ public class TiercacheAutoConfiguration {
         Function<VersionGenerator, InvalidationHandler> handlerFactory = invalidation.getIfAvailable();
         if (handlerFactory != null) {
             builder.invalidation(handlerFactory);
+        }
+        io.tiercache.spi.CacheMetricsListener metricsListener = metrics.getIfAvailable();
+        if (metricsListener != null) {
+            builder.metricsListener(metricsListener);
         }
         // build() runs core's fail-fast startup validation: invalid
         // configuration aborts application startup with an actionable error.
