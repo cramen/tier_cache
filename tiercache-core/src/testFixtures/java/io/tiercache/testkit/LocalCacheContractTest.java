@@ -1,12 +1,14 @@
 package io.tiercache.testkit;
 
 import io.tiercache.spi.LocalCache;
+import io.tiercache.spi.StoredEntry;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Contract test for {@link LocalCache} implementations. Subclass and
@@ -24,14 +26,14 @@ public abstract class LocalCacheContractTest {
     @Test
     void putThenGetReturnsValue() {
         LocalCache<String, String> cache = newCache();
-        cache.put("k", "v", Duration.ofMinutes(1));
-        assertEquals("v", cache.get("k"));
+        cache.put("k", StoredEntry.ofValue("v"), Duration.ofMinutes(1));
+        assertEquals("v", cache.get("k").value());
     }
 
     @Test
     void evictRemovesValue() {
         LocalCache<String, String> cache = newCache();
-        cache.put("k", "v", Duration.ofMinutes(1));
+        cache.put("k", StoredEntry.ofValue("v"), Duration.ofMinutes(1));
         cache.evict("k");
         assertNull(cache.get("k"));
     }
@@ -39,7 +41,7 @@ public abstract class LocalCacheContractTest {
     @Test
     void entryExpiresAfterTtl() throws InterruptedException {
         LocalCache<String, String> cache = newCache();
-        cache.put("k", "v", Duration.ofMillis(50));
+        cache.put("k", StoredEntry.ofValue("v"), Duration.ofMillis(50));
         Thread.sleep(150);
         assertNull(cache.get("k"));
     }
@@ -47,8 +49,17 @@ public abstract class LocalCacheContractTest {
     @Test
     void putOverwritesExistingValue() {
         LocalCache<String, String> cache = newCache();
-        cache.put("k", "v1", Duration.ofMinutes(1));
-        cache.put("k", "v2", Duration.ofMinutes(1));
-        assertEquals("v2", cache.get("k"));
+        cache.put("k", StoredEntry.ofValue("v1"), Duration.ofMinutes(1));
+        cache.put("k", StoredEntry.ofValue("v2"), Duration.ofMinutes(1));
+        assertEquals("v2", cache.get("k").value());
+    }
+
+    @Test
+    void nullMarkerRoundTrips() {
+        // F-25: markers are stored like any other entry.
+        LocalCache<String, String> cache = newCache();
+        cache.put("k", StoredEntry.nullMarker(), Duration.ofMinutes(1));
+        StoredEntry<String> entry = cache.get("k");
+        assertTrue(entry != null && entry.isNullMarker());
     }
 }

@@ -9,9 +9,11 @@ import java.time.Duration;
  * incompatibly until the public API freeze (roadmap checkpoint CP-0).
  *
  * <p>Implementations must be thread-safe. TTLs are per entry (F-06): each
- * {@link #put} carries the entry TTL. Implementations backed by a remote
- * store must apply their own connect/read/write timeouts and must throw
- * only unchecked exceptions from this interface.
+ * {@link #put} carries the entry TTL. Entries are opaque {@link StoredEntry}
+ * holders — implementations must persist null-markers like any other entry.
+ * Implementations backed by a remote store must apply their own
+ * connect/read/write timeouts and must throw only unchecked exceptions from
+ * this interface.
  *
  * <p>Note: a two-level cache is eventually consistent by design.
  * Implementations must not claim or attempt to provide strong consistency.
@@ -19,14 +21,14 @@ import java.time.Duration;
 public interface RemoteCache<K, V> {
 
     /**
-     * Returns the value for {@code key}, or {@code null} if absent or expired.
+     * Returns the entry for {@code key}, or {@code null} if absent or expired.
      */
-    V get(K key);
+    StoredEntry<V> get(K key);
 
     /**
-     * Stores {@code value} under {@code key} with the given TTL (F-06).
+     * Stores {@code entry} under {@code key} with the given TTL (F-06).
      */
-    void put(K key, V value, Duration ttl);
+    void put(K key, StoredEntry<V> entry, Duration ttl);
 
     /**
      * Removes {@code key} if present.
@@ -36,10 +38,11 @@ public interface RemoteCache<K, V> {
     /**
      * Atomically stores {@code value} under {@code key} only if the key is
      * absent (or expired), with the given TTL. This is the foundation for
-     * distributed rebuild coordination (F-21).
+     * distributed rebuild coordination (F-21) and {@code putIfAbsent} (F-03).
      *
      * <p>Implementations backed by a remote store MUST make this operation
-     * atomic across all clients of that store.
+     * atomic across all clients of that store. Note: a stored null-marker
+     * counts as PRESENT for this operation.
      *
      * @return {@code true} if this call created the entry, {@code false} if
      *         the key already existed (not expired)

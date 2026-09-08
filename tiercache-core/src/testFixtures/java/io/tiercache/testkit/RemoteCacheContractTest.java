@@ -1,6 +1,7 @@
 package io.tiercache.testkit;
 
 import io.tiercache.spi.RemoteCache;
+import io.tiercache.spi.StoredEntry;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
@@ -26,14 +27,14 @@ public abstract class RemoteCacheContractTest {
     @Test
     void putThenGetReturnsValue() {
         RemoteCache<String, String> cache = newCache();
-        cache.put("k", "v", Duration.ofMinutes(1));
-        assertEquals("v", cache.get("k"));
+        cache.put("k", StoredEntry.ofValue("v"), Duration.ofMinutes(1));
+        assertEquals("v", cache.get("k").value());
     }
 
     @Test
     void evictRemovesValue() {
         RemoteCache<String, String> cache = newCache();
-        cache.put("k", "v", Duration.ofMinutes(1));
+        cache.put("k", StoredEntry.ofValue("v"), Duration.ofMinutes(1));
         cache.evict("k");
         assertNull(cache.get("k"));
     }
@@ -41,7 +42,7 @@ public abstract class RemoteCacheContractTest {
     @Test
     void entryExpiresAfterTtl() throws InterruptedException {
         RemoteCache<String, String> cache = newCache();
-        cache.put("k", "v", Duration.ofMillis(50));
+        cache.put("k", StoredEntry.ofValue("v"), Duration.ofMillis(50));
         Thread.sleep(150);
         assertNull(cache.get("k"));
     }
@@ -50,35 +51,52 @@ public abstract class RemoteCacheContractTest {
     void entriesOfOneCacheMayHaveDifferentTtls() throws InterruptedException {
         // F-06: per-entry TTL in L2.
         RemoteCache<String, String> cache = newCache();
-        cache.put("short", "v1", Duration.ofMillis(50));
-        cache.put("long", "v2", Duration.ofMinutes(1));
+        cache.put("short", StoredEntry.ofValue("v1"), Duration.ofMillis(50));
+        cache.put("long", StoredEntry.ofValue("v2"), Duration.ofMinutes(1));
         Thread.sleep(150);
         assertNull(cache.get("short"));
-        assertEquals("v2", cache.get("long"));
+        assertEquals("v2", cache.get("long").value());
+    }
+
+    @Test
+    void nullMarkerRoundTrips() {
+        // F-25: markers persist like any other entry.
+        RemoteCache<String, String> cache = newCache();
+        cache.put("k", StoredEntry.nullMarker(), Duration.ofMinutes(1));
+        StoredEntry<String> entry = cache.get("k");
+        assertTrue(entry != null && entry.isNullMarker());
     }
 
     @Test
     void setIfAbsentCreatesEntryWhenAbsent() {
         RemoteCache<String, String> cache = newCache();
         assertTrue(cache.setIfAbsent("k", "v", Duration.ofMinutes(1)));
-        assertEquals("v", cache.get("k"));
+        assertEquals("v", cache.get("k").value());
     }
 
     @Test
     void setIfAbsentLosesAndDoesNotOverwriteWhenPresent() {
         RemoteCache<String, String> cache = newCache();
-        cache.put("k", "original", Duration.ofMinutes(1));
+        cache.put("k", StoredEntry.ofValue("original"), Duration.ofMinutes(1));
         assertFalse(cache.setIfAbsent("k", "intruder", Duration.ofMinutes(1)));
-        assertEquals("original", cache.get("k"));
+        assertEquals("original", cache.get("k").value());
+    }
+
+    @Test
+    void setIfAbsentLosesAgainstNullMarker() {
+        RemoteCache<String, String> cache = newCache();
+        cache.put("k", StoredEntry.nullMarker(), Duration.ofMinutes(1));
+        assertFalse(cache.setIfAbsent("k", "v", Duration.ofMinutes(1)),
+                "a null-marker counts as present");
     }
 
     @Test
     void setIfAbsentSucceedsAfterExpiry() throws InterruptedException {
         RemoteCache<String, String> cache = newCache();
-        cache.put("k", "old", Duration.ofMillis(50));
+        cache.put("k", StoredEntry.ofValue("old"), Duration.ofMillis(50));
         Thread.sleep(150);
         assertTrue(cache.setIfAbsent("k", "new", Duration.ofMinutes(1)));
-        assertEquals("new", cache.get("k"));
+        assertEquals("new", cache.get("k").value());
     }
 
     @Test

@@ -14,17 +14,20 @@ import java.util.Objects;
  * @param l2Ttl              L2 entry TTL
  * @param jitterAmplitude    TTL jitter amplitude as a fraction in [0, 1)
  *                           (e.g. 0.1 = up to 10% shorter TTLs, F-24)
+ * @param nullPolicy         null-caching policy (F-25); default {@code deny}
  */
 public record CacheSettings(
         long l1MaxSize,
         Duration l1ExpireAfterWrite,
         Duration l1ExpireAfterAccess,
         Duration l2Ttl,
-        double jitterAmplitude) {
+        double jitterAmplitude,
+        NullPolicy nullPolicy) {
 
     public CacheSettings {
         Objects.requireNonNull(l1ExpireAfterWrite, "l1ExpireAfterWrite");
         Objects.requireNonNull(l2Ttl, "l2Ttl");
+        Objects.requireNonNull(nullPolicy, "nullPolicy");
         if (l1MaxSize <= 0) {
             throw new IllegalArgumentException("l1MaxSize must be positive, got " + l1MaxSize);
         }
@@ -44,7 +47,8 @@ public record CacheSettings(
     }
 
     /**
-     * Sensible global defaults (F-24: jitter on by default, amplitude 10%).
+     * Sensible global defaults (F-24: jitter on by default, amplitude 10%;
+     * F-25: null caching denied unless explicitly allowed).
      */
     public static CacheSettings defaults() {
         return new CacheSettings(
@@ -52,6 +56,7 @@ public record CacheSettings(
                 Duration.ofMinutes(5),
                 null,
                 Duration.ofHours(1),
-                0.10);
+                0.10,
+                NullPolicy.deny());
     }
 }

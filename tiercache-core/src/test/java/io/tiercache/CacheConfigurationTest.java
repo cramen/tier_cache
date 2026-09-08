@@ -82,7 +82,7 @@ class CacheConfigurationTest {
         assertThrows(CacheConfigurationException.class, () ->
                 TierCacheFactory.builder()
                         .defaults(new CacheSettings(1000, Duration.ofHours(2), null,
-                                Duration.ofHours(1), 0.10))
+                                Duration.ofHours(1), 0.10, NullPolicy.deny()))
                         .remoteCache(new InMemoryRemoteCache<>())
                         .build());
     }

@@ -30,9 +30,9 @@ class AdditionalBehaviorTest {
     @Test
     void caffeineL1HonorsExpireAfterAccess() throws InterruptedException {
         CacheSettings settings = new CacheSettings(1000, Duration.ofMinutes(10),
-                Duration.ofMillis(60), Duration.ofHours(1), 0.0);
+                Duration.ofMillis(60), Duration.ofHours(1), 0.0, NullPolicy.deny());
         CaffeineLocalCache<String, String> cache = new CaffeineLocalCache<>(settings);
-        cache.put("k", "v", Duration.ofMinutes(10));
+        cache.put("k", io.tiercache.spi.StoredEntry.ofValue("v"), Duration.ofMinutes(10));
         cache.get("k"); // touches the entry: resets the access window
         Thread.sleep(150);
         assertNull(cache.get("k"), "entry must expire after the access window lapses");
@@ -80,7 +80,7 @@ class AdditionalBehaviorTest {
         InMemoryRemoteCache<String, String> l2 = new InMemoryRemoteCache<>();
         TierCache<String, String> cache = TierCacheFactory.builder()
                 .defaults(new CacheSettings(1000, Duration.ofMillis(200), null,
-                        Duration.ofMillis(200), 0.50))
+                        Duration.ofMillis(200), 0.50, NullPolicy.deny()))
                 .remoteCache(l2)
                 .build()
                 .getCache("c");

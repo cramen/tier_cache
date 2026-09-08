@@ -52,7 +52,7 @@ class DefaultTierCacheTest {
 
     @Test
     void l2HitWarmsL1() {
-        l2.put("k", "v", Duration.ofMinutes(1));
+        l2.put("k", io.tiercache.spi.StoredEntry.ofValue("v"), Duration.ofMinutes(1));
 
         assertEquals("v", cache.get("k"));
         assertEquals(1, l1.puts.get(), "L2 hit must warm L1");

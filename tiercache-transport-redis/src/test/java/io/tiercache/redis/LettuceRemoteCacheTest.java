@@ -122,8 +122,42 @@ class LettuceRemoteCacheTest {
                         .keySerializer(upperCase)
                         .valueSerializer(upperCase)
                         .build()) {
-            cache.put("Key", "MixedCase", Duration.ofMinutes(1));
-            assertEquals("mixedcase", cache.get("Key"));
+            cache.put("Key", io.tiercache.spi.StoredEntry.ofValue("MixedCase"), Duration.ofMinutes(1));
+            assertEquals("mixedcase", cache.get("Key").value());
+        }
+    }
+
+    @Test
+    void nullMarkerRoundTripThroughRedis() {
+        // Spec: marker encoding — stored in Redis, reads back as cached-null.
+        try (LettuceRemoteCache<String, String> cache =
+                LettuceRemoteCache.<String, String>builder(redisUri)
+                        .cacheName("marker-rt")
+                        .build()) {
+            cache.put("k", io.tiercache.spi.StoredEntry.nullMarker(), Duration.ofMinutes(1));
+            io.tiercache.spi.StoredEntry<String> entry = cache.get("k");
+            assertTrue(entry != null && entry.isNullMarker());
+
+            // Real values still decode normally next to the marker.
+            cache.put("v", io.tiercache.spi.StoredEntry.ofValue("data"), Duration.ofMinutes(1));
+            assertEquals("data", cache.get("v").value());
+        }
+    }
+
+    @Test
+    void putIfAbsentThroughCoreOverRedis() {
+        // Spec core-read-path: putIfAbsent winner/loser over the real transport.
+        try (LettuceRemoteCache<String, String> l2 =
+                LettuceRemoteCache.<String, String>builder(redisUri)
+                        .cacheName("pia-core")
+                        .build()) {
+            io.tiercache.TierCache<String, String> cache = io.tiercache.TierCacheFactory.builder()
+                    .remoteCache(l2)
+                    .build()
+                    .getCache("pia-core");
+            assertTrue(cache.putIfAbsent("k", "first"));
+            assertTrue(cache.putIfAbsent("k", "second") == false);
+            assertEquals("first", cache.get("k"));
         }
     }
 

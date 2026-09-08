@@ -5,6 +5,7 @@ import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.Expiry;
 import io.tiercache.CacheSettings;
 import io.tiercache.spi.LocalCache;
+import io.tiercache.spi.StoredEntry;
 
 import java.time.Duration;
 
@@ -13,7 +14,8 @@ import java.time.Duration;
  *
  * <p>Per-entry TTLs are carried by a small value holder read by Caffeine's
  * {@link Expiry}. The holder is allocated on write only; the steady-state
- * hit path ({@link #get}) allocates nothing (N-03).
+ * hit path ({@link #get}) allocates nothing (N-03). Null-markers (F-25) are
+ * stored like any other entry.
  */
 public final class CaffeineLocalCache<K, V> implements LocalCache<K, V> {
 
@@ -49,14 +51,14 @@ public final class CaffeineLocalCache<K, V> implements LocalCache<K, V> {
     }
 
     @Override
-    public V get(K key) {
+    public StoredEntry<V> get(K key) {
         Holder<V> holder = cache.getIfPresent(key);
-        return holder != null ? holder.value : null;
+        return holder != null ? holder.entry : null;
     }
 
     @Override
-    public void put(K key, V value, Duration ttl) {
-        cache.put(key, new Holder<>(value, ttl.toNanos()));
+    public void put(K key, StoredEntry<V> entry, Duration ttl) {
+        cache.put(key, new Holder<>(entry, ttl.toNanos()));
     }
 
     @Override
@@ -65,11 +67,11 @@ public final class CaffeineLocalCache<K, V> implements LocalCache<K, V> {
     }
 
     private static final class Holder<V> {
-        final V value;
+        final StoredEntry<V> entry;
         final long ttlNanos;
 
-        Holder(V value, long ttlNanos) {
-            this.value = value;
+        Holder(StoredEntry<V> entry, long ttlNanos) {
+            this.entry = entry;
             this.ttlNanos = ttlNanos;
         }
     }

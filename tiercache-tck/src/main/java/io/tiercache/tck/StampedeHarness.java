@@ -43,7 +43,7 @@ public final class StampedeHarness {
     public int run(boolean singleflightEnabled) throws Exception {
         InMemoryRemoteCache<String, String> l2 = new InMemoryRemoteCache<>();
         TierCacheFactory.Builder builder = TierCacheFactory.builder()
-                .defaults(new CacheSettings(10_000, l1Ttl, null, Duration.ofHours(1), 0.0))
+                .defaults(new CacheSettings(10_000, l1Ttl, null, Duration.ofHours(1), 0.0, io.tiercache.NullPolicy.deny()))
                 .remoteCache(l2);
         if (!singleflightEnabled) {
             builder.disableSingleflight();

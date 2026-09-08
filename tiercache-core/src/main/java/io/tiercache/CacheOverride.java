@@ -15,6 +15,7 @@ public final class CacheOverride {
     private Duration l1ExpireAfterAccess;
     private Duration l2Ttl;
     private Double jitterAmplitude;
+    private NullPolicy nullPolicy;
 
     public CacheOverride l1MaxSize(long l1MaxSize) {
         this.l1MaxSize = l1MaxSize;
@@ -41,6 +42,11 @@ public final class CacheOverride {
         return this;
     }
 
+    public CacheOverride nullPolicy(NullPolicy nullPolicy) {
+        this.nullPolicy = nullPolicy;
+        return this;
+    }
+
     /**
      * Resolves this override against the given global defaults.
      */
@@ -50,6 +56,7 @@ public final class CacheOverride {
                 l1ExpireAfterWrite != null ? l1ExpireAfterWrite : defaults.l1ExpireAfterWrite(),
                 l1ExpireAfterAccess != null ? l1ExpireAfterAccess : defaults.l1ExpireAfterAccess(),
                 l2Ttl != null ? l2Ttl : defaults.l2Ttl(),
-                jitterAmplitude != null ? jitterAmplitude : defaults.jitterAmplitude());
+                jitterAmplitude != null ? jitterAmplitude : defaults.jitterAmplitude(),
+                nullPolicy != null ? nullPolicy : defaults.nullPolicy());
     }
 }

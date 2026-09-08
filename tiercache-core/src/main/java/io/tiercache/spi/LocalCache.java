@@ -10,7 +10,8 @@ import java.time.Duration;
  *
  * <p>Implementations must be thread-safe. TTLs are per entry: each
  * {@link #put} carries the effective TTL computed by the core (base TTL with
- * jitter already applied).
+ * jitter already applied). Entries are opaque {@link StoredEntry} holders —
+ * implementations must store null-markers like any other entry.
  *
  * <p>Note: a two-level cache is eventually consistent by design.
  * Implementations must not claim or attempt to provide strong consistency.
@@ -18,14 +19,14 @@ import java.time.Duration;
 public interface LocalCache<K, V> {
 
     /**
-     * Returns the value for {@code key}, or {@code null} if absent or expired.
+     * Returns the entry for {@code key}, or {@code null} if absent or expired.
      */
-    V get(K key);
+    StoredEntry<V> get(K key);
 
     /**
-     * Stores {@code value} under {@code key} with the given effective TTL.
+     * Stores {@code entry} under {@code key} with the given effective TTL.
      */
-    void put(K key, V value, Duration ttl);
+    void put(K key, StoredEntry<V> entry, Duration ttl);
 
     /**
      * Removes {@code key} if present.

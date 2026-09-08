@@ -71,7 +71,7 @@ class MultiInstanceStampedeTest {
             transports.add(l2);
             caches.add(TierCacheFactory.builder()
                     .defaults(new CacheSettings(10_000, Duration.ofMinutes(1), null,
-                            Duration.ofHours(1), 0.0))
+                            Duration.ofHours(1), 0.0, io.tiercache.NullPolicy.deny()))
                     .remoteCache(l2)
                     .build()
                     .getCache("stampede-multi"));

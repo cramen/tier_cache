@@ -28,6 +28,11 @@ public final class CacheConfigValidator {
             requireNotExceeding(cacheName, "l1ExpireAfterAccess",
                     settings.l1ExpireAfterAccess(), settings);
         }
+        if (settings.nullPolicy().markerTtl() != null) {
+            // F-25: the null-marker obeys the same ordering invariant (F-05).
+            requireNotExceeding(cacheName, "nullPolicy.markerTtl",
+                    settings.nullPolicy().markerTtl(), settings);
+        }
     }
 
     private static void requireNotExceeding(String cacheName, String setting,

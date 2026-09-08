@@ -1,6 +1,7 @@
 package io.tiercache.testkit;
 
 import io.tiercache.spi.RemoteCache;
+import io.tiercache.spi.StoredEntry;
 
 import java.time.Duration;
 import java.util.Map;
@@ -16,7 +17,7 @@ public final class InMemoryRemoteCache<K, V> implements RemoteCache<K, V> {
     private final Map<K, Entry<V>> store = new ConcurrentHashMap<>();
 
     @Override
-    public V get(K key) {
+    public StoredEntry<V> get(K key) {
         Entry<V> entry = store.get(key);
         if (entry == null) {
             return null;
@@ -29,7 +30,7 @@ public final class InMemoryRemoteCache<K, V> implements RemoteCache<K, V> {
     }
 
     @Override
-    public void put(K key, V value, Duration ttl) {
+    public void put(K key, StoredEntry<V> value, Duration ttl) {
         store.put(key, new Entry<>(value, System.nanoTime() + ttl.toNanos()));
     }
 
@@ -41,7 +42,7 @@ public final class InMemoryRemoteCache<K, V> implements RemoteCache<K, V> {
     @Override
     public boolean setIfAbsent(K key, V value, Duration ttl) {
         long now = System.nanoTime();
-        Entry<V> candidate = new Entry<>(value, now + ttl.toNanos());
+        Entry<V> candidate = new Entry<>(StoredEntry.ofValue(value), now + ttl.toNanos());
         Entry<V> result = store.merge(key, candidate,
                 (existing, candidateEntry) -> now >= existing.expiresAtNanos ? candidateEntry : existing);
         return result == candidate;
@@ -51,6 +52,6 @@ public final class InMemoryRemoteCache<K, V> implements RemoteCache<K, V> {
         return store.size();
     }
 
-    private record Entry<V>(V value, long expiresAtNanos) {
+    private record Entry<V>(StoredEntry<V> value, long expiresAtNanos) {
     }
 }

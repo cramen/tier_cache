@@ -16,49 +16,49 @@ class CacheSettingsTest {
     @Test
     void rejectsNonPositiveL1MaxSize() {
         assertThrows(IllegalArgumentException.class, () ->
-                new CacheSettings(0, Duration.ofMinutes(1), null, Duration.ofHours(1), 0.0));
+                new CacheSettings(0, Duration.ofMinutes(1), null, Duration.ofHours(1), 0.0, NullPolicy.deny()));
     }
 
     @Test
     void rejectsNonPositiveL1ExpireAfterWrite() {
         assertThrows(IllegalArgumentException.class, () ->
-                new CacheSettings(10, Duration.ZERO, null, Duration.ofHours(1), 0.0));
+                new CacheSettings(10, Duration.ZERO, null, Duration.ofHours(1), 0.0, NullPolicy.deny()));
         assertThrows(IllegalArgumentException.class, () ->
-                new CacheSettings(10, Duration.ofMinutes(-1), null, Duration.ofHours(1), 0.0));
+                new CacheSettings(10, Duration.ofMinutes(-1), null, Duration.ofHours(1), 0.0, NullPolicy.deny()));
     }
 
     @Test
     void rejectsNonPositiveL2Ttl() {
         assertThrows(IllegalArgumentException.class, () ->
-                new CacheSettings(10, Duration.ofMinutes(1), null, Duration.ZERO, 0.0));
+                new CacheSettings(10, Duration.ofMinutes(1), null, Duration.ZERO, 0.0, NullPolicy.deny()));
     }
 
     @Test
     void rejectsNonPositiveExpireAfterAccess() {
         assertThrows(IllegalArgumentException.class, () ->
-                new CacheSettings(10, Duration.ofMinutes(1), Duration.ZERO, Duration.ofHours(1), 0.0));
+                new CacheSettings(10, Duration.ofMinutes(1), Duration.ZERO, Duration.ofHours(1), 0.0, NullPolicy.deny()));
     }
 
     @Test
     void rejectsJitterAmplitudeOutOfRange() {
         assertThrows(IllegalArgumentException.class, () ->
-                new CacheSettings(10, Duration.ofMinutes(1), null, Duration.ofHours(1), -0.1));
+                new CacheSettings(10, Duration.ofMinutes(1), null, Duration.ofHours(1), -0.1, NullPolicy.deny()));
         assertThrows(IllegalArgumentException.class, () ->
-                new CacheSettings(10, Duration.ofMinutes(1), null, Duration.ofHours(1), 1.0));
+                new CacheSettings(10, Duration.ofMinutes(1), null, Duration.ofHours(1), 1.0, NullPolicy.deny()));
     }
 
     @Test
     void acceptsBoundaryJitterAmplitude() {
-        CacheSettings s = new CacheSettings(10, Duration.ofMinutes(1), null, Duration.ofHours(1), 0.0);
+        CacheSettings s = new CacheSettings(10, Duration.ofMinutes(1), null, Duration.ofHours(1), 0.0, NullPolicy.deny());
         assertEquals(0.0, s.jitterAmplitude());
     }
 
     @Test
     void rejectsNullMandatoryDurations() {
         assertThrows(NullPointerException.class, () ->
-                new CacheSettings(10, null, null, Duration.ofHours(1), 0.0));
+                new CacheSettings(10, null, null, Duration.ofHours(1), 0.0, NullPolicy.deny()));
         assertThrows(NullPointerException.class, () ->
-                new CacheSettings(10, Duration.ofMinutes(1), null, null, 0.0));
+                new CacheSettings(10, Duration.ofMinutes(1), null, null, 0.0, NullPolicy.deny()));
     }
 
     @Test

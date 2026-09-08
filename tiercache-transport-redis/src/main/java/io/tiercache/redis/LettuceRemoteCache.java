@@ -9,6 +9,7 @@ import io.lettuce.core.TimeoutOptions;
 import io.lettuce.core.api.StatefulRedisConnection;
 import io.lettuce.core.api.sync.RedisCommands;
 import io.tiercache.spi.RemoteCache;
+import io.tiercache.spi.StoredEntry;
 
 import java.time.Duration;
 import java.util.Objects;
@@ -41,6 +42,11 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, AutoCl
     private final CacheSerializer<K> keySerializer;
     private final CacheSerializer<V> valueSerializer;
 
+    // Payload framing: every stored value is prefixed with a tag byte, so a
+    // null-marker (F-25) can never collide with serializer output.
+    private static final byte TAG_NULL_MARKER = 0x00;
+    private static final byte TAG_VALUE = 0x01;
+
     private LettuceRemoteCache(Builder<K, V> builder) {
         this.ownsClient = builder.sharedClient == null;
         this.client = ownsClient ? RedisClient.create(builder.redisUri) : builder.sharedClient;
@@ -65,14 +71,21 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, AutoCl
     }
 
     @Override
-    public V get(K key) {
+    public StoredEntry<V> get(K key) {
         byte[] bytes = commands.get(namespaced(key));
-        return bytes != null ? valueSerializer.fromBytes(bytes) : null;
+        if (bytes == null || bytes.length == 0) {
+            return null;
+        }
+        if (bytes[0] == TAG_NULL_MARKER) {
+            return StoredEntry.nullMarker();
+        }
+        return StoredEntry.ofValue(valueSerializer.fromBytes(
+                java.util.Arrays.copyOfRange(bytes, 1, bytes.length)));
     }
 
     @Override
-    public void put(K key, V value, Duration ttl) {
-        commands.set(namespaced(key), valueSerializer.toBytes(value), SetArgs.Builder.px(ttl));
+    public void put(K key, StoredEntry<V> entry, Duration ttl) {
+        commands.set(namespaced(key), encode(entry), SetArgs.Builder.px(ttl));
     }
 
     @Override
@@ -82,9 +95,20 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, AutoCl
 
     @Override
     public boolean setIfAbsent(K key, V value, Duration ttl) {
-        String result = commands.set(namespaced(key), valueSerializer.toBytes(value),
+        String result = commands.set(namespaced(key), encode(StoredEntry.ofValue(value)),
                 SetArgs.Builder.px(ttl).nx());
         return "OK".equals(result);
+    }
+
+    private byte[] encode(StoredEntry<V> entry) {
+        if (entry.isNullMarker()) {
+            return new byte[]{TAG_NULL_MARKER};
+        }
+        byte[] payload = valueSerializer.toBytes(entry.value());
+        byte[] out = new byte[payload.length + 1];
+        out[0] = TAG_VALUE;
+        System.arraycopy(payload, 0, out, 1, payload.length);
+        return out;
     }
 
     private byte[] namespaced(K key) {
