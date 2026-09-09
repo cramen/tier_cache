@@ -3,6 +3,7 @@ package io.tiercache.invalidation;
 import io.tiercache.InvalidationMessage;
 import io.tiercache.spi.CacheMetricsListener;
 import io.tiercache.spi.InvalidationHandler;
+import io.tiercache.spi.InvalidationEventListener;
 import io.tiercache.spi.InvalidationJournal;
 import io.tiercache.spi.InvalidationListener;
 import io.tiercache.spi.InvalidationTarget;
@@ -41,6 +42,7 @@ public final class InvalidationService implements InvalidationHandler {
     private final Map<String, AutoCloseable> subscriptions = new ConcurrentHashMap<>();
     private final Map<String, String> cursors = new ConcurrentHashMap<>();
     private final CacheMetricsListener metrics;
+    private volatile InvalidationEventListener eventListener = InvalidationEventListener.NOOP;
 
     public InvalidationService(InvalidationTransport transport, InvalidationJournal journal,
             UUID originInstanceId, InvalidationListener listener) {
@@ -102,9 +104,15 @@ public final class InvalidationService implements InvalidationHandler {
                         message.version());
                 case EVICT_ALL -> target.evictAllL1();
             }
+            eventListener.onEvent(message.cache(), message);
         } finally {
             metrics.onInvalidationEnd(message.cache(), span);
         }
+    }
+
+    @Override
+    public void setEventListener(InvalidationEventListener listener) {
+        this.eventListener = listener != null ? listener : InvalidationEventListener.NOOP;
     }
 
     @Override

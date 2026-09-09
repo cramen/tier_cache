@@ -20,7 +20,7 @@ Everything in this repository is **English only**: code, comments, commit messag
 
 ## Repository state
 
-Gradle (Kotlin DSL) multi-module build, Java 17 toolchain. Modules present: `tiercache-core` (cascade read path, singleflight, cluster-wide rebuild coordination, null caching, config validation, shaded Caffeine L1, L1/L2/lock SPI), `tiercache-transport-redis` (Lettuce-backed L2 + lock provider, Redis 6.2+/Valkey contract-tested), `tiercache-spring-boot-starter` (Spring Boot 3.5.x auto-config, Cache SPI adapters, Spring Cache migration gate), `tiercache-tck` (chaos harness: stampede full form, avalanche, penetration), `examples/demo-spring` (quick-start demo). Invalidation, Kotlin, and observability modules are not yet created — follow the roadmap below.
+Gradle (Kotlin DSL) multi-module build, Java 17 toolchain. Modules present: `tiercache-core` (cascade read path, singleflight, cluster-wide rebuild coordination, null caching, config validation, stale-while-revalidate/XFetch, shaded Caffeine L1, L1/L2/lock SPI), `tiercache-invalidation` (invalidation protocol: versioned messages, journal, replay, last-write-wins), `tiercache-transport-redis` (Lettuce-backed L2 + lock provider, Pub/Sub and Streams invalidation profiles, Redis 6.2+/Valkey contract-tested), `tiercache-spring-boot-starter` (Spring Boot 3.5.x auto-config, Cache SPI adapters, Spring Cache migration gate), `tiercache-micrometer` (Micrometer metrics + OTel tracing, JMX inspection), `tiercache-kotlin` (Kotlin coroutines API: `KTierCache` suspend facade, invalidation `Flow`, `tierCache { }` config DSL), `tiercache-tck` (chaos harness: stampede full form, avalanche, penetration, degradation, reconnect storm), `examples/demo-spring` (quick-start demo).
 
 ## Build & test commands
 
@@ -29,6 +29,7 @@ Gradle (Kotlin DSL) multi-module build, Java 17 toolchain. Modules present: `tie
 - `./gradlew :tiercache-tck:test` — TCK chaos tests (Testcontainers: stampede single- and multi-instance over real Redis).
 - `./gradlew :tiercache-transport-redis:test` — transport contract suite against Redis 6.2 and Valkey containers (needs Docker).
 - `./gradlew :tiercache-spring-boot-starter:test` — Spring adapter, auto-config, and Spring Cache migration tests (no Docker needed).
+- `./gradlew :tiercache-kotlin:test` — Kotlin coroutines API tests (no Docker needed).
 - `./gradlew :examples:demo-spring:test` — demo smoke test (Docker; not part of `check`).
 - `./gradlew :tiercache-core:shadowJar` — shaded artifact: Caffeine relocated under `io.tiercache.internal.caffeine`; the shaded jar is the main artifact, the plain jar keeps the `unshaded` classifier.
 - `./gradlew :tiercache-core:dependencyAudit` — asserts the runtime classpath exposes only SLF4J API.

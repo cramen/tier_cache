@@ -10,6 +10,7 @@ import io.tiercache.spi.DistributedLockProvider;
 import io.tiercache.spi.CacheMetricsListener;
 import io.tiercache.spi.DegradationListener;
 import io.tiercache.spi.InvalidationHandler;
+import io.tiercache.spi.InvalidationEventListener;
 
 import java.util.function.Function;
 import io.tiercache.spi.LocalCache;
@@ -100,6 +101,9 @@ public final class TierCacheFactory implements AutoCloseable {
         this.invalidation = builder.invalidationFactory != null
                 ? builder.invalidationFactory.apply(versionGenerator)
                 : null;
+        if (this.invalidation != null) {
+            this.invalidation.setEventListener(builder.invalidationEventListener);
+        }
         this.metricsListener = builder.metricsListener;
 
         DegradationListener degradationListener = builder.degradationListener;
@@ -208,6 +212,7 @@ public final class TierCacheFactory implements AutoCloseable {
         private boolean coordinationEnabled = true;
         private DistributedLockProvider lockProvider;
         private Function<VersionGenerator, InvalidationHandler> invalidationFactory;
+        private InvalidationEventListener invalidationEventListener = InvalidationEventListener.NOOP;
         private boolean circuitBreakerEnabled = true;
         private CircuitBreaker.Config breakerConfig = CircuitBreaker.Config.defaults();
         private DegradationListener degradationListener = DegradationListener.NOOP;
@@ -263,6 +268,17 @@ public final class TierCacheFactory implements AutoCloseable {
          */
         public Builder invalidation(Function<VersionGenerator, InvalidationHandler> invalidationFactory) {
             this.invalidationFactory = invalidationFactory;
+            return this;
+        }
+
+        /**
+         * Application-facing observer of inbound invalidation events: the
+         * invalidation engine invokes it after each incoming event has been
+         * applied locally, in arrival order per cache. Default: no
+         * observation. See {@link InvalidationEventListener}.
+         */
+        public Builder invalidationEventListener(InvalidationEventListener listener) {
+            this.invalidationEventListener = Objects.requireNonNull(listener, "listener");
             return this;
         }
 

@@ -8,13 +8,16 @@ import io.tiercache.testkit.InMemoryInvalidationTransport;
 import io.tiercache.testkit.InMemoryJournal;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Spec: invalidation — the engine: publish, drop-own, last-write-wins,
@@ -191,5 +194,55 @@ class InvalidationServiceTest {
 
     private static UUID idB() {
         return UUID.randomUUID();
+    }
+
+    @Test
+    void appliedEventsReachEventListenerInOrder() {
+        var hub = new InMemoryInvalidationTransport.Hub();
+        UUID idA = UUID.randomUUID();
+        UUID idB = UUID.randomUUID();
+        InvalidationService a = service(idA, hub, null);
+        InvalidationService b = service(idB, hub, null);
+        FakeTarget targetB = new FakeTarget();
+        targetB.entries.put("k1", new Version(1, idB));
+        targetB.entries.put("k2", new Version(1, idB));
+        b.registerTarget("c", targetB);
+        List<InvalidationMessage> received = new CopyOnWriteArrayList<>();
+        List<Boolean> k1EvictedAtCallback = new CopyOnWriteArrayList<>();
+        b.setEventListener((cache, event) -> {
+            received.add(event);
+            k1EvictedAtCallback.add(!targetB.entries.containsKey("k1"));
+        });
+
+        a.onLocalWrite("c", "k1", new Version(2, idA), InvalidationMessage.Type.INVALIDATE);
+        a.onLocalWrite("c", "k2", new Version(3, idA), InvalidationMessage.Type.INVALIDATE);
+        a.onLocalWrite("c", null, new Version(4, idA), InvalidationMessage.Type.EVICT_ALL);
+
+        assertEquals(List.of(InvalidationMessage.Type.INVALIDATE,
+                        InvalidationMessage.Type.INVALIDATE, InvalidationMessage.Type.EVICT_ALL),
+                received.stream().map(InvalidationMessage::type).toList(),
+                "listener receives applied events in arrival order");
+        assertEquals("k1", received.get(0).key());
+        assertTrue(k1EvictedAtCallback.get(0),
+                "the event must already be applied when the listener runs");
+        a.close();
+        b.close();
+    }
+
+    @Test
+    void ownWritesDoNotNotifyEventListener() {
+        var hub = new InMemoryInvalidationTransport.Hub();
+        UUID idA = UUID.randomUUID();
+        InvalidationService a = service(idA, hub, null);
+        FakeTarget targetA = new FakeTarget();
+        targetA.entries.put("k", new Version(1, idA));
+        a.registerTarget("c", targetA);
+        List<InvalidationMessage> received = new CopyOnWriteArrayList<>();
+        a.setEventListener((cache, event) -> received.add(event));
+
+        a.onLocalWrite("c", "k", new Version(2, idA), InvalidationMessage.Type.INVALIDATE);
+
+        assertTrue(received.isEmpty(), "own writes are not inbound events");
+        a.close();
     }
 }

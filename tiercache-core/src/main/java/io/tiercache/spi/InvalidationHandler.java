@@ -31,6 +31,15 @@ public interface InvalidationHandler extends AutoCloseable {
     void registerTarget(String cache, InvalidationTarget target);
 
     /**
+     * Registers the application-facing observer of inbound events, invoked
+     * after each incoming event has been applied locally. Called once by the
+     * factory right after the handler is created; the default ignores it
+     * (no event observation).
+     */
+    default void setEventListener(InvalidationEventListener listener) {
+    }
+
+    /**
      * Called when L2 recovers after a circuit-breaker episode: the engine
      * replays the missed journal range for all registered caches. L1 is
      * never flushed here (only journal-window overflow flushes).
