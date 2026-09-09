@@ -22,9 +22,12 @@ import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 
 /**
@@ -39,8 +42,22 @@ import java.util.function.Function;
  * attempt a takeover on timeout — they never load uncoordinated unless the
  * overall budget is exhausted (logged safety valve).
  *
+ * <p>Stale-while-revalidate (opt-in via {@code staleTtl}): an L2 entry
+ * carrying a write timestamp is classified by age — fresh below the L2 TTL,
+ * stale inside the window past it, a miss beyond. Stale entries are served
+ * immediately (without warming L1, so an in-flight refresh is never
+ * overwritten by the stale copy) and a single asynchronous revalidation per
+ * key per instance
+ * (claimed on the same in-flight map as singleflight) refreshes them through
+ * the coordinated load path; failures keep serving stale and never reach
+ * readers. XFetch (opt-in via {@code xfetchEnabled}) adds a probabilistic
+ * early refresh on fresh L2 hits, driven by entry age and a per-cache EMA of
+ * loader durations measured internally.
+ *
  * <p>Hot-path discipline: a steady-state L1 hit performs exactly one
  * {@code LocalCache.get} plus one reference check, and allocates nothing.
+ * With stale serving and XFetch off, the L2-hit path pays one extra boolean
+ * check.
  */
 public final class DefaultTierCache<K, V> implements TierCache<K, V>, InvalidationTarget {
 
@@ -55,6 +72,10 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
     /** Polling backoff bounds for the loser wait. */
     static final long POLL_INITIAL_NANOS = Duration.ofMillis(5).toNanos();
     static final long POLL_MAX_NANOS = Duration.ofMillis(50).toNanos();
+    /** Smoothing factor of the per-cache loader-duration EMA. */
+    static final double EMA_ALPHA = 0.125;
+    /** Loader-duration EMA value before the first measured load. */
+    static final long EMA_UNINITIALIZED = -1L;
 
     private final String cacheName;
     private final LocalCache<K, V> l1;
@@ -67,6 +88,16 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
     private final InvalidationHandler invalidation;    // null = single-node
     private final CircuitBreaker breaker;              // null = unguarded L2 (opt-out)
     private final CacheMetricsListener metrics;
+    private final Executor revalidationExecutor;       // null = no async revalidation
+    private final Duration staleTtl;
+    private final boolean staleWindowEnabled;
+    private final boolean xfetchEnabled;
+    private final boolean ageTrackingEnabled;          // stale window or XFetch on
+    private final long l2TtlMillis;
+    private final long staleBoundaryMillis;            // l2TtlMillis + staleTtl
+    private final double xfetchBetaNanos;
+    /** EMA of loader durations in nanoseconds; updated on every load. */
+    private final AtomicLong loaderDurationEmaNanos = new AtomicLong(EMA_UNINITIALIZED);
     private final Map<K, CompletableFuture<StoredEntry<V>>> inflight = new ConcurrentHashMap<>();
 
     /** Legacy constructor: no coordination, no invalidation (used by tests). */
@@ -88,6 +119,20 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
             DistributedLockProvider lockProvider, ScheduledExecutorService watchdog,
             VersionGenerator versionGenerator, InvalidationHandler invalidation,
             CircuitBreaker breaker, CacheMetricsListener metrics) {
+        this(cacheName, l1, l2, settings, singleflightEnabled, lockProvider, watchdog,
+                versionGenerator, invalidation, breaker, metrics, null);
+    }
+
+    /**
+     * Full constructor. {@code revalidationExecutor} runs fire-and-forget
+     * stale revalidations / XFetch refreshes; when {@code null}, stale
+     * entries are still served but never revalidated (legacy wiring).
+     */
+    public DefaultTierCache(String cacheName, LocalCache<K, V> l1, RemoteCache<K, V> l2,
+            CacheSettings settings, boolean singleflightEnabled,
+            DistributedLockProvider lockProvider, ScheduledExecutorService watchdog,
+            VersionGenerator versionGenerator, InvalidationHandler invalidation,
+            CircuitBreaker breaker, CacheMetricsListener metrics, Executor revalidationExecutor) {
         this.cacheName = cacheName;
         this.l1 = l1;
         this.l2 = l2;
@@ -99,6 +144,19 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         this.invalidation = invalidation;
         this.breaker = breaker;
         this.metrics = metrics;
+        this.revalidationExecutor = revalidationExecutor;
+        this.staleTtl = settings.staleTtl();
+        this.staleWindowEnabled = staleTtl.toMillis() > 0;
+        this.xfetchEnabled = settings.xfetchEnabled();
+        this.ageTrackingEnabled = staleWindowEnabled || xfetchEnabled;
+        this.l2TtlMillis = settings.l2Ttl().toMillis();
+        this.staleBoundaryMillis = l2TtlMillis + staleTtl.toMillis();
+        this.xfetchBetaNanos = settings.xfetchBeta().toNanos();
+        if (ageTrackingEnabled && revalidationExecutor == null) {
+            log.warn("Cache '{}' has stale serving or XFetch enabled but no revalidation "
+                    + "executor is wired; stale entries are served but never revalidated.",
+                    cacheName);
+        }
     }
 
     @Override
@@ -110,8 +168,16 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         }
         entry = l2Get(key);
         if (entry != null) {
+            if (ageTrackingEnabled) {
+                entry = classifyByAge(key, entry, null);
+                if (entry == null) {
+                    metrics.onRequest(cacheName, CacheMetricsListener.Outcome.MISS);
+                    return null;
+                }
+            } else {
+                warmL1(key, entry);
+            }
             metrics.onRequest(cacheName, CacheMetricsListener.Outcome.L2_HIT);
-            warmL1(key, entry);
             return entry.isNullMarker() ? null : entry.value();
         }
         metrics.onRequest(cacheName, CacheMetricsListener.Outcome.MISS);
@@ -127,8 +193,16 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         }
         entry = l2Get(key);
         if (entry != null) {
+            if (ageTrackingEnabled) {
+                entry = classifyByAge(key, entry, null);
+                if (entry == null) {
+                    metrics.onRequest(cacheName, CacheMetricsListener.Outcome.MISS);
+                    return LookupResult.miss();
+                }
+            } else {
+                warmL1(key, entry);
+            }
             metrics.onRequest(cacheName, CacheMetricsListener.Outcome.L2_HIT);
-            warmL1(key, entry);
             return toResult(entry);
         }
         metrics.onRequest(cacheName, CacheMetricsListener.Outcome.MISS);
@@ -144,9 +218,15 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         }
         entry = l2Get(key);
         if (entry != null) {
-            metrics.onRequest(cacheName, CacheMetricsListener.Outcome.L2_HIT);
-            warmL1(key, entry);
-            return entry.isNullMarker() ? null : entry.value();
+            if (ageTrackingEnabled) {
+                entry = classifyByAge(key, entry, loader);
+            } else {
+                warmL1(key, entry);
+            }
+            if (entry != null) {
+                metrics.onRequest(cacheName, CacheMetricsListener.Outcome.L2_HIT);
+                return entry.isNullMarker() ? null : entry.value();
+            }
         }
         if (!singleflightEnabled) {
             StoredEntry<V> result = loadPath(key, loader);
@@ -357,6 +437,154 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         }
     }
 
+    // --- Stale serving / XFetch: age classification + async revalidation ---
+
+    /**
+     * Classifies an L2 hit by write age and warms L1 for entries that keep
+     * being served as fresh. Returns the entry to serve, or {@code null} when
+     * it is past its stale window and must be treated as a miss. Stale hits
+     * deliberately do NOT warm L1: the in-flight revalidation publishes the
+     * fresh value through the normal write path, and warming here could
+     * overwrite it with the stale copy. Side effects: stale-hit metric +
+     * revalidation trigger on stale hits, XFetch draw on fresh hits. A
+     * {@code null} loader (plain {@code get}/{@code lookup}) serves stale but
+     * cannot revalidate.
+     */
+    private StoredEntry<V> classifyByAge(K key, StoredEntry<V> entry,
+            Function<? super K, ? extends V> loader) {
+        if (!entry.hasWriteTimestamp()) {
+            warmL1(key, entry);
+            return entry; // legacy frame: behaves exactly as before
+        }
+        long writeTimestamp = entry.writeTimestampMillis();
+        long ageMillis = System.currentTimeMillis() - writeTimestamp;
+        if (ageMillis < l2TtlMillis) {
+            warmL1(key, entry);
+            if (xfetchEnabled && loader != null) {
+                xfetchGate(key, loader, writeTimestamp, ageMillis);
+            }
+            return entry;
+        }
+        if (ageMillis < staleBoundaryMillis) {
+            metrics.onStaleHit(cacheName);
+            if (loader != null) {
+                triggerRevalidation(key, loader, writeTimestamp);
+            }
+            return entry;
+        }
+        return null; // past the stale window (or window disabled): hard miss
+    }
+
+    /**
+     * XFetch early-refresh draw on a fresh L2 hit:
+     * {@code p = 1 - exp(-ageFraction * delta / beta)} with the current
+     * loader-duration EMA as {@code delta}. Uninitialized EMA means
+     * probability zero; a lost draw proceeds as a plain hit.
+     */
+    private void xfetchGate(K key, Function<? super K, ? extends V> loader,
+            long writeTimestamp, long ageMillis) {
+        long delta = loaderDurationEmaNanos.get();
+        if (delta <= 0) {
+            return; // no measured load yet (or zero-cost loader): probability 0
+        }
+        double ageFraction = (double) ageMillis / l2TtlMillis;
+        double p = 1.0 - Math.exp(-ageFraction * delta / xfetchBetaNanos);
+        if (p > 0.0 && ThreadLocalRandom.current().nextDouble() < p) {
+            triggerRevalidation(key, loader, writeTimestamp);
+        }
+    }
+
+    /**
+     * Claims the in-flight slot for {@code key} and submits a fire-and-forget
+     * revalidation. A lost claim race (a load or revalidation already in
+     * flight) is a no-op. Never blocks the caller beyond the atomic claim and
+     * the submit.
+     */
+    private void triggerRevalidation(K key, Function<? super K, ? extends V> loader,
+            long servedWriteTimestamp) {
+        if (revalidationExecutor == null) {
+            return; // legacy wiring: stale keeps serving without revalidation
+        }
+        CompletableFuture<StoredEntry<V>> claim = new CompletableFuture<>();
+        if (inflight.putIfAbsent(key, claim) != null) {
+            return; // a load or revalidation for this key is already in flight
+        }
+        metrics.onRevalidationTriggered(cacheName);
+        try {
+            revalidationExecutor.execute(
+                    () -> runRevalidation(key, loader, servedWriteTimestamp, claim));
+        } catch (RuntimeException e) {
+            // Executor rejected (shut down): drop the claim so a later read retries.
+            inflight.remove(key, claim);
+            metrics.onRevalidationFailed(cacheName);
+            log.warn("Revalidation for key '{}' in cache '{}' could not be submitted.",
+                    key, cacheName, e);
+        }
+    }
+
+    private void runRevalidation(K key, Function<? super K, ? extends V> loader,
+            long servedWriteTimestamp, CompletableFuture<StoredEntry<V>> claim) {
+        try {
+            StoredEntry<V> refreshed = revalidate(key, loader, servedWriteTimestamp);
+            claim.complete(refreshed);
+            metrics.onRevalidationCompleted(cacheName);
+        } catch (RuntimeException e) {
+            claim.completeExceptionally(e);
+            metrics.onRevalidationFailed(cacheName);
+            log.warn("Revalidation failed for key '{}' in cache '{}'; the stale entry "
+                    + "keeps serving until its window ends.", key, cacheName, e);
+        } finally {
+            inflight.remove(key, claim);
+        }
+    }
+
+    /**
+     * The revalidation load: the same coordinated path as a miss (distributed
+     * lock attempt, watchdog lease), with a write-time double-check instead of
+     * a presence double-check — only a write <b>newer</b> than the one that was
+     * served suppresses the reload. A lost lock race is not a failure: another
+     * instance is refreshing, and the stale entry keeps serving.
+     */
+    private StoredEntry<V> revalidate(K key, Function<? super K, ? extends V> loader,
+            long servedWriteTimestamp) {
+        if (lockProvider == null || watchdog == null || !l2Available()) {
+            // No coordination possible: the in-flight claim already bounds
+            // this to one load per key per instance.
+            return loadAndStore(key, loader);
+        }
+        DistributedLock lock = tryLockGuarded(cacheName + ":" + key);
+        if (lock == null) {
+            return null; // another instance holds the rebuild lock
+        }
+        try {
+            StoredEntry<V> current = l2Get(key);
+            if (current != null && current.hasWriteTimestamp()
+                    && current.writeTimestampMillis() > servedWriteTimestamp) {
+                // A newer write landed while we claimed the lock: converge, no load.
+                warmL1(key, current);
+                return current;
+            }
+            return loadWithWatchdog(key, loader, lock);
+        } finally {
+            lock.release();
+        }
+    }
+
+    private void recordLoaderDuration(long nanos) {
+        loaderDurationEmaNanos.updateAndGet(previous -> previous < 0
+                ? nanos
+                : previous + (long) (EMA_ALPHA * (nanos - previous)));
+    }
+
+    /**
+     * Current EMA of loader durations in nanoseconds, or {@code -1} before
+     * the first measured load. Diagnostics/testing; independent of any
+     * metrics binding.
+     */
+    public long loaderDurationEmaNanos() {
+        return loaderDurationEmaNanos.get();
+    }
+
     // --- Load path selection: coordinated when possible ---
 
     private StoredEntry<V> loadPath(K key, Function<? super K, ? extends V> loader) {
@@ -470,7 +698,13 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
      *         {@code allow}), or {@code null} if nothing was stored
      */
     private StoredEntry<V> loadAndStore(K key, Function<? super K, ? extends V> loader) {
-        V loaded = loader.apply(key);
+        long loadStart = System.nanoTime();
+        V loaded;
+        try {
+            loaded = loader.apply(key);
+        } finally {
+            recordLoaderDuration(System.nanoTime() - loadStart);
+        }
         if (loaded == null) {
             Duration markerTtl = settings.nullPolicy().markerTtl();
             if (markerTtl == null) {
@@ -558,6 +792,12 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
             return null;
         }
         try {
+            if (staleWindowEnabled) {
+                // Refreshed entries keep their stale window (extended frame,
+                // physical expiry ttl + staleTtl).
+                return conditional ? l2.putIfNewer(key, entry, ttl, staleTtl)
+                        : putPlainWithStaleWindow(key, entry, ttl);
+            }
             return conditional ? l2.putIfNewer(key, entry, ttl) : putPlain(key, entry, ttl);
         } catch (L2UnavailableException e) {
             return null;
@@ -566,6 +806,11 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
 
     private boolean putPlain(K key, StoredEntry<V> entry, Duration ttl) {
         l2.put(key, entry, ttl);
+        return true;
+    }
+
+    private boolean putPlainWithStaleWindow(K key, StoredEntry<V> entry, Duration ttl) {
+        l2.put(key, entry, ttl, staleTtl);
         return true;
     }
 

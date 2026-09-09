@@ -19,9 +19,36 @@ public final class CacheConfigValidator {
      * shortens TTLs, so the effective L1 TTL equals the configured
      * expire-after-write/access values.
      *
-     * @throws CacheConfigurationException if TTL ordering is violated
+     * @throws CacheConfigurationException if TTL ordering or a stale-serving
+     *         invariant is violated
      */
     public static void validate(String cacheName, CacheSettings settings) {
+        // Stale-serving invariants first: the TTL-ordering checks below
+        // dereference l2Ttl and would NPE instead of failing fast if it
+        // were ever absent.
+        if (settings.staleTtl().isNegative()) {
+            throw new CacheConfigurationException(
+                    "Cache '" + cacheName + "' violates stale-serving configuration: staleTtl="
+                            + settings.staleTtl() + " is negative. The stale window must be zero"
+                            + " (disabled) or positive. Set staleTtl >= 0 for cache '" + cacheName + "'.");
+        }
+        if (settings.xfetchEnabled()) {
+            if (settings.xfetchBeta().isZero() || settings.xfetchBeta().isNegative()) {
+                throw new CacheConfigurationException(
+                        "Cache '" + cacheName + "' violates stale-serving configuration: xfetchBeta="
+                                + settings.xfetchBeta() + " must be positive when XFetch is enabled."
+                                + " Set xfetchBeta > 0 for cache '" + cacheName + "'.");
+            }
+            if (settings.l2Ttl() == null) {
+                // Unreachable through the public config model today (l2Ttl is
+                // mandatory in CacheSettings); kept so framework adapters that
+                // relax that invariant still fail fast here.
+                throw new CacheConfigurationException(
+                        "Cache '" + cacheName + "' violates stale-serving configuration: XFetch"
+                                + " measures entry age against the L2 TTL, but no l2Ttl is configured."
+                                + " Set l2Ttl for cache '" + cacheName + "'.");
+            }
+        }
         requireNotExceeding(cacheName, "l1ExpireAfterWrite",
                 settings.l1ExpireAfterWrite(), settings);
         if (settings.l1ExpireAfterAccess() != null) {

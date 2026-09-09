@@ -91,4 +91,62 @@ class CacheConfigurationTest {
     void missingRemoteCacheIsRejected() {
         assertThrows(NullPointerException.class, () -> TierCacheFactory.builder().build());
     }
+
+    @Test
+    void negativeStaleWindowAbortsInitialization() {
+        CacheConfigurationException e = assertThrows(CacheConfigurationException.class, () ->
+                TierCacheFactory.builder()
+                        .remoteCache(new InMemoryRemoteCache<>())
+                        .cache("stale-bad", new CacheOverride()
+                                .staleTtl(Duration.ofSeconds(-1)))
+                        .build());
+        // Error names the cache, the setting, and the concrete value.
+        assertTrue(e.getMessage().contains("stale-bad"), () -> e.getMessage());
+        assertTrue(e.getMessage().contains("staleTtl"), () -> e.getMessage());
+        assertTrue(e.getMessage().contains("PT-1S"), () -> e.getMessage());
+    }
+
+    @Test
+    void nonPositiveXfetchBetaAbortsInitialization() {
+        CacheConfigurationException zero = assertThrows(CacheConfigurationException.class, () ->
+                TierCacheFactory.builder()
+                        .remoteCache(new InMemoryRemoteCache<>())
+                        .cache("xfetch-zero-beta", new CacheOverride()
+                                .xfetchEnabled(true)
+                                .xfetchBeta(Duration.ZERO))
+                        .build());
+        assertTrue(zero.getMessage().contains("xfetch-zero-beta"), () -> zero.getMessage());
+        assertTrue(zero.getMessage().contains("xfetchBeta"), () -> zero.getMessage());
+        assertTrue(zero.getMessage().contains("PT0S"), () -> zero.getMessage());
+
+        assertThrows(CacheConfigurationException.class, () ->
+                TierCacheFactory.builder()
+                        .remoteCache(new InMemoryRemoteCache<>())
+                        .cache("xfetch-negative-beta", new CacheOverride()
+                                .xfetchEnabled(true)
+                                .xfetchBeta(Duration.ofMillis(-5)))
+                        .build());
+    }
+
+    @Test
+    void negativeStaleWindowInGlobalDefaultsAbortsInitialization() {
+        assertThrows(CacheConfigurationException.class, () ->
+                TierCacheFactory.builder()
+                        .defaults(new CacheSettings(1000, Duration.ofMinutes(5), null,
+                                Duration.ofHours(1), 0.10, NullPolicy.deny(), InvalidationMode.INVALIDATE,
+                                64 * 1024, Duration.ofSeconds(-1), false, Duration.ofSeconds(1)))
+                        .remoteCache(new InMemoryRemoteCache<>())
+                        .build());
+    }
+
+    @Test
+    void validStaleServingConfigurationInitializes() {
+        assertDoesNotThrow(() -> TierCacheFactory.builder()
+                .remoteCache(new InMemoryRemoteCache<>())
+                .cache("stale-ok", new CacheOverride()
+                        .staleTtl(Duration.ofSeconds(30))
+                        .xfetchEnabled(true)
+                        .xfetchBeta(Duration.ofSeconds(2)))
+                .build());
+    }
 }

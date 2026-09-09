@@ -22,7 +22,11 @@ import java.util.concurrent.TimeUnit;
  * {@code tiercache.latency{cache,level}},
  * {@code tiercache.invalidation{cache,direction}}, {@code tiercache.degraded},
  * {@code tiercache.breaker.state}, {@code tiercache.journal.size},
- * {@code tiercache.entry.age.max}, {@code tiercache.null.entries}.
+ * {@code tiercache.entry.age.max}, {@code tiercache.null.entries},
+ * {@code tiercache.l2.stale.hits{cache}},
+ * {@code tiercache.l2.revalidation.triggers{cache}},
+ * {@code tiercache.l2.revalidation.completions{cache}},
+ * {@code tiercache.l2.revalidation.failures{cache}}.
  *
  * <p>Entry age is approximate: tracked from store events, not per-entry
  * metadata.
@@ -35,6 +39,10 @@ public final class MicrometerCacheMetrics
     private final Map<String, Timer> latencyTimers = new ConcurrentHashMap<>();
     private final Map<String, Counter> invalidationCounters = new ConcurrentHashMap<>();
     private final Map<String, Counter> nullEntries = new ConcurrentHashMap<>();
+    private final Map<String, Counter> staleHits = new ConcurrentHashMap<>();
+    private final Map<String, Counter> revalidationTriggers = new ConcurrentHashMap<>();
+    private final Map<String, Counter> revalidationCompletions = new ConcurrentHashMap<>();
+    private final Map<String, Counter> revalidationFailures = new ConcurrentHashMap<>();
     private final Map<String, Long> lastStoreNanos = new ConcurrentHashMap<>();
 
     public MicrometerCacheMetrics(MeterRegistry registry) {
@@ -68,10 +76,33 @@ public final class MicrometerCacheMetrics
 
     @Override
     public void onNullEntry(String cache) {
-        nullEntries.computeIfAbsent(cache, c -> Counter.builder("tiercache.null.entries")
-                        .tags("cache", c)
-                        .register(registry))
-                .increment();
+        counter(nullEntries, cache, "tiercache.null.entries").increment();
+    }
+
+    @Override
+    public void onStaleHit(String cache) {
+        counter(staleHits, cache, "tiercache.l2.stale.hits").increment();
+    }
+
+    @Override
+    public void onRevalidationTriggered(String cache) {
+        counter(revalidationTriggers, cache, "tiercache.l2.revalidation.triggers").increment();
+    }
+
+    @Override
+    public void onRevalidationCompleted(String cache) {
+        counter(revalidationCompletions, cache, "tiercache.l2.revalidation.completions").increment();
+    }
+
+    @Override
+    public void onRevalidationFailed(String cache) {
+        counter(revalidationFailures, cache, "tiercache.l2.revalidation.failures").increment();
+    }
+
+    private Counter counter(Map<String, Counter> map, String cache, String name) {
+        return map.computeIfAbsent(cache, c -> Counter.builder(name)
+                .tags("cache", c)
+                .register(registry));
     }
 
     private Counter counter(Map<String, Counter> map, String cache, String name,

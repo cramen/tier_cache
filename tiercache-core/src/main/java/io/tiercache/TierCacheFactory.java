@@ -56,6 +56,7 @@ public final class TierCacheFactory implements AutoCloseable {
     private final InvalidationHandler invalidation; // null = single-node
     private final CircuitBreaker breaker;           // null = unguarded L2 (opt-out)
     private final CacheMetricsListener metricsListener;
+    private final java.util.concurrent.ExecutorService revalidationExecutor;
     private final Map<String, TierCache<?, ?>> liveCaches = new java.util.concurrent.ConcurrentHashMap<>();
 
     private TierCacheFactory(Builder builder) {
@@ -88,8 +89,12 @@ public final class TierCacheFactory implements AutoCloseable {
         }
 
         this.watchdog = coordinationEnabled && provider != null
-                ? Executors.newSingleThreadScheduledExecutor(new DaemonThreadFactory())
+                ? Executors.newSingleThreadScheduledExecutor(new DaemonThreadFactory("tiercache-watchdog"))
                 : null;
+        // Fire-and-forget revalidations (stale-while-revalidate / XFetch);
+        // threads appear only when a cache enables the feature.
+        this.revalidationExecutor =
+                Executors.newCachedThreadPool(new DaemonThreadFactory("tiercache-revalidation"));
 
         this.versionGenerator = new VersionGenerator();
         this.invalidation = builder.invalidationFactory != null
@@ -149,7 +154,7 @@ public final class TierCacheFactory implements AutoCloseable {
             DefaultTierCache<K, V> cache = new DefaultTierCache<>(n, l1,
                     (RemoteCache<K, V>) remoteCache, settings, singleflightEnabled,
                     coordinationEnabled ? lockProvider : null, watchdog, versionGenerator, invalidation,
-                    breaker, metricsListener);
+                    breaker, metricsListener, revalidationExecutor);
             if (invalidation != null) {
                 invalidation.registerTarget(n, cache);
             }
@@ -168,6 +173,7 @@ public final class TierCacheFactory implements AutoCloseable {
 
     @Override
     public void close() {
+        revalidationExecutor.shutdownNow();
         if (watchdog != null) {
             watchdog.shutdownNow();
         }
@@ -177,9 +183,15 @@ public final class TierCacheFactory implements AutoCloseable {
     }
 
     private static final class DaemonThreadFactory implements ThreadFactory {
+        private final String name;
+
+        DaemonThreadFactory(String name) {
+            this.name = name;
+        }
+
         @Override
         public Thread newThread(Runnable r) {
-            Thread t = new Thread(r, "tiercache-watchdog");
+            Thread t = new Thread(r, name);
             t.setDaemon(true);
             return t;
         }

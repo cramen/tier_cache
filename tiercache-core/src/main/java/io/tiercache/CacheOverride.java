@@ -18,6 +18,9 @@ public final class CacheOverride {
     private NullPolicy nullPolicy;
     private InvalidationMode invalidationMode;
     private Long payloadCapBytes;
+    private Duration staleTtl;
+    private Boolean xfetchEnabled;
+    private Duration xfetchBeta;
 
     public CacheOverride l1MaxSize(long l1MaxSize) {
         this.l1MaxSize = l1MaxSize;
@@ -59,6 +62,21 @@ public final class CacheOverride {
         return this;
     }
 
+    public CacheOverride staleTtl(Duration staleTtl) {
+        this.staleTtl = staleTtl;
+        return this;
+    }
+
+    public CacheOverride xfetchEnabled(boolean xfetchEnabled) {
+        this.xfetchEnabled = xfetchEnabled;
+        return this;
+    }
+
+    public CacheOverride xfetchBeta(Duration xfetchBeta) {
+        this.xfetchBeta = xfetchBeta;
+        return this;
+    }
+
     /**
      * Resolves this override against the given global defaults.
      */
@@ -71,6 +89,9 @@ public final class CacheOverride {
                 jitterAmplitude != null ? jitterAmplitude : defaults.jitterAmplitude(),
                 nullPolicy != null ? nullPolicy : defaults.nullPolicy(),
                 invalidationMode != null ? invalidationMode : defaults.invalidationMode(),
-                payloadCapBytes != null ? payloadCapBytes : defaults.payloadCapBytes());
+                payloadCapBytes != null ? payloadCapBytes : defaults.payloadCapBytes(),
+                staleTtl != null ? staleTtl : defaults.staleTtl(),
+                xfetchEnabled != null ? xfetchEnabled : defaults.xfetchEnabled(),
+                xfetchBeta != null ? xfetchBeta : defaults.xfetchBeta());
     }
 }

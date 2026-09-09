@@ -15,10 +15,8 @@ import io.tiercache.spi.LockProviderSource;
 import io.tiercache.spi.RemoteCache;
 import io.tiercache.spi.StoredEntry;
 
-import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.Arrays;
 import java.util.Objects;
 
 /**
@@ -30,6 +28,9 @@ import java.util.Objects;
  * <ul>
  *   <li>entries carry the write version in the payload framing
  *       ({@code [tag][4B len][version string][payload]});</li>
+ *   <li>stale-window writes use an extended frame (new tag, 8-byte
+ *       big-endian write timestamp after the version) and a physical expiry
+ *       of {@code ttl + staleTtl}, so one GET yields payload and age;</li>
  *   <li>writes are version-conditional in Lua: an older write never
  *       overwrites a newer entry, and data write + journal row commit
  *       atomically;</li>
@@ -68,12 +69,6 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
     private io.tiercache.InvalidationMode invalidationMode = io.tiercache.InvalidationMode.INVALIDATE;
     private long payloadCapBytes = 64 * 1024;
 
-    private static final byte TAG_NULL_MARKER = 0x00;
-    private static final byte TAG_VALUE = 0x01;
-    private static final byte TAG_NULL_MARKER_V2 = 0x02;
-    private static final byte TAG_VALUE_V2 = 0x03;
-    private static final byte TAG_TOMBSTONE = 0x04;
-
     private LettuceRemoteCache(Builder<K, V> builder) {
         this.ownsClient = builder.sharedClient == null;
         this.client = ownsClient ? RedisClient.create(builder.redisUri) : builder.sharedClient;
@@ -107,35 +102,41 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
         if (bytes == null || bytes.length == 0) {
             return null;
         }
-        byte tag = bytes[0];
-        if (tag == TAG_NULL_MARKER) {
-            return StoredEntry.nullMarker();
-        }
-        if (tag == TAG_VALUE) {
-            return StoredEntry.ofValue(valueSerializer.fromBytes(
-                    Arrays.copyOfRange(bytes, 1, bytes.length)));
-        }
-        if (tag == TAG_TOMBSTONE) {
-            return null; // tombstones read as absent
-        }
-        int versionLen = ByteBuffer.wrap(bytes, 1, 4).getInt();
-        Version version = Version.fromWire(new String(bytes, 5, versionLen, StandardCharsets.UTF_8));
-        if (tag == TAG_NULL_MARKER_V2) {
-            return StoredEntry.nullMarker(version);
-        }
-        byte[] payload = Arrays.copyOfRange(bytes, 5 + versionLen, bytes.length);
-        return StoredEntry.ofValue(valueSerializer.fromBytes(payload), version);
+        return ValueFrame.decode(bytes, valueSerializer);
     }
 
     @Override
     public void put(K key, StoredEntry<V> entry, Duration ttl) {
+        putInternal(key, entry, ttl, null);
+    }
+
+    /**
+     * Stale-window write: the physical Redis expiry becomes
+     * {@code ttl + staleTtl} and the frame carries the write timestamp
+     * (extended frame), so a single GET yields both payload and age.
+     */
+    @Override
+    public void put(K key, StoredEntry<V> entry, Duration ttl, Duration staleTtl) {
+        putInternal(key, entry, ttl, staleTtl);
+    }
+
+    private void putInternal(K key, StoredEntry<V> entry, Duration ttl, Duration staleTtl) {
         if (journal != null && entry.version() != null) {
             // Versioned entries always go through the conditional Lua write
             // so the journal row and the data write stay atomic.
-            putIfNewer(key, entry, ttl);
+            putIfNewerInternal(key, entry, ttl, staleTtl);
             return;
         }
-        commands.set(namespaced(key), encode(entry), SetArgs.Builder.px(ttl));
+        commands.set(namespaced(key), encode(entry, staleWindowActive(staleTtl)),
+                SetArgs.Builder.px(physicalTtl(ttl, staleTtl)));
+    }
+
+    private static boolean staleWindowActive(Duration staleTtl) {
+        return staleTtl != null && staleTtl.toMillis() > 0;
+    }
+
+    private static Duration physicalTtl(Duration ttl, Duration staleTtl) {
+        return staleWindowActive(staleTtl) ? ttl.plus(staleTtl) : ttl;
     }
 
     /**
@@ -145,15 +146,19 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
      */
     @Override
     public boolean putIfNewer(K key, StoredEntry<V> entry, Duration ttl) {
+        return putIfNewerInternal(key, entry, ttl, null);
+    }
+
+    private boolean putIfNewerInternal(K key, StoredEntry<V> entry, Duration ttl, Duration staleTtl) {
         if (journal == null || entry.version() == null) {
-            put(key, entry, ttl);
+            putInternal(key, entry, ttl, staleTtl);
             return true;
         }
         Long result = commands.eval(Lua.CONDITIONAL_WRITE, io.lettuce.core.ScriptOutputType.INTEGER,
                 new byte[][]{namespaced(key), RedisStreamJournal.streamKeyBytes(cacheName)},
                 entry.version().toWire().getBytes(StandardCharsets.UTF_8),
-                encode(entry),
-                String.valueOf(ttl.toMillis()).getBytes(StandardCharsets.UTF_8),
+                encode(entry, staleWindowActive(staleTtl)),
+                String.valueOf(physicalTtl(ttl, staleTtl).toMillis()).getBytes(StandardCharsets.UTF_8),
                 String.valueOf(journal.capacity()).getBytes(StandardCharsets.UTF_8),
                 new byte[]{(byte) InvalidationMessage.Type.INVALIDATE.ordinal()},
                 keySerializer.toBytes(key),
@@ -217,12 +222,12 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
     @Override
     public boolean setIfAbsent(K key, StoredEntry<V> entry, Duration ttl) {
         if (journal == null || entry.version() == null) {
-            String result = commands.set(namespaced(key), encode(entry), SetArgs.Builder.px(ttl).nx());
+            String result = commands.set(namespaced(key), encode(entry, false), SetArgs.Builder.px(ttl).nx());
             return "OK".equals(result);
         }
         Long result = commands.eval(Lua.SET_IF_ABSENT, io.lettuce.core.ScriptOutputType.INTEGER,
                 new byte[][]{namespaced(key), RedisStreamJournal.streamKeyBytes(cacheName)},
-                encode(entry),
+                encode(entry, false),
                 String.valueOf(ttl.toMillis()).getBytes(StandardCharsets.UTF_8),
                 String.valueOf(journal.capacity()).getBytes(StandardCharsets.UTF_8),
                 new byte[]{(byte) InvalidationMessage.Type.INVALIDATE.ordinal()},
@@ -241,25 +246,8 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
         return bytes.length <= payloadCapBytes ? bytes : new byte[0];
     }
 
-    private byte[] encode(StoredEntry<V> entry) {
-        if (entry.version() == null) {
-            if (entry.isNullMarker()) {
-                return new byte[]{TAG_NULL_MARKER};
-            }
-            byte[] payload = valueSerializer.toBytes(entry.value());
-            byte[] out = new byte[payload.length + 1];
-            out[0] = TAG_VALUE;
-            System.arraycopy(payload, 0, out, 1, payload.length);
-            return out;
-        }
-        byte[] versionBytes = entry.version().toWire().getBytes(StandardCharsets.UTF_8);
-        byte[] payload = entry.isNullMarker() ? new byte[0] : valueSerializer.toBytes(entry.value());
-        byte[] out = new byte[5 + versionBytes.length + payload.length];
-        out[0] = entry.isNullMarker() ? TAG_NULL_MARKER_V2 : TAG_VALUE_V2;
-        ByteBuffer.wrap(out, 1, 4).putInt(versionBytes.length);
-        System.arraycopy(versionBytes, 0, out, 5, versionBytes.length);
-        System.arraycopy(payload, 0, out, 5 + versionBytes.length, payload.length);
-        return out;
+    private byte[] encode(StoredEntry<V> entry, boolean withWriteTimestamp) {
+        return ValueFrame.encode(entry, valueSerializer, withWriteTimestamp);
     }
 
     // --- Tag registry: tiercache:tags:<cache>:<tag> sets + reverse index
@@ -359,9 +347,11 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
                         + "local function curVersion(bytes) "
                         + "if not bytes then return nil end "
                         + "local tag = string.byte(bytes, 1) "
-                        + "if tag ~= 2 and tag ~= 3 and tag ~= 4 then return nil end "
+                        + "if tag ~= 2 and tag ~= 3 and tag ~= 4"
+                        + " and tag ~= 5 and tag ~= 6 then return nil end "
                         + "local l = string.byte(bytes,2)*16777216 + string.byte(bytes,3)*65536"
                         + " + string.byte(bytes,4)*256 + string.byte(bytes,5) "
+                        + "if l == 0 then return nil end "
                         + "return string.sub(bytes, 6, 6 + l - 1) end ";
 
         /** Conditional value/marker write + journal row (payload in 'p' when present). */

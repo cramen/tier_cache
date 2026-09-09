@@ -51,6 +51,22 @@ class BreakerGuardCoverageTest {
     }
 
     @Test
+    void staleWindowPutPassesThroughBreakerGuard() {
+        CircuitBreakerRemoteCache<String, String> l2 = new CircuitBreakerRemoteCache<>(
+                new InMemoryRemoteCache<>(), openBreaker());
+        assertThrows(L2UnavailableException.class,
+                () -> l2.put("k", StoredEntry.ofValue("v"), Duration.ofMinutes(1), Duration.ofMinutes(5)));
+    }
+
+    @Test
+    void defaultStaleWindowPutDelegatesToPlainPut() {
+        // SPI default: stores without stale-window support ignore staleTtl.
+        InMemoryRemoteCache<String, String> l2 = new InMemoryRemoteCache<>();
+        l2.put("k", StoredEntry.ofValue("v"), Duration.ofMinutes(1), Duration.ofMinutes(5));
+        assertEquals("v", l2.get("k").value());
+    }
+
+    @Test
     void lockProviderReturnsNullWhenOpen() {
         assertNull(new BreakerLockProvider(new InMemoryLockProvider(), openBreaker())
                 .tryLock("l", Duration.ofMinutes(1)));

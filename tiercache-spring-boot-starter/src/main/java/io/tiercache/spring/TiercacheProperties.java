@@ -122,6 +122,9 @@ public class TiercacheProperties {
         private Duration nullMarkerTtl;
         private io.tiercache.InvalidationMode invalidationMode;
         private Long payloadCapBytes;
+        private Duration staleTtl;
+        private Boolean xfetchEnabled;
+        private Duration xfetchBeta;
 
         public enum Kind {
             DENY, ALLOW
@@ -199,6 +202,30 @@ public class TiercacheProperties {
             this.nullMarkerTtl = nullMarkerTtl;
         }
 
+        public Duration getStaleTtl() {
+            return staleTtl;
+        }
+
+        public void setStaleTtl(Duration staleTtl) {
+            this.staleTtl = staleTtl;
+        }
+
+        public Boolean getXfetchEnabled() {
+            return xfetchEnabled;
+        }
+
+        public void setXfetchEnabled(Boolean xfetchEnabled) {
+            this.xfetchEnabled = xfetchEnabled;
+        }
+
+        public Duration getXfetchBeta() {
+            return xfetchBeta;
+        }
+
+        public void setXfetchBeta(Duration xfetchBeta) {
+            this.xfetchBeta = xfetchBeta;
+        }
+
         NullPolicy toNullPolicy() {
             if (nullPolicy == null) {
                 return null;
@@ -241,6 +268,15 @@ public class TiercacheProperties {
             }
             if (payloadCapBytes != null) {
                 override.payloadCapBytes(payloadCapBytes);
+            }
+            if (staleTtl != null) {
+                override.staleTtl(staleTtl);
+            }
+            if (xfetchEnabled != null) {
+                override.xfetchEnabled(xfetchEnabled);
+            }
+            if (xfetchBeta != null) {
+                override.xfetchBeta(xfetchBeta);
             }
             return override;
         }

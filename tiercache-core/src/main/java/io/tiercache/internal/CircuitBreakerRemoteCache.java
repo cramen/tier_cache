@@ -45,6 +45,14 @@ public final class CircuitBreakerRemoteCache<K, V> implements RemoteCache<K, V> 
     }
 
     @Override
+    public void put(K key, StoredEntry<V> entry, Duration ttl, Duration staleTtl) {
+        guard(() -> {
+            delegate.put(key, entry, ttl, staleTtl);
+            return null;
+        });
+    }
+
+    @Override
     public boolean putIfNewer(K key, StoredEntry<V> entry, Duration ttl) {
         return guard(() -> delegate.putIfNewer(key, entry, ttl));
     }

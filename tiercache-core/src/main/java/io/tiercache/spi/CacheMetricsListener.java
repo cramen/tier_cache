@@ -40,6 +40,22 @@ public interface CacheMetricsListener {
     default void onNullEntry(String cache) {
     }
 
+    /** An L2 entry past its TTL but within its stale window was served. */
+    default void onStaleHit(String cache) {
+    }
+
+    /** An asynchronous revalidation was claimed and submitted for a key. */
+    default void onRevalidationTriggered(String cache) {
+    }
+
+    /** An asynchronous revalidation finished without an error. */
+    default void onRevalidationCompleted(String cache) {
+    }
+
+    /** An asynchronous revalidation failed; the stale entry keeps serving. */
+    default void onRevalidationFailed(String cache) {
+    }
+
     /**
      * Starts an L2 operation observation (tracing span in the binder).
      * Returns an opaque handle passed back to {@link #onL2OperationEnd}.

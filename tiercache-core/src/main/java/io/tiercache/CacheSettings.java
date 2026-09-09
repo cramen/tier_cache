@@ -19,6 +19,13 @@ import java.util.Objects;
  * @param invalidationMode   UPDATE to include payloads in invalidation events
  * @param payloadCapBytes    max payload bytes for UPDATE events; larger
  *                           writes fall back to plain INVALIDATE
+ * @param staleTtl           stale-while-revalidate window served from L2 past
+ *                           the entry TTL; {@code Duration.ZERO} disables
+ *                           stale serving (default)
+ * @param xfetchEnabled      probabilistic early refresh (XFetch) of fresh
+ *                           L2 entries; default off
+ * @param xfetchBeta         XFetch tuning factor; smaller values trigger
+ *                           early refresh more aggressively
  */
 public record CacheSettings(
         long l1MaxSize,
@@ -28,7 +35,10 @@ public record CacheSettings(
         double jitterAmplitude,
         NullPolicy nullPolicy,
         InvalidationMode invalidationMode,
-        long payloadCapBytes) {
+        long payloadCapBytes,
+        Duration staleTtl,
+        boolean xfetchEnabled,
+        Duration xfetchBeta) {
 
     public CacheSettings {
         Objects.requireNonNull(l1ExpireAfterWrite, "l1ExpireAfterWrite");
@@ -54,11 +64,29 @@ public record CacheSettings(
         if (jitterAmplitude < 0.0 || jitterAmplitude >= 1.0) {
             throw new IllegalArgumentException("jitterAmplitude must be in [0, 1), got " + jitterAmplitude);
         }
+        // Value validation of staleTtl/xfetchBeta (negative window, non-positive
+        // beta, XFetch without L2 TTL) is startup validation's job; see
+        // io.tiercache.internal.CacheConfigValidator.
+        Objects.requireNonNull(staleTtl, "staleTtl");
+        Objects.requireNonNull(xfetchBeta, "xfetchBeta");
+    }
+
+    /**
+     * Convenience constructor with stale serving and XFetch disabled
+     * (the default behavior).
+     */
+    public CacheSettings(long l1MaxSize, Duration l1ExpireAfterWrite,
+            Duration l1ExpireAfterAccess, Duration l2Ttl, double jitterAmplitude,
+            NullPolicy nullPolicy, InvalidationMode invalidationMode, long payloadCapBytes) {
+        this(l1MaxSize, l1ExpireAfterWrite, l1ExpireAfterAccess, l2Ttl, jitterAmplitude,
+                nullPolicy, invalidationMode, payloadCapBytes,
+                Duration.ZERO, false, Duration.ofSeconds(1));
     }
 
     /**
      * Sensible global defaults: jitter on by default with 10% amplitude;
-     * null caching denied unless explicitly allowed.
+     * null caching denied unless explicitly allowed; stale serving and
+     * XFetch off.
      */
     public static CacheSettings defaults() {
         return new CacheSettings(
@@ -69,6 +97,9 @@ public record CacheSettings(
                 0.10,
                 NullPolicy.deny(),
                 InvalidationMode.INVALIDATE,
-                64 * 1024);
+                64 * 1024,
+                Duration.ZERO,
+                false,
+                Duration.ofSeconds(1));
     }
 }

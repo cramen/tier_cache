@@ -34,6 +34,31 @@ public final class InMemoryRemoteCache<K, V> implements RemoteCache<K, V> {
         store.put(key, new Entry<>(value, System.nanoTime() + ttl.toNanos()));
     }
 
+    /**
+     * Stale-window write, mirroring the Redis transport: the physical
+     * lifetime becomes {@code ttl + staleTtl} and the entry is stamped with
+     * the current write time, so reads can classify freshness by age.
+     */
+    @Override
+    public void put(K key, StoredEntry<V> entry, Duration ttl, Duration staleTtl) {
+        if (staleTtl == null || staleTtl.isZero() || staleTtl.isNegative()) {
+            put(key, entry, ttl);
+            return;
+        }
+        store.put(key, new Entry<>(stampedWithWriteTime(entry),
+                System.nanoTime() + ttl.toNanos() + staleTtl.toNanos()));
+    }
+
+    private static <V> StoredEntry<V> stampedWithWriteTime(StoredEntry<V> entry) {
+        if (entry.hasWriteTimestamp()) {
+            return entry;
+        }
+        long now = System.currentTimeMillis();
+        return entry.isNullMarker()
+                ? StoredEntry.nullMarker(entry.version(), now)
+                : StoredEntry.ofValue(entry.value(), entry.version(), now);
+    }
+
     @Override
     public void evict(K key) {
         store.remove(key);

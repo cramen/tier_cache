@@ -114,6 +114,31 @@ class RedisStreamJournalTest {
     }
 
     @Test
+    void extendedFrameStaysVersionComparableInLua() {
+        // Stale-window write with a version goes through the conditional Lua
+        // write; the script must read the version out of the extended frame.
+        RedisStreamJournal journal = new RedisStreamJournal(client.connect(ByteArrayCodec.INSTANCE), 1000,
+                new JdkCacheSerializer<>());
+        LettuceRemoteCache<String, String> cache = LettuceRemoteCache.<String, String>builder(redisUri)
+                .cacheName("v3")
+                .journal(journal)
+                .build();
+        UUID origin = UUID.randomUUID();
+        cache.put("k", StoredEntry.ofValue("new", new Version(5, origin)),
+                Duration.ofMinutes(1), Duration.ofMinutes(1));
+        StoredEntry<String> entry = cache.get("k");
+        assertEquals("new", entry.value());
+        assertEquals(new Version(5, origin), entry.version());
+        assertTrue(entry.hasWriteTimestamp());
+
+        // An older write loses against the extended frame's version.
+        org.junit.jupiter.api.Assertions.assertFalse(cache.putIfNewer("k",
+                StoredEntry.ofValue("old", new Version(4, origin)), Duration.ofMinutes(1)));
+        assertEquals("new", cache.get("k").value());
+        cache.close();
+    }
+
+    @Test
     void trimmedCursorIsDetected() {
         RedisStreamJournal journal = new RedisStreamJournal(client.connect(ByteArrayCodec.INSTANCE), 3,
                 new JdkCacheSerializer<>());

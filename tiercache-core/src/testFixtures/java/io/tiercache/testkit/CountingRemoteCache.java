@@ -30,6 +30,12 @@ public final class CountingRemoteCache<K, V> implements RemoteCache<K, V> {
     }
 
     @Override
+    public void put(K key, StoredEntry<V> entry, Duration ttl, Duration staleTtl) {
+        puts.incrementAndGet();
+        delegate.put(key, entry, ttl, staleTtl);
+    }
+
+    @Override
     public void evict(K key) {
         evicts.incrementAndGet();
         delegate.evict(key);

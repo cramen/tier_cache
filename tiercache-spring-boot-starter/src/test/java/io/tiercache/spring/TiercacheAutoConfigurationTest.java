@@ -96,4 +96,51 @@ class TiercacheAutoConfigurationTest {
                             .isInstanceOf(io.tiercache.LookupResult.CachedNull.class);
                 });
     }
+
+    @Test
+    void staleServingSettingsApplyFromProperties() {
+        runner.withUserConfiguration(InMemoryL2Config.class)
+                .withPropertyValues(
+                        "tiercache.enabled=true",
+                        "tiercache.defaults.stale-ttl=10m",
+                        "tiercache.caches.hot.stale-ttl=2m",
+                        "tiercache.caches.hot.xfetch-enabled=true",
+                        "tiercache.caches.hot.xfetch-beta=500ms",
+                        "tiercache.caches.plain.l2-ttl=30m")
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    TiercacheProperties properties = context.getBean(TiercacheProperties.class);
+                    io.tiercache.CacheSettings base = properties.getDefaults()
+                            .toSettings(io.tiercache.CacheSettings.defaults());
+
+                    io.tiercache.CacheSettings hot =
+                            properties.getCaches().get("hot").toSettings(base);
+                    assertThat(hot.staleTtl()).isEqualTo(java.time.Duration.ofMinutes(2));
+                    assertThat(hot.xfetchEnabled()).isTrue();
+                    assertThat(hot.xfetchBeta()).isEqualTo(java.time.Duration.ofMillis(500));
+
+                    // No stale-serving overrides: inherits the global default.
+                    io.tiercache.CacheSettings plain =
+                            properties.getCaches().get("plain").toSettings(base);
+                    assertThat(plain.staleTtl()).isEqualTo(java.time.Duration.ofMinutes(10));
+                    assertThat(plain.xfetchEnabled()).isFalse();
+                    assertThat(plain.xfetchBeta()).isEqualTo(base.xfetchBeta());
+                });
+    }
+
+    @Test
+    void negativeStaleTtlAbortsStartup() {
+        runner.withUserConfiguration(InMemoryL2Config.class)
+                .withPropertyValues(
+                        "tiercache.enabled=true",
+                        "tiercache.caches.bad.stale-ttl=-1s")
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .rootCause()
+                            .isInstanceOf(CacheConfigurationException.class)
+                            .hasMessageContaining("bad")
+                            .hasMessageContaining("staleTtl");
+                });
+    }
 }

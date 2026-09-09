@@ -31,6 +31,20 @@ public interface RemoteCache<K, V> {
     void put(K key, StoredEntry<V> entry, Duration ttl);
 
     /**
+     * Stores {@code entry} under {@code key} with the given logical TTL and
+     * a stale window: the physical entry lifetime becomes
+     * {@code ttl + staleTtl} and the stored frame carries the write
+     * timestamp, so readers can serve the entry stale after its logical TTL
+     * expires. A {@code null}, zero, or negative {@code staleTtl} means no
+     * stale window — identical to {@link #put(Object, StoredEntry, Duration)}.
+     * The default ignores the stale window; stale-capable transports
+     * override.
+     */
+    default void put(K key, StoredEntry<V> entry, Duration ttl, Duration staleTtl) {
+        put(key, entry, ttl);
+    }
+
+    /**
      * Stores {@code entry} under {@code key} only if the entry's version is
      * not older than the currently stored one (unversioned current entries
      * lose). Returns {@code true} if the write won. The default
@@ -39,6 +53,19 @@ public interface RemoteCache<K, V> {
      */
     default boolean putIfNewer(K key, StoredEntry<V> entry, Duration ttl) {
         put(key, entry, ttl);
+        return true;
+    }
+
+    /**
+     * Stale-window variant of {@link #putIfNewer(Object, StoredEntry, Duration)}:
+     * the physical entry lifetime becomes {@code ttl + staleTtl} and the
+     * stored frame carries the write timestamp, so the refreshed entry keeps
+     * its stale window. The default writes through the stale-window
+     * {@link #put(Object, StoredEntry, Duration, Duration)}; versioned
+     * transports override to keep the compare atomic.
+     */
+    default boolean putIfNewer(K key, StoredEntry<V> entry, Duration ttl, Duration staleTtl) {
+        put(key, entry, ttl, staleTtl);
         return true;
     }
 

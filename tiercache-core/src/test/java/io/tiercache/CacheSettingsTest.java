@@ -5,8 +5,10 @@ import org.junit.jupiter.api.Test;
 import java.time.Duration;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Spec: cache-configuration — validation branches of the settings model.
@@ -114,5 +116,54 @@ class CacheSettingsTest {
     @Test
     void defaultsHaveNullExpireAfterAccess() {
         assertNull(CacheSettings.defaults().l1ExpireAfterAccess());
+    }
+
+    @Test
+    void defaultsKeepStaleServingOff() {
+        CacheSettings defaults = CacheSettings.defaults();
+        assertEquals(Duration.ZERO, defaults.staleTtl());
+        assertFalse(defaults.xfetchEnabled());
+        assertEquals(Duration.ofSeconds(1), defaults.xfetchBeta());
+    }
+
+    @Test
+    void compactConstructorDisablesStaleServing() {
+        CacheSettings s = new CacheSettings(10, Duration.ofMinutes(1), null, Duration.ofHours(1),
+                0.0, NullPolicy.deny(), InvalidationMode.INVALIDATE, 64 * 1024);
+        assertEquals(Duration.ZERO, s.staleTtl());
+        assertFalse(s.xfetchEnabled());
+        assertEquals(Duration.ofSeconds(1), s.xfetchBeta());
+    }
+
+    @Test
+    void rejectsNullStaleServingDurations() {
+        assertThrows(NullPointerException.class, () ->
+                new CacheSettings(10, Duration.ofMinutes(1), null, Duration.ofHours(1), 0.0,
+                        NullPolicy.deny(), InvalidationMode.INVALIDATE, 64 * 1024,
+                        null, false, Duration.ofSeconds(1)));
+        assertThrows(NullPointerException.class, () ->
+                new CacheSettings(10, Duration.ofMinutes(1), null, Duration.ofHours(1), 0.0,
+                        NullPolicy.deny(), InvalidationMode.INVALIDATE, 64 * 1024,
+                        Duration.ZERO, false, null));
+    }
+
+    @Test
+    void overrideInheritsStaleServingSettings() {
+        CacheSettings resolved = new CacheOverride().resolve(CacheSettings.defaults());
+        assertEquals(Duration.ZERO, resolved.staleTtl());
+        assertFalse(resolved.xfetchEnabled());
+        assertEquals(Duration.ofSeconds(1), resolved.xfetchBeta());
+    }
+
+    @Test
+    void overrideReplacesStaleServingSettings() {
+        CacheSettings resolved = new CacheOverride()
+                .staleTtl(Duration.ofMinutes(5))
+                .xfetchEnabled(true)
+                .xfetchBeta(Duration.ofSeconds(2))
+                .resolve(CacheSettings.defaults());
+        assertEquals(Duration.ofMinutes(5), resolved.staleTtl());
+        assertTrue(resolved.xfetchEnabled());
+        assertEquals(Duration.ofSeconds(2), resolved.xfetchBeta());
     }
 }

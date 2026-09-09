@@ -161,6 +161,69 @@ class LettuceRemoteCacheTest {
         }
     }
 
+    @Test
+    void staleWindowWriteSurvivesPastLogicalTtl() throws Exception {
+        // Design D1: physical expiry is ttl + staleTtl, so the entry outlives
+        // its logical TTL inside the stale window and stays parseable.
+        try (LettuceRemoteCache<String, String> cache =
+                LettuceRemoteCache.<String, String>builder(redisUri)
+                        .cacheName("stale-window")
+                        .build()) {
+            long before = System.currentTimeMillis();
+            cache.put("k", io.tiercache.spi.StoredEntry.ofValue("v"),
+                    Duration.ofSeconds(1), Duration.ofSeconds(10));
+            TimeUnit.MILLISECONDS.sleep(1500);
+            io.tiercache.spi.StoredEntry<String> entry = cache.get("k");
+            assertTrue(entry != null && !entry.isNullMarker(),
+                    "entry must survive past its logical TTL within the stale window");
+            assertEquals("v", entry.value());
+            assertTrue(entry.hasWriteTimestamp());
+            long writeTs = entry.writeTimestampMillis();
+            assertTrue(writeTs >= before && writeTs <= System.currentTimeMillis());
+        }
+    }
+
+    @Test
+    void staleWindowWriteExpiresAfterPhysicalTtl() throws Exception {
+        try (LettuceRemoteCache<String, String> cache =
+                LettuceRemoteCache.<String, String>builder(redisUri)
+                        .cacheName("stale-expire")
+                        .build()) {
+            cache.put("k", io.tiercache.spi.StoredEntry.ofValue("v"),
+                    Duration.ofMillis(500), Duration.ofSeconds(1));
+            TimeUnit.MILLISECONDS.sleep(1800);
+            assertTrue(cache.get("k") == null,
+                    "entry must be gone once ttl + staleTtl has elapsed");
+        }
+    }
+
+    @Test
+    void staleWindowWriteUsesExtendedFrame() {
+        try (LettuceRemoteCache<String, String> cache =
+                LettuceRemoteCache.<String, String>builder(redisUri)
+                        .cacheName("stale-frame")
+                        .build()) {
+            cache.put("k", io.tiercache.spi.StoredEntry.ofValue("v"),
+                    Duration.ofMinutes(1), Duration.ofMinutes(1));
+            assertEquals(ValueFrame.TAG_VALUE_V3, rawValue(cache, "stale-frame", "k")[0],
+                    "stale-window writes use the extended frame");
+
+            // Without a stale window the legacy frame is written unchanged.
+            cache.put("plain", io.tiercache.spi.StoredEntry.ofValue("v"), Duration.ofMinutes(1));
+            assertEquals(ValueFrame.TAG_VALUE, rawValue(cache, "stale-frame", "plain")[0]);
+            assertTrue(cache.get("plain").hasWriteTimestamp() == false);
+        }
+    }
+
+    private static byte[] rawValue(LettuceRemoteCache<String, String> cache, String cacheName, String key) {
+        byte[] prefix = (cacheName + ":").getBytes(StandardCharsets.UTF_8);
+        byte[] serializedKey = new JdkCacheSerializer<String>().toBytes(key);
+        byte[] namespaced = new byte[prefix.length + serializedKey.length];
+        System.arraycopy(prefix, 0, namespaced, 0, prefix.length);
+        System.arraycopy(serializedKey, 0, namespaced, prefix.length, serializedKey.length);
+        return cache.connection().sync().get(namespaced);
+    }
+
     private static LettuceRemoteCache<String, String> sharedNamespaceInstance() {
         return LettuceRemoteCache.<String, String>builder(redisUri)
                 .cacheName("xinst") // shared namespace on purpose
