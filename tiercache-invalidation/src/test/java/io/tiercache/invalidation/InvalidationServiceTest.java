@@ -2,8 +2,8 @@ package io.tiercache.invalidation;
 
 import io.tiercache.InvalidationMessage;
 import io.tiercache.Version;
-import io.tiercache.VersionGenerator;
 import io.tiercache.spi.InvalidationTarget;
+import io.tiercache.spi.CacheMetricsListener.Direction;
 import io.tiercache.testkit.InMemoryInvalidationTransport;
 import io.tiercache.testkit.InMemoryJournal;
 import org.junit.jupiter.api.Test;
@@ -243,6 +243,187 @@ class InvalidationServiceTest {
         a.onLocalWrite("c", "k", new Version(2, idA), InvalidationMessage.Type.INVALIDATE);
 
         assertTrue(received.isEmpty(), "own writes are not inbound events");
+        a.close();
+    }
+
+    /** Transport double that records lifecycle calls and delivers on demand. */
+    private static final class RecordingTransport
+            implements io.tiercache.spi.InvalidationTransport {
+        final AtomicInteger subscribes = new AtomicInteger();
+        final AtomicInteger subscriptionCloses = new AtomicInteger();
+        final AtomicInteger closes = new AtomicInteger();
+        private java.util.function.Consumer<InvalidationMessage> handler;
+
+        @Override
+        public void publish(InvalidationMessage message) {
+        }
+
+        @Override
+        public AutoCloseable subscribe(String cache,
+                java.util.function.Consumer<InvalidationMessage> h) {
+            subscribes.incrementAndGet();
+            this.handler = h;
+            return subscriptionCloses::incrementAndGet;
+        }
+
+        @Override
+        public void close() {
+            closes.incrementAndGet();
+        }
+
+        void deliver(InvalidationMessage message) {
+            handler.accept(message);
+        }
+    }
+
+    private static final class RecordingMetrics implements io.tiercache.spi.CacheMetricsListener {
+        final Map<Direction, AtomicInteger> directions = new ConcurrentHashMap<>();
+        final AtomicInteger spansEnded = new AtomicInteger();
+
+        @Override
+        public void onInvalidation(String cache, Direction direction) {
+            directions.computeIfAbsent(direction, d -> new AtomicInteger()).incrementAndGet();
+        }
+
+        @Override
+        public void onInvalidationEnd(String cache, Object handle) {
+            spansEnded.incrementAndGet();
+        }
+
+        int count(Direction direction) {
+            return directions.getOrDefault(direction, new AtomicInteger()).get();
+        }
+    }
+
+    @Test
+    void closeReleasesSubscriptionsTransportAndTargets() throws Exception {
+        RecordingTransport transport = new RecordingTransport();
+        InvalidationService service = new InvalidationService(transport, null,
+                UUID.randomUUID(), cache -> {
+                });
+        FakeTarget target = new FakeTarget();
+        Version held = new Version(1, UUID.randomUUID());
+        target.entries.put("k", held);
+        service.registerTarget("c", target);
+
+        service.close();
+        assertEquals(1, transport.subscriptionCloses.get(), "the subscription is cancelled");
+        assertEquals(1, transport.closes.get(), "the transport is closed");
+
+        service.close();
+        assertEquals(1, transport.subscriptionCloses.get(),
+                "subscriptions are cleared: a second close does not re-cancel");
+
+        transport.deliver(new InvalidationMessage("c", "k", new Version(9, UUID.randomUUID()),
+                UUID.randomUUID(), InvalidationMessage.Type.INVALIDATE));
+        assertEquals(held, target.entries.get("k"), "targets are cleared: late events apply nowhere");
+    }
+
+    @Test
+    void registerTargetSubscribesOncePerCache() {
+        RecordingTransport transport = new RecordingTransport();
+        InvalidationService service = new InvalidationService(transport, null,
+                UUID.randomUUID(), cache -> {
+                });
+        service.registerTarget("c", new FakeTarget());
+        service.registerTarget("c", new FakeTarget());
+        assertEquals(1, transport.subscribes.get(), "one subscription per cache");
+        service.close();
+    }
+
+    @Test
+    void sentReceivedAndSpanMetricsAreEmitted() {
+        RecordingTransport transport = new RecordingTransport();
+        RecordingMetrics metrics = new RecordingMetrics();
+        UUID idB = UUID.randomUUID();
+        InvalidationService b = new InvalidationService(transport, null, idB, cache -> {
+        }, metrics);
+        FakeTarget target = new FakeTarget();
+        target.entries.put("k", new Version(1, idB));
+        b.registerTarget("c", target);
+
+        b.onLocalWrite("c", "k", new Version(2, idB), InvalidationMessage.Type.INVALIDATE);
+        b.onLocalUpdate("c", "k", "v", new Version(3, idB));
+        assertEquals(2, metrics.count(Direction.SENT), "both write kinds are counted");
+
+        transport.deliver(new InvalidationMessage("c", "k", new Version(4, UUID.randomUUID()),
+                UUID.randomUUID(), InvalidationMessage.Type.INVALIDATE));
+        assertEquals(1, metrics.count(Direction.RECEIVED));
+        assertEquals(1, metrics.spansEnded.get(), "the processing span is closed");
+        b.close();
+    }
+
+    @Test
+    void replayMetricsAreEmittedAndTheCursorAdvances() {
+        var hub = new InMemoryInvalidationTransport.Hub();
+        var journal = new InMemoryJournal(100);
+        UUID idA = UUID.randomUUID();
+        UUID idB = UUID.randomUUID();
+        InvalidationService a = service(idA, hub, journal);
+        InMemoryInvalidationTransport transportB = new InMemoryInvalidationTransport(hub);
+        RecordingMetrics metrics = new RecordingMetrics();
+        InvalidationService b = new InvalidationService(transportB, journal, idB, cache -> {
+        }, metrics);
+        FakeTarget targetB = new FakeTarget();
+        targetB.entries.put("k", new Version(1, idA));
+        b.registerTarget("c", targetB);
+
+        transportB.disconnect();
+        Version v2 = new Version(2, idA);
+        journal.append("c", new InvalidationMessage("c", "k", v2, idA,
+                InvalidationMessage.Type.INVALIDATE));
+        a.onLocalWrite("c", "k", v2, InvalidationMessage.Type.INVALIDATE);
+
+        transportB.reconnect();
+        assertEquals(1, metrics.count(Direction.REPLAYED), "the missed event is replayed");
+
+        transportB.disconnect();
+        transportB.reconnect();
+        assertEquals(1, metrics.count(Direction.REPLAYED),
+                "the cursor advanced: nothing is replayed twice");
+        a.close();
+        b.close();
+    }
+
+    @Test
+    void journalOverflowIsCountedAsDropped() {
+        var hub = new InMemoryInvalidationTransport.Hub();
+        var journal = new InMemoryJournal(1); // window of one
+        UUID idA = UUID.randomUUID();
+        UUID idB = UUID.randomUUID();
+        InMemoryInvalidationTransport transportB = new InMemoryInvalidationTransport(hub);
+        RecordingMetrics metrics = new RecordingMetrics();
+        InvalidationService b = new InvalidationService(transportB, journal, idB, cache -> {
+        }, metrics);
+        FakeTarget targetB = new FakeTarget();
+        targetB.entries.put("k", new Version(1, idA));
+        b.registerTarget("c", targetB);
+
+        transportB.disconnect();
+        for (int i = 2; i <= 4; i++) { // three events, capacity one -> overflow
+            journal.append("c", new InvalidationMessage("c", "k" + i, new Version(i, idA),
+                    idA, InvalidationMessage.Type.INVALIDATE));
+        }
+        transportB.reconnect();
+
+        assertEquals(1, metrics.count(Direction.DROPPED), "the overflow is surfaced");
+        assertEquals(0, targetB.entries.size(), "overflow still flushes L1");
+        b.close();
+    }
+
+    @Test
+    void l2RecoveryWithoutJournalFlushesL1() {
+        var hub = new InMemoryInvalidationTransport.Hub();
+        UUID idA = UUID.randomUUID();
+        InvalidationService a = service(idA, hub, null);
+        FakeTarget targetA = new FakeTarget();
+        targetA.entries.put("k", new Version(1, idA));
+        a.registerTarget("c", targetA);
+
+        a.onL2Recovery();
+
+        assertEquals(1, targetA.flushCount.get(), "no journal: the honest fallback is a full flush");
+        assertTrue(targetA.entries.isEmpty());
         a.close();
     }
 }

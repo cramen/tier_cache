@@ -37,4 +37,26 @@ class MessageCodecTest {
         assertEquals(InvalidationMessage.Type.EVICT_ALL, decoded.type());
         assertNull(decoded.keyBytes());
     }
+
+    @Test
+    void roundTripUpdateWithPayload() {
+        UUID origin = UUID.randomUUID();
+        byte[] payload = "new-value".getBytes(StandardCharsets.UTF_8);
+        InvalidationMessage message = new InvalidationMessage("users", "k",
+                new Version(9, origin), origin, InvalidationMessage.Type.UPDATE, payload);
+        MessageCodec.Decoded decoded = MessageCodec.decode(
+                MessageCodec.encode(message, "k".getBytes(StandardCharsets.UTF_8)));
+        assertEquals(InvalidationMessage.Type.UPDATE, decoded.type());
+        assertArrayEquals(payload, decoded.payload(), "the v2 payload tail must survive");
+    }
+
+    @Test
+    void roundTripEmptyKeyAndEmptyPayload() {
+        UUID origin = UUID.randomUUID();
+        InvalidationMessage message = new InvalidationMessage("users", "k",
+                new Version(3, origin), origin, InvalidationMessage.Type.UPDATE, new byte[0]);
+        MessageCodec.Decoded decoded = MessageCodec.decode(MessageCodec.encode(message, new byte[0]));
+        assertEquals(0, decoded.keyBytes().length, "an empty key is not a null (EVICT_ALL) key");
+        assertEquals(0, decoded.payload().length, "an empty payload is not an absent payload");
+    }
 }

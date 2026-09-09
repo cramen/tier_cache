@@ -10,8 +10,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-
 /**
  * Invalidation/write race: two instances race puts and evicts with
  * randomized delays. Versioned writes + last-write-wins application must
@@ -61,16 +59,19 @@ abstract class AbstractInvalidationRaceTest extends AbstractInvalidationChaosTes
                 }
                 pool.shutdown();
 
-                // Let in-flight invalidation events land.
-                Thread.sleep(1000);
-
-                for (String key : keys) {
-                    String truth = l2Truth(a, key);
-                    assertEquals(truth, a.cache.get(key),
-                            "instance A diverged from L2 for " + key);
-                    assertEquals(truth, b.cache.get(key),
-                            "instance B diverged from L2 for " + key);
-                }
+                // All writes are done, so the L2 truth is stable; poll until the
+                // in-flight invalidation events have landed on both instances.
+                // A timeout here means a genuinely lost event, not a slow one.
+                waitFor(() -> {
+                    for (String key : keys) {
+                        String truth = l2Truth(a, key);
+                        if (!java.util.Objects.equals(truth, a.cache.get(key))
+                                || !java.util.Objects.equals(truth, b.cache.get(key))) {
+                            return false;
+                        }
+                    }
+                    return true;
+                });
             } finally {
                 a.close();
                 b.close();

@@ -27,6 +27,8 @@ Gradle (Kotlin DSL) multi-module build, Java 17 toolchain. Modules present: `tie
 - `./gradlew build` — compile, unit tests, TCK tests, dependency audit, coverage gate (≥90% branch on `tiercache-core`).
 - `./gradlew :tiercache-core:test` — core unit/contract tests.
 - `./gradlew :tiercache-tck:test` — TCK chaos tests (Testcontainers: stampede single- and multi-instance over real Redis).
+- `./gradlew :tiercache-tck:soakTest` — churn soak gate (memory ≤5% growth, bounded journal; default PT10M, override with `-Dtiercache.soak.duration=PT24H` for the full CI profile). Excluded from `check`.
+- `./gradlew :tiercache-tck:vtStressTest` — virtual-thread pinning gate (100k VTs, zero `jdk.VirtualThreadPinned` on library frames). Requires a JDK 21+ toolchain; skipped loudly otherwise. Excluded from `check`.
 - `./gradlew :tiercache-transport-redis:test` — transport contract suite against Redis 6.2 and Valkey containers (needs Docker).
 - `./gradlew :tiercache-spring-boot-starter:test` — Spring adapter, auto-config, and Spring Cache migration tests (no Docker needed).
 - `./gradlew :tiercache-kotlin:test` — Kotlin coroutines API tests (no Docker needed).
@@ -34,7 +36,7 @@ Gradle (Kotlin DSL) multi-module build, Java 17 toolchain. Modules present: `tie
 - `./gradlew :tiercache-core:shadowJar` — shaded artifact: Caffeine relocated under `io.tiercache.internal.caffeine`; the shaded jar is the main artifact, the plain jar keeps the `unshaded` classifier.
 - `./gradlew :tiercache-core:dependencyAudit` — asserts the runtime classpath exposes only SLF4J API.
 - `./gradlew :tiercache-core:jmh` — JMH baseline for the L1-hit hot path (gc profiler: overhead and zero-allocation budgets); results in `tiercache-core/build/results/jmh/results.txt`.
-- PIT mutation testing: to be added with the invalidation/degradation phases (gate ≥75% on invalidation and degradation paths).
+- `./gradlew :tiercache-core:pitest :tiercache-invalidation:pitest` — PIT mutation gate (≥75% kill score; core targets `io.tiercache.internal.*`, invalidation targets `io.tiercache.invalidation.*`). On demand only — deliberately NOT wired into `check`; belongs to CI/nightly.
 
 ## Module structure (target)
 

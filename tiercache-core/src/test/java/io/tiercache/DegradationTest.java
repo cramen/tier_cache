@@ -101,7 +101,7 @@ class DegradationTest {
     }
 
     @Test
-    void degradedCoordinationFallsBackToSingleflight() {
+    void degradedCoordinationFallsBackToSingleflight() throws Exception {
         Harness h = harness();
         degrade(h);
         AtomicInteger loaderCalls = new AtomicInteger();
@@ -114,8 +114,12 @@ class DegradationTest {
                 return "v";
             })));
         }
+        // Await every caller before asserting on the loader count.
+        for (var f : futures) {
+            assertEquals("v", f.get(), "every caller gets the coalesced value");
+        }
         pool.shutdown();
-        assertTrue(loaderCalls.get() == 1, "singleflight still coalesces per instance");
+        assertEquals(1, loaderCalls.get(), "singleflight still coalesces per instance");
     }
 
     @Test

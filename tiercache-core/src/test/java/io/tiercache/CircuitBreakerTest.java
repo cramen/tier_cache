@@ -120,4 +120,28 @@ class CircuitBreakerTest {
         org.junit.jupiter.api.Assertions.assertThrows(NullPointerException.class,
                 () -> new Config(10, 0.5, 3, null, 2));
     }
+
+    @Test
+    void overwrittenFailureLeavesTheWindow() {
+        // Window of 3, opens at >= 3 failures. F,F,S fills the window with 2
+        // failures; the next F overwrites the oldest F — the failure count
+        // must stay at 2, not grow.
+        Config config = new Config(3, 0.75, 3, Duration.ofMillis(100), 1);
+        CircuitBreaker breaker = new CircuitBreaker(config, new CircuitBreaker.Listener() {
+            @Override
+            public void onOpen() {
+            }
+
+            @Override
+            public void onClose() {
+            }
+        });
+        breaker.onFailure();
+        breaker.onFailure();
+        breaker.onSuccess();
+        assertFalse(breaker.isOpen(), "2 failures in a full window of 3");
+        breaker.onFailure(); // overwrites the oldest failure slot
+        assertFalse(breaker.isOpen(),
+                "overwritten failure must leave the window: still 2 of 3");
+    }
 }

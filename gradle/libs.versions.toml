@@ -27,6 +27,7 @@ testcontainers-junit-jupiter = { module = "org.testcontainers:junit-jupiter", ve
 
 [plugins]
 shadow = { id = "com.gradleup.shadow", version = "9.6.1" }
+pitest = { id = "info.solidsoft.pitest", version = "1.19.0" }
 jmh = { id = "me.champeau.jmh", version = "0.7.3" }
 spring-boot = { id = "org.springframework.boot", version.ref = "spring-boot" }
 spring-dependency-management = { id = "io.spring.dependency-management", version = "1.1.7" }

@@ -4,6 +4,7 @@ plugins {
     jacoco
     alias(libs.plugins.shadow)
     alias(libs.plugins.jmh)
+    alias(libs.plugins.pitest)
 }
 
 java {
@@ -116,4 +117,24 @@ tasks.check { dependsOn(tasks.jacocoTestCoverageVerification) }
 // --- JMH (task 4.2): baseline for the L1-hit hot path.
 jmh {
     profilers = listOf("gc")
+}
+
+// --- PIT mutation testing (hardening-gates design D3): on-demand gate,
+// intentionally NOT wired into `check` (runs in CI/nightly later).
+// Scope: io.tiercache.internal.* — read-path coordination, circuit breaker,
+// degradation glue. io.tiercache.spi.* stays out of scope: those types are
+// interfaces and immutable value carriers with no mutatable logic, so
+// including them would only dilute the score, not make it more honest.
+pitest {
+    targetClasses.set(setOf("io.tiercache.internal.*"))
+    // Tests live in io.tiercache.* (not only io.tiercache.internal.*), so the
+    // default tests filter derived from targetClasses would miss most of them.
+    targetTests.set(setOf("io.tiercache.*"))
+    mutationThreshold.set(75)
+    junit5PluginVersion.set("1.2.3")
+    outputFormats.set(setOf("HTML", "XML"))
+    // Mutation history keeps incremental runs cheap; the file is a build
+    // artifact and is regenerated when absent.
+    historyInputLocation.set(layout.buildDirectory.file("pitest/history.bin"))
+    historyOutputLocation.set(layout.buildDirectory.file("pitest/history.bin"))
 }

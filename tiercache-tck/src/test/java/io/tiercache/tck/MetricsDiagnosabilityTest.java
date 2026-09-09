@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Test;
 import java.time.Duration;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -32,10 +33,14 @@ class MetricsDiagnosabilityTest {
         TierCache<String, String> cache = factory.getCache("stampede-metrics");
 
         int threads = 32;
+        var leaderStarted = new java.util.concurrent.CountDownLatch(1);
         var release = new java.util.concurrent.CountDownLatch(1);
         var pool = java.util.concurrent.Executors.newFixedThreadPool(threads);
         var futures = new java.util.ArrayList<java.util.concurrent.Future<?>>();
         var leader = pool.submit(() -> cache.getOrCompute("hot", key -> {
+            // Inside the loader the in-flight entry already exists, so any
+            // follower arriving from now on must coalesce onto this load.
+            leaderStarted.countDown();
             try {
                 release.await(5, java.util.concurrent.TimeUnit.SECONDS);
             } catch (InterruptedException e) {
@@ -44,17 +49,26 @@ class MetricsDiagnosabilityTest {
             return "v";
         }));
         try {
-            Thread.sleep(100);
+            assertTrue(leaderStarted.await(5, java.util.concurrent.TimeUnit.SECONDS),
+                    "leader must be inside the loader before followers arrive");
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
         for (int i = 0; i < threads - 1; i++) {
             futures.add(pool.submit(() -> cache.getOrCompute("hot", key -> "x")));
         }
-        try {
-            Thread.sleep(100);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
+        // The join records the coalesced metric synchronously; poll for it
+        // instead of sleeping a fixed interval before releasing the loader.
+        long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
+        while (registry.get("tiercache.requests")
+                        .tags("cache", "stampede-metrics", "result", "coalesced").counter().count() < 1
+                && System.nanoTime() < deadline) {
+            try {
+                Thread.sleep(5);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
         }
         release.countDown();
         try {
@@ -98,8 +112,16 @@ class MetricsDiagnosabilityTest {
         assertEquals(1.0, registry.get("tiercache.degraded").gauge().value());
 
         l2.heal();
-        Thread.sleep(100);
-        cache.getOrCompute("k", key -> "v"); // probe closes the breaker
+        // The half-open delay must elapse before a probe is admitted; probe
+        // with cold keys (each reaches L2 and counts as a probe) until the
+        // breaker closes, instead of sleeping a fixed interval.
+        long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
+        int probe = 0;
+        while (factory.isDegraded() && System.nanoTime() < deadline) {
+            cache.get("probe-" + probe++);
+            Thread.sleep(20);
+        }
+        assertFalse(factory.isDegraded(), "breaker must close once L2 is healthy");
         assertEquals(0.0, registry.get("tiercache.degraded").gauge().value());
         factory.close();
     }
