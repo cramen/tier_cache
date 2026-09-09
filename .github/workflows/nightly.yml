@@ -1,0 +1,63 @@
+name: nightly
+
+on:
+  schedule:
+    # Off-peak, deliberately not on the :00/:30 herd marks.
+    - cron: '47 3 * * *'
+  workflow_dispatch:
+    inputs:
+      soakDuration:
+        description: Soak duration (ISO-8601, e.g. PT10M for a smoke run)
+        default: PT24H
+        required: false
+
+concurrency:
+  # A fresh nightly supersedes an overrun previous one (a 24h soak can
+  # collide with the next cron tick by design).
+  group: nightly
+  cancel-in-progress: true
+
+jobs:
+  soak:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Soak gate
+        run: ./gradlew :tiercache-tck:soakTest -Dtiercache.soak.duration=${{ github.event.inputs.soakDuration || 'PT24H' }}
+
+  pitest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: PIT mutation gate (>=75% on core and invalidation)
+        run: ./gradlew pitest
+
+  jmh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      # Informational trend only: hosted runners share vCPUs, so these
+      # numbers must never gate. The blocking benchmark gate is a local
+      # or dedicated-runner activity (see AGENTS.md).
+      - name: JMH baseline (informational)
+        run: ./gradlew :tiercache-core:jmh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jmh-results
+          path: tiercache-core/build/results/jmh/results.txt
+          retention-days: 90

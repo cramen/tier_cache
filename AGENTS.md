@@ -38,6 +38,13 @@ Gradle (Kotlin DSL) multi-module build, Java 17 toolchain. Modules present: `tie
 - `./gradlew :tiercache-core:jmh` — JMH baseline for the L1-hit hot path (gc profiler: overhead and zero-allocation budgets); results in `tiercache-core/build/results/jmh/results.txt`.
 - `./gradlew :tiercache-core:pitest :tiercache-invalidation:pitest` — PIT mutation gate (≥75% kill score; core targets `io.tiercache.internal.*`, invalidation targets `io.tiercache.invalidation.*`). On demand only — deliberately NOT wired into `check`; belongs to CI/nightly.
 
+## CI (GitHub Actions)
+
+- `.github/workflows/ci.yml` — push to `main` and PRs. JDK matrix 17/21/25: the 17-leg runs the full `./gradlew build` (all tests, TCK, coverage gates); the 21/25 legs run a lean build (`-x :tiercache-tck:test`) plus `:tiercache-tck:vtStressTest`. TCK runs on the 17-leg only — it validates runtime behavior, not compiler compatibility, so tripling its wall time buys nothing.
+- `.github/workflows/nightly.yml` — scheduled (03:47 UTC) and manual (`workflow_dispatch`, `soakDuration` input for smoke runs). Jobs: `soak` (PT24H gate), `pitest` (≥75% gate), `jmh` (informational trend only, results uploaded as an artifact — hosted-runner CPU noise must never gate; the blocking benchmark gate stays local).
+- Blocking gates: build+tests+coverage (per push), soak, PIT (nightly). Informational: JMH. A red nightly does not block merges but must be investigated the same day.
+- To rerun nightly manually: `gh workflow run nightly.yml -f soakDuration=PT10M`.
+
 ## Module structure (target)
 
 | Module | Purpose | Dependency rules |

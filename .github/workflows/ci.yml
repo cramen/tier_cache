@@ -1,0 +1,49 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        jdk: ['17', '21', '25']
+    steps:
+      - uses: actions/checkout@v4
+
+      # The main sources compile against a Java 17 toolchain, so every leg
+      # needs JDK 17 installed next to the matrix JDK. The 21-leg relies on
+      # its primary JDK for the vtStress toolchain; the 25-leg gets JDK 21
+      # as an extra toolchain for the same purpose.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: |
+            ${{ matrix.jdk }}
+            21
+            17
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Build (full, including TCK and coverage gates)
+        if: matrix.jdk == '17'
+        run: ./gradlew build
+
+      - name: Build (lean, no TCK)
+        if: matrix.jdk != '17'
+        run: ./gradlew build -x :tiercache-tck:test
+
+      # The virtual-thread gate compiles/runs on a JDK 21+ toolchain; on the
+      # 17-leg no such toolchain is installed, so the task skips loudly by
+      # design.
+      - name: Virtual-thread stress gate
+        if: matrix.jdk != '17'
+        run: ./gradlew :tiercache-tck:vtStressTest
