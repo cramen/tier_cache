@@ -2,7 +2,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.BBHeader$ReadAndWriteCounterRef",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.BBHeader$ReadAndWriteCounterRef"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.BBHeader$ReadAndWriteCounterRef"
     },
     "fields": [
       {
@@ -13,7 +13,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.BBHeader$ReadCounterRef",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.BBHeader$ReadAndWriteCounterRef"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.BBHeader$ReadAndWriteCounterRef"
     },
     "fields": [
       {
@@ -24,7 +24,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.BLCHeader$DrainStatusRef",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.BLCHeader$DrainStatusRef"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.BLCHeader$DrainStatusRef"
     },
     "fields": [
       {
@@ -35,7 +35,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.BaseMpscLinkedArrayQueueColdProducerFields",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.BaseMpscLinkedArrayQueue"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.BaseMpscLinkedArrayQueue"
     },
     "fields": [
       {
@@ -46,7 +46,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.BaseMpscLinkedArrayQueueConsumerFields",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.BaseMpscLinkedArrayQueue"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.BaseMpscLinkedArrayQueue"
     },
     "fields": [
       {
@@ -57,7 +57,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.BaseMpscLinkedArrayQueueProducerFields",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.BaseMpscLinkedArrayQueue"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.BaseMpscLinkedArrayQueue"
     },
     "fields": [
       {
@@ -68,7 +68,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.BoundedLocalCache",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.BoundedLocalCache"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.BoundedLocalCache"
     },
     "fields": [
       {
@@ -79,7 +79,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.CacheLoader",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.Caffeine"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.Caffeine"
     },
     "methods": [
       {
@@ -100,7 +100,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.CacheLoader",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.LocalLoadingCache"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.LocalLoadingCache"
     },
     "methods": [
       {
@@ -114,7 +114,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.FS",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.FS"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.FS"
     },
     "fields": [
       {
@@ -128,7 +128,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.FS",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.WS"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.WS"
     },
     "methods": [
       {
@@ -140,7 +140,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.FW",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.FW"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.FW"
     },
     "fields": [
       {
@@ -151,7 +151,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.FW",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.WI"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.WI"
     },
     "methods": [
       {
@@ -163,7 +163,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.PD",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.NodeFactory"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.NodeFactory"
     },
     "fields": [
       {
@@ -180,7 +180,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.PD",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.PD"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.PD"
     },
     "fields": [
       {
@@ -191,7 +191,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.PS",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.PS"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.PS"
     },
     "fields": [
       {
@@ -205,7 +205,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.PSA",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.PSA"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.PSA"
     },
     "fields": [
       {
@@ -216,7 +216,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.PSA",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.SSA"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.SSA"
     },
     "methods": [
       {
@@ -228,7 +228,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.PSMS",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.SSSMS"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.SSSMS"
     },
     "methods": [
       {
@@ -240,7 +240,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.PSMW",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.SSMW"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.SSMW"
     },
     "methods": [
       {
@@ -252,7 +252,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.PSR",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.PSR"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.PSR"
     },
     "fields": [
       {
@@ -263,7 +263,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.PSRMS",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.SSMSR"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.SSMSR"
     },
     "methods": [
       {
@@ -275,7 +275,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.PSW",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.PSW"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.PSW"
     },
     "fields": [
       {
@@ -286,7 +286,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.PSW",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.SSA"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.SSA"
     },
     "methods": [
       {
@@ -298,7 +298,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.PSW",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.SSW"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.SSW"
     },
     "methods": [
       {
@@ -310,7 +310,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.PSWMS",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.NodeFactory"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.NodeFactory"
     },
     "methods": [
       {
@@ -322,7 +322,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.PSWMW",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.SSSMW"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.SSSMW"
     },
     "methods": [
       {
@@ -334,7 +334,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.PW",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.NodeFactory"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.NodeFactory"
     },
     "fields": [
       {
@@ -351,7 +351,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.PW",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.PW"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.PW"
     },
     "fields": [
       {
@@ -362,7 +362,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.SI",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.BoundedLocalCache$BoundedLocalManualCache"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.BoundedLocalCache$BoundedLocalManualCache"
     },
     "methods": [
       {
@@ -378,7 +378,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.SI",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.LocalCacheFactory"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.LocalCacheFactory"
     },
     "fields": [
       {
@@ -389,7 +389,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.SSA",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.BoundedLocalCache$BoundedLocalLoadingCache"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.BoundedLocalCache$BoundedLocalLoadingCache"
     },
     "methods": [
       {
@@ -405,7 +405,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.SSA",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.LocalCacheFactory"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.LocalCacheFactory"
     },
     "fields": [
       {
@@ -416,7 +416,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.SSMS",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.BoundedLocalCache$BoundedLocalLoadingCache"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.BoundedLocalCache$BoundedLocalLoadingCache"
     },
     "methods": [
       {
@@ -432,7 +432,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.SSMS",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.LocalCacheFactory"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.LocalCacheFactory"
     },
     "fields": [
       {
@@ -443,7 +443,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.SSMS",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.LocalCacheFactory$MethodHandleBasedFactory"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.LocalCacheFactory$MethodHandleBasedFactory"
     },
     "methods": [
       {
@@ -459,7 +459,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.SSMSR",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.BoundedLocalCache$BoundedLocalLoadingCache"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.BoundedLocalCache$BoundedLocalLoadingCache"
     },
     "methods": [
       {
@@ -475,7 +475,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.SSMSR",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.LocalCacheFactory"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.LocalCacheFactory"
     },
     "fields": [
       {
@@ -486,7 +486,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.SSMSW",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.BoundedLocalCache$BoundedLocalAsyncCache"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.BoundedLocalCache$BoundedLocalAsyncCache"
     },
     "methods": [
       {
@@ -502,7 +502,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.SSMSW",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.BoundedLocalCache$BoundedLocalAsyncLoadingCache"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.BoundedLocalCache$BoundedLocalAsyncLoadingCache"
     },
     "methods": [
       {
@@ -518,7 +518,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.SSMSW",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.BoundedLocalCache$BoundedLocalManualCache"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.BoundedLocalCache$BoundedLocalManualCache"
     },
     "methods": [
       {
@@ -534,7 +534,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.SSMSW",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.LocalCacheFactory"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.LocalCacheFactory"
     },
     "fields": [
       {
@@ -545,7 +545,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.SSMW",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.BoundedLocalCache$BoundedLocalLoadingCache"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.BoundedLocalCache$BoundedLocalLoadingCache"
     },
     "methods": [
       {
@@ -561,7 +561,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.SSMW",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.LocalCacheFactory"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.LocalCacheFactory"
     },
     "fields": [
       {
@@ -572,7 +572,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.SSSMS",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.BoundedLocalCache$BoundedLocalManualCache"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.BoundedLocalCache$BoundedLocalManualCache"
     },
     "methods": [
       {
@@ -588,7 +588,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.SSSMS",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.LocalCacheFactory"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.LocalCacheFactory"
     },
     "fields": [
       {
@@ -599,7 +599,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.SSSMSW",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.BoundedLocalCache$BoundedLocalManualCache"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.BoundedLocalCache$BoundedLocalManualCache"
     },
     "methods": [
       {
@@ -615,7 +615,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.SSSMSW",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.LocalCacheFactory"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.LocalCacheFactory"
     },
     "fields": [
       {
@@ -626,7 +626,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.SSSMWW",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.BoundedLocalCache$BoundedLocalLoadingCache"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.BoundedLocalCache$BoundedLocalLoadingCache"
     },
     "methods": [
       {
@@ -642,7 +642,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.SSSMWW",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.LocalCacheFactory"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.LocalCacheFactory"
     },
     "fields": [
       {
@@ -653,7 +653,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.SSW",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.BoundedLocalCache$BoundedLocalLoadingCache"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.BoundedLocalCache$BoundedLocalLoadingCache"
     },
     "methods": [
       {
@@ -669,7 +669,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.SSW",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.LocalCacheFactory"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.LocalCacheFactory"
     },
     "fields": [
       {
@@ -680,7 +680,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.StripedBuffer",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.StripedBuffer"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.StripedBuffer"
     },
     "fields": [
       {
@@ -691,7 +691,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.UnboundedLocalCache",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.UnboundedLocalCache"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.UnboundedLocalCache"
     },
     "fields": [
       {
@@ -702,7 +702,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.WI",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.BoundedLocalCache$BoundedLocalLoadingCache"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.BoundedLocalCache$BoundedLocalLoadingCache"
     },
     "methods": [
       {
@@ -718,7 +718,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.WI",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.LocalCacheFactory"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.LocalCacheFactory"
     },
     "fields": [
       {
@@ -729,7 +729,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.WS",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.BoundedLocalCache$BoundedLocalLoadingCache"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.BoundedLocalCache$BoundedLocalLoadingCache"
     },
     "methods": [
       {
@@ -745,7 +745,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.WS",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.Caffeine"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.Caffeine"
     },
     "methods": [
       {
@@ -761,7 +761,7 @@
   {
     "name": "io.tiercache.internal.caffeine.cache.WS",
     "condition": {
-      "typeReached": "io.tiercache.internal.caffeine.cache.LocalCacheFactory"
+      "typeReachable": "io.tiercache.internal.caffeine.cache.LocalCacheFactory"
     },
     "fields": [
       {
