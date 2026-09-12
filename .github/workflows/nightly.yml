@@ -72,9 +72,16 @@ jobs:
           - 6379:6379
     steps:
       - uses: actions/checkout@v4
+      # JDK 17 stays available for the compile toolchain; Gradle itself and
+      # the native compiler run on GraalVM 25 (the reachability metadata
+      # repository requires a newer GraalVM than the 17 line provides).
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
       - uses: graalvm/setup-graalvm@v1
         with:
-          java-version: '17'
+          java-version: '25'
           distribution: 'graalvm'
       - uses: gradle/actions/setup-gradle@v4
       - name: Native compile

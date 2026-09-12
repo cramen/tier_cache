@@ -13,6 +13,17 @@ java {
     }
 }
 
+graalvmNative {
+    // The GraalVM reachability metadata repository schema requires a newer
+    // GraalVM than the JDK 17 line ships; the native compiler runs on a
+    // GraalVM 25 toolchain while the sources keep compiling at release 17.
+    binaries.named("main") {
+        javaLauncher.set(javaToolchains.launcherFor {
+            languageVersion.set(JavaLanguageVersion.of(25))
+        })
+    }
+}
+
 dependencies {
     implementation(project(":tiercache-spring-boot-starter"))
     implementation("org.springframework.boot:spring-boot-starter-web")
