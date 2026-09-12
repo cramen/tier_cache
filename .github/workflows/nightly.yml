@@ -61,3 +61,48 @@ jobs:
           name: jmh-results
           path: tiercache-core/build/results/jmh/results.txt
           retention-days: 90
+
+  native-smoke:
+    runs-on: ubuntu-latest
+    services:
+      # The demo's application.yml already points at redis://localhost:6379.
+      redis:
+        image: redis:6.2-alpine
+        ports:
+          - 6379:6379
+    steps:
+      - uses: actions/checkout@v4
+      - uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: '17'
+          distribution: 'graalvm'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Native compile
+        run: ./gradlew :examples:demo-spring:nativeCompile
+      - name: Smoke suite (write, read, repeated read, evict)
+        run: |
+          BIN=examples/demo-spring/build/native/nativeCompile/demo-spring
+          "$BIN" > native-smoke.log 2>&1 &
+          APP_PID=$!
+          trap 'kill $APP_PID 2>/dev/null || true' EXIT
+          # Readiness: the cache endpoint answering at all (404 = up, key absent).
+          code=000
+          for i in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/cache/__ping__ || true)
+            [ "$code" = "404" ] && break
+            sleep 1
+          done
+          [ "$code" = "404" ] || { echo "app did not become ready (last status: $code)"; exit 1; }
+          curl -sf -X PUT -H 'Content-Type: text/plain' -d 'native-smoke-value' http://localhost:8080/cache/smoke
+          [ "$(curl -sf http://localhost:8080/cache/smoke)" = "native-smoke-value" ]
+          # Repeated read is served from L1.
+          [ "$(curl -sf http://localhost:8080/cache/smoke)" = "native-smoke-value" ]
+          curl -sf -X DELETE http://localhost:8080/cache/smoke
+          [ "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/cache/smoke)" = "404" ]
+          echo "native smoke OK"
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: native-smoke-log
+          path: native-smoke.log
+          retention-days: 30

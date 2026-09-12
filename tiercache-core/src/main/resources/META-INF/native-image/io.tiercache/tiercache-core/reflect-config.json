@@ -1,0 +1,772 @@
+[
+  {
+    "name": "io.tiercache.internal.caffeine.cache.BBHeader$ReadAndWriteCounterRef",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.BBHeader$ReadAndWriteCounterRef"
+    },
+    "fields": [
+      {
+        "name": "writeCounter"
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.BBHeader$ReadCounterRef",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.BBHeader$ReadAndWriteCounterRef"
+    },
+    "fields": [
+      {
+        "name": "readCounter"
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.BLCHeader$DrainStatusRef",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.BLCHeader$DrainStatusRef"
+    },
+    "fields": [
+      {
+        "name": "drainStatus"
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.BaseMpscLinkedArrayQueueColdProducerFields",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.BaseMpscLinkedArrayQueue"
+    },
+    "fields": [
+      {
+        "name": "producerLimit"
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.BaseMpscLinkedArrayQueueConsumerFields",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.BaseMpscLinkedArrayQueue"
+    },
+    "fields": [
+      {
+        "name": "consumerIndex"
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.BaseMpscLinkedArrayQueueProducerFields",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.BaseMpscLinkedArrayQueue"
+    },
+    "fields": [
+      {
+        "name": "producerIndex"
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.BoundedLocalCache",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.BoundedLocalCache"
+    },
+    "fields": [
+      {
+        "name": "refreshes"
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.CacheLoader",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.Caffeine"
+    },
+    "methods": [
+      {
+        "name": "asyncLoadAll",
+        "parameterTypes": [
+          "java.util.Set",
+          "java.util.concurrent.Executor"
+        ]
+      },
+      {
+        "name": "loadAll",
+        "parameterTypes": [
+          "java.util.Set"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.CacheLoader",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.LocalLoadingCache"
+    },
+    "methods": [
+      {
+        "name": "loadAll",
+        "parameterTypes": [
+          "java.util.Set"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.FS",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.FS"
+    },
+    "fields": [
+      {
+        "name": "key"
+      },
+      {
+        "name": "value"
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.FS",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.WS"
+    },
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.FW",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.FW"
+    },
+    "fields": [
+      {
+        "name": "value"
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.FW",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.WI"
+    },
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.PD",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.NodeFactory"
+    },
+    "fields": [
+      {
+        "name": "value"
+      }
+    ],
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.PD",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.PD"
+    },
+    "fields": [
+      {
+        "name": "value"
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.PS",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.PS"
+    },
+    "fields": [
+      {
+        "name": "key"
+      },
+      {
+        "name": "value"
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.PSA",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.PSA"
+    },
+    "fields": [
+      {
+        "name": "accessTime"
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.PSA",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.SSA"
+    },
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.PSMS",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.SSSMS"
+    },
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.PSMW",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.SSMW"
+    },
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.PSR",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.PSR"
+    },
+    "fields": [
+      {
+        "name": "writeTime"
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.PSRMS",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.SSMSR"
+    },
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.PSW",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.PSW"
+    },
+    "fields": [
+      {
+        "name": "writeTime"
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.PSW",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.SSA"
+    },
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.PSW",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.SSW"
+    },
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.PSWMS",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.NodeFactory"
+    },
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.PSWMW",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.SSSMW"
+    },
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.PW",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.NodeFactory"
+    },
+    "fields": [
+      {
+        "name": "value"
+      }
+    ],
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.PW",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.PW"
+    },
+    "fields": [
+      {
+        "name": "value"
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.SI",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.BoundedLocalCache$BoundedLocalManualCache"
+    },
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": [
+          "io.tiercache.internal.caffeine.cache.Caffeine",
+          "io.tiercache.internal.caffeine.cache.AsyncCacheLoader",
+          "boolean"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.SI",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.LocalCacheFactory"
+    },
+    "fields": [
+      {
+        "name": "FACTORY"
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.SSA",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.BoundedLocalCache$BoundedLocalLoadingCache"
+    },
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": [
+          "io.tiercache.internal.caffeine.cache.Caffeine",
+          "io.tiercache.internal.caffeine.cache.AsyncCacheLoader",
+          "boolean"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.SSA",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.LocalCacheFactory"
+    },
+    "fields": [
+      {
+        "name": "FACTORY"
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.SSMS",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.BoundedLocalCache$BoundedLocalLoadingCache"
+    },
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": [
+          "io.tiercache.internal.caffeine.cache.Caffeine",
+          "io.tiercache.internal.caffeine.cache.AsyncCacheLoader",
+          "boolean"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.SSMS",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.LocalCacheFactory"
+    },
+    "fields": [
+      {
+        "name": "FACTORY"
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.SSMS",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.LocalCacheFactory$MethodHandleBasedFactory"
+    },
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": [
+          "io.tiercache.internal.caffeine.cache.Caffeine",
+          "io.tiercache.internal.caffeine.cache.AsyncCacheLoader",
+          "boolean"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.SSMSR",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.BoundedLocalCache$BoundedLocalLoadingCache"
+    },
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": [
+          "io.tiercache.internal.caffeine.cache.Caffeine",
+          "io.tiercache.internal.caffeine.cache.AsyncCacheLoader",
+          "boolean"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.SSMSR",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.LocalCacheFactory"
+    },
+    "fields": [
+      {
+        "name": "FACTORY"
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.SSMSW",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.BoundedLocalCache$BoundedLocalAsyncCache"
+    },
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": [
+          "io.tiercache.internal.caffeine.cache.Caffeine",
+          "io.tiercache.internal.caffeine.cache.AsyncCacheLoader",
+          "boolean"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.SSMSW",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.BoundedLocalCache$BoundedLocalAsyncLoadingCache"
+    },
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": [
+          "io.tiercache.internal.caffeine.cache.Caffeine",
+          "io.tiercache.internal.caffeine.cache.AsyncCacheLoader",
+          "boolean"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.SSMSW",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.BoundedLocalCache$BoundedLocalManualCache"
+    },
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": [
+          "io.tiercache.internal.caffeine.cache.Caffeine",
+          "io.tiercache.internal.caffeine.cache.AsyncCacheLoader",
+          "boolean"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.SSMSW",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.LocalCacheFactory"
+    },
+    "fields": [
+      {
+        "name": "FACTORY"
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.SSMW",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.BoundedLocalCache$BoundedLocalLoadingCache"
+    },
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": [
+          "io.tiercache.internal.caffeine.cache.Caffeine",
+          "io.tiercache.internal.caffeine.cache.AsyncCacheLoader",
+          "boolean"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.SSMW",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.LocalCacheFactory"
+    },
+    "fields": [
+      {
+        "name": "FACTORY"
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.SSSMS",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.BoundedLocalCache$BoundedLocalManualCache"
+    },
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": [
+          "io.tiercache.internal.caffeine.cache.Caffeine",
+          "io.tiercache.internal.caffeine.cache.AsyncCacheLoader",
+          "boolean"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.SSSMS",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.LocalCacheFactory"
+    },
+    "fields": [
+      {
+        "name": "FACTORY"
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.SSSMSW",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.BoundedLocalCache$BoundedLocalManualCache"
+    },
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": [
+          "io.tiercache.internal.caffeine.cache.Caffeine",
+          "io.tiercache.internal.caffeine.cache.AsyncCacheLoader",
+          "boolean"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.SSSMSW",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.LocalCacheFactory"
+    },
+    "fields": [
+      {
+        "name": "FACTORY"
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.SSSMWW",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.BoundedLocalCache$BoundedLocalLoadingCache"
+    },
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": [
+          "io.tiercache.internal.caffeine.cache.Caffeine",
+          "io.tiercache.internal.caffeine.cache.AsyncCacheLoader",
+          "boolean"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.SSSMWW",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.LocalCacheFactory"
+    },
+    "fields": [
+      {
+        "name": "FACTORY"
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.SSW",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.BoundedLocalCache$BoundedLocalLoadingCache"
+    },
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": [
+          "io.tiercache.internal.caffeine.cache.Caffeine",
+          "io.tiercache.internal.caffeine.cache.AsyncCacheLoader",
+          "boolean"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.SSW",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.LocalCacheFactory"
+    },
+    "fields": [
+      {
+        "name": "FACTORY"
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.StripedBuffer",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.StripedBuffer"
+    },
+    "fields": [
+      {
+        "name": "tableBusy"
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.UnboundedLocalCache",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.UnboundedLocalCache"
+    },
+    "fields": [
+      {
+        "name": "refreshes"
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.WI",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.BoundedLocalCache$BoundedLocalLoadingCache"
+    },
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": [
+          "io.tiercache.internal.caffeine.cache.Caffeine",
+          "io.tiercache.internal.caffeine.cache.AsyncCacheLoader",
+          "boolean"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.WI",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.LocalCacheFactory"
+    },
+    "fields": [
+      {
+        "name": "FACTORY"
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.WS",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.BoundedLocalCache$BoundedLocalLoadingCache"
+    },
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": [
+          "io.tiercache.internal.caffeine.cache.Caffeine",
+          "io.tiercache.internal.caffeine.cache.AsyncCacheLoader",
+          "boolean"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.WS",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.Caffeine"
+    },
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": [
+          "io.tiercache.internal.caffeine.cache.Caffeine",
+          "io.tiercache.internal.caffeine.cache.AsyncCacheLoader",
+          "boolean"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "io.tiercache.internal.caffeine.cache.WS",
+    "condition": {
+      "typeReached": "io.tiercache.internal.caffeine.cache.LocalCacheFactory"
+    },
+    "fields": [
+      {
+        "name": "FACTORY"
+      }
+    ]
+  }
+]

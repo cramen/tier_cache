@@ -2,6 +2,9 @@ plugins {
     `java-library`
     alias(libs.plugins.spring.boot)
     alias(libs.plugins.spring.dependency.management)
+    // Adds nativeCompile/nativeRun only; `build`/`check` are unaffected.
+    // The main class is inherited from the Spring Boot plugin.
+    alias(libs.plugins.graalvm.native)
 }
 
 java {
