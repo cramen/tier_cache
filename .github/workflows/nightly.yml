@@ -85,7 +85,7 @@ jobs:
           distribution: 'graalvm'
       - uses: gradle/actions/setup-gradle@v4
       - name: Native compile
-        run: ./gradlew :examples:demo-spring:nativeCompile
+        run: ./gradlew :examples:demo-spring:nativeCompile --info
       - name: Smoke suite (write, read, repeated read, evict)
         run: |
           BIN=examples/demo-spring/build/native/nativeCompile/demo-spring
