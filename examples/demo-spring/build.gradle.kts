@@ -14,6 +14,15 @@ java {
 }
 
 graalvmNative {
+    // The reachability metadata repository must stay disabled here: its
+    // netty entries are marked override=true and target the 4.1 line, which
+    // silently replaces the version-matched metadata shipped inside the
+    // Netty 4.2 jars (Lettuce 7 requires Netty 4.2) and breaks the native
+    // build at runtime. In-jar metadata (Netty, Lettuce, this project) is
+    // the correct source for this application.
+    metadataRepository {
+        enabled.set(false)
+    }
     // The GraalVM reachability metadata repository schema requires a newer
     // GraalVM than the JDK 17 line ships; the native compiler runs on a
     // GraalVM 25 toolchain while the sources keep compiling at release 17.
