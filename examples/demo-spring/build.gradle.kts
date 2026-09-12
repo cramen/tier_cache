@@ -18,9 +18,11 @@ graalvmNative {
     // GraalVM than the JDK 17 line ships; the native compiler runs on a
     // GraalVM 25 toolchain while the sources keep compiling at release 17.
     binaries.named("main") {
-        // Without the `application` plugin the main class is not inferred
-        // reliably and native-image silently builds a shared library
-        // instead of an executable; set it explicitly.
+        // Without the `application` plugin the Native Build Tools default
+        // `sharedLibrary` to true, silently producing demo-spring.so instead
+        // of an executable; force the executable and set the main class
+        // explicitly.
+        sharedLibrary.set(false)
         mainClass.set("io.tiercache.demo.DemoApplication")
         javaLauncher.set(javaToolchains.launcherFor {
             languageVersion.set(JavaLanguageVersion.of(25))
