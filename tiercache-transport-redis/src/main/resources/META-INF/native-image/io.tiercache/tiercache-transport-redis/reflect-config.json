@@ -84,6 +84,14 @@
     ]
   },
   {
+    "name": "io.netty.buffer.AbstractByteBufAllocator",
+    "queryAllDeclaredMethods": true,
+    "methods": [
+      { "name": "toLeakAwareBuffer", "parameterTypes": ["io.netty.buffer.ByteBuf"] },
+      { "name": "toLeakAwareBuffer", "parameterTypes": ["io.netty.buffer.CompositeByteBuf"] }
+    ]
+  },
+  {
     "name": "sun.misc.Unsafe",
     "fields": [
       { "name": "theUnsafe" }
