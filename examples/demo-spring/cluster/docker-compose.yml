@@ -6,26 +6,23 @@ services:
     ports:
       - "6380:6379"
 
-  app1: &app
+  app:
     build:
       context: ..
       dockerfile: cluster/Dockerfile
     environment:
       TIERCACHE_REDIS_URI: redis://redis:6379
-    ports:
-      - "8081:8080"
+    # Short TTLs for the load test: L1 expires every 10s, L2 every 60s,
+    # so a multi-minute run exercises many expiry cycles at both levels.
+    # The greetings cache has explicit overrides in application.yml, so it
+    # must be overridden per cache (command line wins over the yml).
+    command:
+      - "--tiercache.defaults.l1-expire-after-write=10s"
+      - "--tiercache.defaults.l2-ttl=60s"
+      - "--tiercache.caches.greetings.l1-expire-after-write=10s"
+      - "--tiercache.caches.greetings.l2-ttl=60s"
     depends_on:
       - redis
-
-  app2:
-    <<: *app
-    ports:
-      - "8082:8080"
-
-  app3:
-    <<: *app
-    ports:
-      - "8083:8080"
 
   balancer:
     image: nginx:alpine
@@ -34,6 +31,4 @@ services:
     ports:
       - "8080:8080"
     depends_on:
-      - app1
-      - app2
-      - app3
+      - app
