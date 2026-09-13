@@ -1,6 +1,9 @@
 plugins {
     `java-library`
-    kotlin("jvm") version "2.2.21"
+    // Version comes from the root plugins block (shared classloader with the
+    // publishing plugin).
+    kotlin("jvm")
+    alias(libs.plugins.vanniktech.publish)
 }
 
 java {
@@ -29,4 +32,16 @@ dependencies {
 
 tasks.withType<Test> {
     useJUnitPlatform()
+}
+
+// --- Publishing (release automation): shared Central Portal target, license,
+// and scm metadata come from the root build script.
+mavenPublishing {
+    pom {
+        name.set("tiercache-kotlin")
+        description.set(
+            "Kotlin coroutines API for the Tiercache two-level cache:" +
+                " suspend facade, invalidation Flow, config DSL"
+        )
+    }
 }

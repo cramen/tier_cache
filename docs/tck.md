@@ -6,7 +6,7 @@ promises. The suite classes live in the module's test source set; they ship as
 a dedicated jar with the `tests` classifier:
 
 ```
-io.tiercache:tiercache-tck:<version>:tests
+io.github.cramen:tiercache-tck:<version>:tests
 ```
 
 The plain `tiercache-tck-<version>.jar` contains only the harness helper
@@ -15,16 +15,15 @@ artifact is self-contained at the class level. The JMH benchmark
 (`jmhBenchmark`) and virtual-thread stress (`vtStressTest`) source sets are not
 part of this artifact.
 
-No module in this build publishes a pom, so the `tests` jar carries no
-transitive dependency metadata. A consumer build must add the suite's runtime
-dependencies explicitly (versions as used by the matching TierCache release):
+The suite's runtime dependencies (versions as used by the matching TierCache
+release) a consumer build must add:
 
-- `io.tiercache:tiercache-core` (with its test-fixtures jar:
-  `testFixtures("io.tiercache:tiercache-core:<version>")` — the suite uses the
-  `io.tiercache.testkit` in-memory SPI doubles)
-- `io.tiercache:tiercache-invalidation`
-- `io.tiercache:tiercache-transport-redis`
-- `io.tiercache:tiercache-micrometer`
+- `io.github.cramen:tiercache-core` (with its test-fixtures jar:
+  `testFixtures("io.github.cramen:tiercache-core:<version>")` — the suite uses
+  the `io.tiercache.testkit` in-memory SPI doubles)
+- `io.github.cramen:tiercache-invalidation`
+- `io.github.cramen:tiercache-transport-redis`
+- `io.github.cramen:tiercache-micrometer`
 - `io.micrometer:micrometer-core`
 - JUnit Jupiter (`org.junit.jupiter:junit-jupiter`) and the JUnit Platform
   launcher at runtime
@@ -35,11 +34,11 @@ Gradle consumer example:
 
 ```kotlin
 dependencies {
-    testImplementation("io.tiercache:tiercache-tck:<version>:tests")
-    testImplementation(testFixtures("io.tiercache:tiercache-core:<version>"))
-    testImplementation("io.tiercache:tiercache-invalidation:<version>")
-    testImplementation("io.tiercache:tiercache-transport-redis:<version>")
-    testImplementation("io.tiercache:tiercache-micrometer:<version>")
+    testImplementation("io.github.cramen:tiercache-tck:<version>:tests")
+    testImplementation(testFixtures("io.github.cramen:tiercache-core:<version>"))
+    testImplementation("io.github.cramen:tiercache-invalidation:<version>")
+    testImplementation("io.github.cramen:tiercache-transport-redis:<version>")
+    testImplementation("io.github.cramen:tiercache-micrometer:<version>")
     testImplementation("io.micrometer:micrometer-core:<version>")
     testImplementation(platform("org.junit:junit-bom:<version>"))
     testImplementation("org.junit.jupiter:junit-jupiter")

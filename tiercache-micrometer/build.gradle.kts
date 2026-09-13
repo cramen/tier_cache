@@ -1,5 +1,6 @@
 plugins {
     `java-library`
+    alias(libs.plugins.vanniktech.publish)
 }
 
 java {
@@ -23,4 +24,16 @@ dependencies {
 
 tasks.withType<Test> {
     useJUnitPlatform()
+}
+
+// --- Publishing (release automation): shared Central Portal target, license,
+// and scm metadata come from the root build script.
+mavenPublishing {
+    pom {
+        name.set("tiercache-micrometer")
+        description.set(
+            "Micrometer metrics, OpenTelemetry tracing and JMX inspection" +
+                " for the Tiercache two-level cache"
+        )
+    }
 }

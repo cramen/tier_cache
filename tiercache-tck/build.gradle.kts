@@ -1,6 +1,8 @@
 plugins {
     `java-library`
+    `maven-publish`
     alias(libs.plugins.jmh)
+    alias(libs.plugins.vanniktech.publish)
 }
 
 java {
@@ -130,9 +132,7 @@ tasks.register<Test>("soakTest") {
 // not packaged by the default `jar`. Ship it as a dedicated jar with a
 // `tests` classifier; the main output is included because the suite uses
 // StampedeHarness from it. The `benchmark` and `vtStress` source sets stay
-// out of this artifact. No module in this build configures maven-publish, so
-// there is no pom metadata to mirror; group/version come from the root
-// subprojects block like every other module.
+// out of this artifact.
 val tckTestsJar = tasks.register<Jar>("tckTestsJar") {
     description = "Compliance-suite classes (chaos TCK) for consumer runs."
     group = "build"
@@ -144,6 +144,28 @@ val tckTestsJar = tasks.register<Jar>("tckTestsJar") {
 
 tasks.named("assemble") {
     dependsOn(tckTestsJar)
+}
+
+// --- Publishing (release automation): the module publishes like the library
+// modules (shared Central Portal target, license, and scm metadata come from
+// the root build script), with the compliance-suite jar attached to the same
+// publication under its `tests` classifier.
+mavenPublishing {
+    pom {
+        name.set("tiercache-tck")
+        description.set(
+            "Public chaos-test compliance suite (TCK) and benchmarks" +
+                " for the Tiercache two-level cache"
+        )
+    }
+}
+
+publishing {
+    // The publication is registered by the publishing plugin in afterEvaluate,
+    // so match lazily by type instead of looking it up by name.
+    publications.withType<MavenPublication>().configureEach {
+        artifact(tckTestsJar)
+    }
 }
 
 // The plugin's own `jmh` task would run an empty fork: this module's JMH

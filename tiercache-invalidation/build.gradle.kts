@@ -1,6 +1,7 @@
 plugins {
     `java-library`
     alias(libs.plugins.pitest)
+    alias(libs.plugins.vanniktech.publish)
 }
 
 java {
@@ -35,4 +36,16 @@ pitest {
     // artifact and is regenerated when absent.
     historyInputLocation.set(layout.buildDirectory.file("pitest/history.bin"))
     historyOutputLocation.set(layout.buildDirectory.file("pitest/history.bin"))
+}
+
+// --- Publishing (release automation): shared Central Portal target, license,
+// and scm metadata come from the root build script.
+mavenPublishing {
+    pom {
+        name.set("tiercache-invalidation")
+        description.set(
+            "Invalidation protocol for the Tiercache two-level cache:" +
+                " versioned messages, bounded journal, replay, last-write-wins"
+        )
+    }
 }

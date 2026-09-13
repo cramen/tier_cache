@@ -11,13 +11,13 @@ Tiercache starter:
 
 ```kotlin
 // Gradle (Kotlin DSL)
-implementation("io.tiercache:tiercache-spring-boot-starter:<version>")
+implementation("io.github.cramen:tiercache-spring-boot-starter:<version>")
 ```
 
 ```xml
 <!-- Maven -->
 <dependency>
-    <groupId>io.tiercache</groupId>
+    <groupId>io.github.cramen</groupId>
     <artifactId>tiercache-spring-boot-starter</artifactId>
     <version>&lt;version&gt;</version>
 </dependency>

@@ -1,10 +1,12 @@
 plugins {
     `java-library`
     `java-test-fixtures`
+    `maven-publish`
     jacoco
     alias(libs.plugins.shadow)
     alias(libs.plugins.jmh)
     alias(libs.plugins.pitest)
+    alias(libs.plugins.vanniktech.publish)
 }
 
 java {
@@ -52,6 +54,44 @@ tasks.shadowJar {
 // test/test-fixtures classpath resolution needs the main output.
 tasks.jar {
     archiveClassifier.set("unshaded")
+}
+
+// --- Publishing (release automation): the shaded jar is the published main
+// artifact; the unshaded jar ships alongside with its `unshaded` classifier,
+// matching the jar layout above. Caffeine is relocated into the shaded jar,
+// so the published POM must not declare it: consumers get Caffeine inside the
+// jar, not from Central. (The dependency audit below asserts the same about
+// the external runtime classpath.)
+mavenPublishing {
+    pom {
+        name.set("tiercache-core")
+        description.set(
+            "Two-level JVM cache core: L1 in-process (Caffeine, shaded) + L2 Redis/Valkey" +
+                " cascade, singleflight, cluster-wide rebuild coordination, circuit breaker"
+        )
+    }
+}
+
+publishing {
+    // The publication is registered by the publishing plugin in afterEvaluate,
+    // so match lazily by type instead of looking it up by name. The java
+    // component already contributes the shaded jar as the main artifact plus
+    // the unshaded jar under its classifier (Shadow plugin integration), so
+    // only the POM needs fixing here.
+    publications.withType<MavenPublication>().configureEach {
+        pom.withXml {
+            val dependencies = asNode().children()
+                .filterIsInstance<groovy.util.Node>()
+                .firstOrNull { it.name().toString().endsWith("dependencies") }
+                ?: return@withXml
+            dependencies.children().removeIf { dependency ->
+                dependency is groovy.util.Node && dependency.children().any { child ->
+                    child is groovy.util.Node &&
+                        child.name().toString().endsWith("artifactId") && child.text() == "caffeine"
+                }
+            }
+        }
+    }
 }
 
 // --- Dependency audit (task 1.4): the runtime classpath may expose only

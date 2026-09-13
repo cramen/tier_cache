@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 First milestone: the complete two-level cache stack — core engine, Redis transport, invalidation protocol, degradation handling, observability, Kotlin and Spring Boot integrations, GraalVM support, and the quality-gate infrastructure.
 
+Published to Maven Central under the `io.github.cramen` group ID (Java packages remain `io.tiercache`).
+
 ### Added
 
 #### Core two-level cache

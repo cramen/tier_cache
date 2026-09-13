@@ -24,7 +24,7 @@ Status: 0.x, incubating API (may change before 1.0). The cache is eventually con
 
 ```kotlin
 // build.gradle.kts
-implementation("io.tiercache:tiercache-spring-boot-starter:0.1.0-SNAPSHOT")
+implementation("io.github.cramen:tiercache-spring-boot-starter:0.1.0-SNAPSHOT")
 ```
 
 ```yaml
@@ -40,8 +40,8 @@ The starter replaces the standard cache manager: `@Cacheable` / `@CachePut` / `@
 
 ```kotlin
 // build.gradle.kts
-implementation("io.tiercache:tiercache-core:0.1.0-SNAPSHOT")
-implementation("io.tiercache:tiercache-transport-redis:0.1.0-SNAPSHOT")
+implementation("io.github.cramen:tiercache-core:0.1.0-SNAPSHOT")
+implementation("io.github.cramen:tiercache-transport-redis:0.1.0-SNAPSHOT")
 ```
 
 ```java

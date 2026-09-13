@@ -1,5 +1,6 @@
 plugins {
     `java-library`
+    alias(libs.plugins.vanniktech.publish)
 }
 
 java {
@@ -33,4 +34,16 @@ tasks.withType<Test> {
 // Spring SpEL (`#id`) in annotations needs parameter names at runtime.
 tasks.withType<JavaCompile> {
     options.compilerArgs.add("-parameters")
+}
+
+// --- Publishing (release automation): shared Central Portal target, license,
+// and scm metadata come from the root build script.
+mavenPublishing {
+    pom {
+        name.set("tiercache-spring-boot-starter")
+        description.set(
+            "Spring Boot starter for the Tiercache two-level cache:" +
+                " auto-configuration and Spring Cache SPI adapters"
+        )
+    }
 }

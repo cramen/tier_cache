@@ -11,7 +11,7 @@ Grafana dashboard and Prometheus alert rules ship in `docs/grafana/`.
 Core emits semantic events through the `io.tiercache.spi.CacheMetricsListener`
 SPI (`NOOP` by default, zero cost). To bind them to a registry:
 
-- **Spring Boot:** add `io.tiercache:tiercache-micrometer` to your
+- **Spring Boot:** add `io.github.cramen:tiercache-micrometer` to your
   dependencies. When a Micrometer `MeterRegistry` bean exists (for example
   via Spring Boot Actuator), the starter wires `MicrometerCacheMetrics`
   automatically; `tiercache.metrics.enabled=false` opts out, and a custom
