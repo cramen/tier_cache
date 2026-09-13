@@ -7,9 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-13
+
+Second release: multi-instance hardening. Two significant defects found and fixed by Docker cluster testing behind a load balancer (3-8 application instances + Redis + nginx), plus per-cache L2 isolation.
+
+### Added
+
+- `TierCacheFactory.Builder.remoteCacheFactory(...)`: provide the L2 per cache name (memoized) for full key-space isolation between named caches.
+- TCK: two-instance per-cache isolation suite over real Redis and Valkey (same key in two caches is independent data; per-cache `evict`/`evictAll` is cache-scoped).
+- `examples/demo-spring/cluster/`: multi-instance test harness (Dockerfile, nginx balancer, compose, load driver) used for the cluster verification.
+
 ### Fixed
 
-- The Spring Boot starter created the shared Redis client with Lettuce defaults (60 s command timeout), so an L2 outage hung business requests instead of tripping the circuit breaker; the client now carries the documented fast timeouts (100 ms connect, 250 ms command). Found by a multi-instance Docker cluster test behind a load balancer.
+- The Spring Boot starter created the shared Redis client with Lettuce defaults (60 s command timeout), so an L2 outage hung business requests instead of tripping the circuit breaker; the client now carries the documented fast timeouts (100 ms connect, 250 ms command). Found by the cluster test.
 
 ### Changed
 
