@@ -47,3 +47,51 @@ jobs:
       - name: Virtual-thread stress gate
         if: matrix.jdk != '17'
         run: ./gradlew :tiercache-tck:vtStressTest
+
+      # SBOM (supply-chain design D1): per-module CycloneDX SBOMs plus the
+      # whole-repo aggregate, collected into one flat artifact. Main/PR builds
+      # suffice; release automation will attach SBOMs to releases later.
+      - name: SBOM (CycloneDX, all modules)
+        if: matrix.jdk == '17'
+        run: |
+          ./gradlew cyclonedxBom
+          mkdir -p build/sbom
+          find . -path '*/build/reports/cyclonedx/*-sbom.json' -exec cp {} build/sbom/ \;
+
+      - uses: actions/upload-artifact@v4
+        if: matrix.jdk == '17'
+        with:
+          name: sbom
+          path: build/sbom/
+          if-no-files-found: error
+          retention-days: 90
+
+  # Offline delivery proof (supply-chain design D5): step 1 primes the Gradle
+  # dependency cache with the exact task set of step 2, so compilation, test
+  # fixtures, and every non-Docker test resolve their classpaths while the
+  # network is still available; step 2 repeats it with --offline and must not
+  # touch the network. Docker-dependent tasks (TCK, transport contract tests,
+  # demo smoke test) are excluded in BOTH steps: container image pulls are
+  # outside the scope of an "offline artifact build", which concerns Gradle
+  # dependency resolution only.
+  offline-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: |
+            21
+            17
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Prime the Gradle dependency cache
+        run: ./gradlew build -x :tiercache-tck:test -x :tiercache-transport-redis:test -x :examples:demo-spring:test
+
+      - name: Offline build
+        run: |
+          ./gradlew build --offline -x :tiercache-tck:test -x :tiercache-transport-redis:test -x :examples:demo-spring:test
+          ./gradlew :tiercache-core:shadowJar --offline

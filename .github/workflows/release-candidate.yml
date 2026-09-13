@@ -1,0 +1,85 @@
+name: release-candidate
+
+# Manual trigger only: builds the publishable module jars, signs them with
+# Sigstore keyless (GitHub Actions OIDC identity, no stored keys), and creates
+# GitHub Artifact Attestations (SLSA-style build provenance).
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+jobs:
+  build-sign-attest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+
+      # Tests are covered by ci.yml; this workflow only assembles the
+      # publishable artifact set. shadowJar is listed explicitly because the
+      # shaded jar is the main core artifact (the plain jar keeps the
+      # `unshaded` classifier).
+      - name: Build module jars
+        run: ./gradlew build -x test :tiercache-core:shadowJar
+
+      # Publishable set: the six library module jars (core shaded + unshaded),
+      # excluding jmh/test-fixtures jars, the TCK, and the demo app.
+      - name: Stage artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp tiercache-core/build/libs/tiercache-core-*.jar dist/
+          rm -f dist/*-jmh.jar dist/*-test-fixtures.jar
+          for module in tiercache-invalidation tiercache-transport-redis tiercache-spring-boot-starter tiercache-micrometer tiercache-kotlin; do
+            cp "$module/build/libs/$module"-*.jar dist/
+          done
+          ls -l dist/
+
+      # SLSA-style build provenance as GitHub Artifact Attestations.
+      - uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: 'dist/*.jar'
+
+      - uses: sigstore/cosign-installer@v4
+
+      # Keyless signing via the runner's OIDC identity. Cosign v3 requires
+      # --bundle: each jar gets a <jar>.sigstore.json bundle holding the
+      # signature, certificate, and transparency-log proof.
+      - name: Sign jars (cosign keyless)
+        run: |
+          set -euo pipefail
+          cd dist
+          for jar in *.jar; do
+            cosign sign-blob --yes --bundle "$jar.sigstore.json" "$jar"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-candidate
+          path: dist/
+          retention-days: 90
+
+      - name: Print verification commands
+        run: |
+          cat <<EOF
+          Artifacts: download the 'release-candidate' artifact from this run (jars + .sigstore.json bundles).
+
+          Verify a jar's signature (keyless, bound to this workflow's OIDC identity):
+
+            cosign verify-blob \\
+              --bundle <jar>.sigstore.json \\
+              --certificate-identity-regexp '^https://github.com/${{ github.repository }}/\\.github/workflows/release-candidate\\.yml@.*' \\
+              --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \\
+              <jar>
+
+          Verify a jar's build provenance (GitHub Artifact Attestations):
+
+            gh attestation verify <jar> --repo ${{ github.repository }}
+          EOF

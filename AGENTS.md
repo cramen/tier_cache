@@ -42,9 +42,11 @@ Gradle (Kotlin DSL) multi-module build, Java 17 toolchain. Modules present: `tie
 
 ## CI (GitHub Actions)
 
-- `.github/workflows/ci.yml` — push to `main` and PRs. JDK matrix 17/21/25: the 17-leg runs the full `./gradlew build` (all tests, TCK, coverage gates); the 21/25 legs run a lean build (`-x :tiercache-tck:test`) plus `:tiercache-tck:vtStressTest`. TCK runs on the 17-leg only — it validates runtime behavior, not compiler compatibility, so tripling its wall time buys nothing.
-- `.github/workflows/nightly.yml` — scheduled (03:47 UTC) and manual (`workflow_dispatch`, `soakDuration` input for smoke runs). Jobs: `soak` (PT24H gate), `pitest` (≥75% gate), `jmh` (informational trend only, results uploaded as an artifact — hosted-runner CPU noise must never gate; the blocking benchmark gate stays local).
-- Blocking gates: build+tests+coverage (per push), soak, PIT (nightly). Informational: JMH. A red nightly does not block merges but must be investigated the same day.
+- `.github/workflows/ci.yml` — push to `main` and PRs. JDK matrix 17/21/25: the 17-leg runs the full `./gradlew build` (all tests, TCK, coverage gates); the 21/25 legs run a lean build (`-x :tiercache-tck:test`) plus `:tiercache-tck:vtStressTest`. TCK runs on the 17-leg only — it validates runtime behavior, not compiler compatibility, so tripling its wall time buys nothing. The 17-leg also publishes the CycloneDX `sbom` artifact. The `offline-build` job proves `build --offline` works on a primed cache (Docker tasks excluded — image pulls are outside the offline artifact-build scope).
+- `.github/workflows/nightly.yml` — scheduled (03:47 UTC) and manual (`workflow_dispatch`, `soakDuration` input for smoke runs). Jobs: `soak` (PT24H gate), `pitest` (≥75% gate), `reproducible-build` (core shaded jar must be byte-identical across two independent checkouts), `cve-scan` (Trivy HIGH+CRITICAL, non-blocking report), `native-smoke`, `benchmarks`, `jmh` (informational; hosted-runner numbers never gate).
+- `.github/workflows/release-candidate.yml` — manual dispatch: builds the six module jars, creates SLSA build provenance (`actions/attest-build-provenance`) and Sigstore keyless signatures (`cosign sign-blob`, `.sigstore.json` bundles). Verification commands are printed by the workflow and mirrored in SECURITY.md.
+- Blocking gates: build+tests+coverage (per push), soak, PIT, reproducible-build (nightly). Informational: JMH, benchmarks, CVE scan. A red nightly does not block merges but must be investigated the same day.
+- Dependency hygiene: Dependabot runs weekly for Gradle and GitHub Actions (grouped minor/patch PRs).
 - To rerun nightly manually: `gh workflow run nightly.yml -f soakDuration=PT10M`.
 
 ## GraalVM Native Image support

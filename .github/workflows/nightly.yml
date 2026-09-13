@@ -84,6 +84,68 @@ jobs:
           path: tiercache-tck/build/results/
           retention-days: 90
 
+  # Reproducible build (supply-chain design D3): two independent checkouts of
+  # the same commit must produce byte-identical shaded jars. setup-gradle
+  # caching may share state between the two builds; that is fine - the gate
+  # checks source/ordering determinism, not cache isolation.
+  reproducible-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: build-a
+      - uses: actions/checkout@v4
+        with:
+          path: build-b
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Build A
+        run: ./gradlew :tiercache-core:shadowJar --no-build-cache
+        working-directory: build-a
+      - name: Build B
+        run: ./gradlew :tiercache-core:shadowJar --no-build-cache
+        working-directory: build-b
+      - name: Compare SHA-256
+        run: |
+          JAR_A=$(ls build-a/tiercache-core/build/libs/tiercache-core-*.jar | grep -v unshaded)
+          JAR_B=$(ls build-b/tiercache-core/build/libs/tiercache-core-*.jar | grep -v unshaded)
+          HASH_A=$(sha256sum "$JAR_A" | cut -d' ' -f1)
+          HASH_B=$(sha256sum "$JAR_B" | cut -d' ' -f1)
+          echo "A: $HASH_A $(stat -c%s "$JAR_A") bytes"
+          echo "B: $HASH_B $(stat -c%s "$JAR_B") bytes"
+          if [ "$HASH_A" != "$HASH_B" ]; then
+            echo "::error::Shaded jars differ - the build is not reproducible"
+            diff <(unzip -l "$JAR_A") <(unzip -l "$JAR_B") || true
+            exit 1
+          fi
+          echo "reproducible build OK: $HASH_A"
+
+  # CVE scan (supply-chain design D4): daily Trivy filesystem scan.
+  # Non-blocking by design (exit-code 0) - release gating comes later.
+  cve-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Trivy filesystem scan (HIGH,CRITICAL)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          format: table
+          output: trivy-report.txt
+          exit-code: '0'
+      - name: Append report to job summary
+        run: cat trivy-report.txt >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: trivy-report
+          path: trivy-report.txt
+          retention-days: 90
+
   native-smoke:
     runs-on: ubuntu-latest
     services:

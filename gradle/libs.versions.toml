@@ -26,6 +26,7 @@ testcontainers = { module = "org.testcontainers:testcontainers", version.ref = "
 testcontainers-junit-jupiter = { module = "org.testcontainers:junit-jupiter", version.ref = "testcontainers" }
 
 [plugins]
+cyclonedx = { id = "org.cyclonedx.bom", version = "3.4.1" }
 shadow = { id = "com.gradleup.shadow", version = "9.6.1" }
 pitest = { id = "info.solidsoft.pitest", version = "1.19.0" }
 jmh = { id = "me.champeau.jmh", version = "0.7.3" }
