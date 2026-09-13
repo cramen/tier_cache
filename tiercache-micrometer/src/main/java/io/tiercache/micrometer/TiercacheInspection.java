@@ -10,6 +10,7 @@ import javax.management.MBeanServer;
 import javax.management.ObjectName;
 import java.lang.management.ManagementFactory;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * JMX registration for {@link TiercacheInspectionMXBean}. One instance per
@@ -69,7 +70,7 @@ public final class TiercacheInspection implements TiercacheInspectionMXBean, Aut
 
     @Override
     public String getBreakerState() {
-        return factory.isDegraded() ? "open" : "closed";
+        return factory.breakerState().name().toLowerCase(Locale.ROOT);
     }
 
     @Override

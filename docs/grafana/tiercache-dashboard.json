@@ -53,10 +53,10 @@
     },
     {
       "id": 7,
-      "title": "Max entry age (ms)",
+      "title": "Last load age (ms)",
       "type": "timeseries",
       "targets": [
-        {"expr": "tiercache_entry_age_max", "legendFormat": "{{cache}}"}
+        {"expr": "tiercache_last_load_age", "legendFormat": "{{cache}}"}
       ]
     },
     {

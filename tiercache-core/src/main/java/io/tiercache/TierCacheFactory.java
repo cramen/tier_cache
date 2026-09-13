@@ -176,6 +176,20 @@ public final class TierCacheFactory implements AutoCloseable {
         return breaker != null && breaker.isOpen();
     }
 
+    /**
+     * Current state of the L2 circuit breaker machine.
+     *
+     * <p>Distinct from {@link #isDegraded()}: degradation is the
+     * business-facing "L1-only" flag, while this exposes the breaker machine
+     * itself — including {@link BreakerState#HALF_OPEN} recovery probing,
+     * during which {@code isDegraded()} is already {@code false}. Returns
+     * {@link BreakerState#CLOSED} when the breaker is disabled (L2 calls are
+     * never rejected).
+     */
+    public BreakerState breakerState() {
+        return breaker == null ? BreakerState.CLOSED : breaker.state();
+    }
+
     @Override
     public void close() {
         revalidationExecutor.shutdownNow();

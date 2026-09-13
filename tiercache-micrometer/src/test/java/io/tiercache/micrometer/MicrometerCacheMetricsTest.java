@@ -10,12 +10,15 @@ import io.tiercache.InvalidationMode;
 import io.tiercache.NullPolicy;
 import io.tiercache.TierCache;
 import io.tiercache.TierCacheFactory;
+import io.tiercache.internal.CircuitBreaker;
 import io.tiercache.spi.CacheMetricsListener;
 import io.tiercache.spi.StoredEntry;
+import io.tiercache.testkit.FailingRemoteCache;
 import io.tiercache.testkit.InMemoryRemoteCache;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.function.BooleanSupplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -70,13 +73,48 @@ class MicrometerCacheMetricsTest {
         assertEquals(0.0, registry.get("tiercache.journal.size").tags("cache", "c").gauge().value());
         assertTrue(registry.get("tiercache.breaker.state").gauge().value() == 0.0);
         factory.getCache("c").getOrCompute("k", key -> "v");
-        assertTrue(registry.get("tiercache.entry.age.max").tags("cache", "c").gauge().value() >= 0.0);
+        assertTrue(registry.get("tiercache.last.load.age").tags("cache", "c").gauge().value() >= 0.0);
 
         metrics.onNullEntry("c");
         assertEquals(1.0, registry.get("tiercache.null.entries").tags("cache", "c").counter().count());
         metrics.onInvalidation("c", CacheMetricsListener.Direction.SENT);
         assertEquals(1.0, registry.get("tiercache.invalidation")
                 .tags("cache", "c", "direction", "sent").counter().count());
+        factory.close();
+    }
+
+    @Test
+    void breakerStateGaugeTracksTransitions() throws Exception {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        MicrometerCacheMetrics metrics = new MicrometerCacheMetrics(registry);
+        // Breaker that opens after 2 failures and probes after 50 ms.
+        CircuitBreaker.Config fast = new CircuitBreaker.Config(10, 0.5, 2, Duration.ofMillis(50), 1);
+        FailingRemoteCache<String, String> l2 = new FailingRemoteCache<>();
+        TierCacheFactory factory = TierCacheFactory.builder()
+                .remoteCache(l2)
+                .metricsListener(metrics)
+                .circuitBreakerConfig(fast)
+                .build();
+        metrics.registerGauges(factory, null, List.of());
+        TierCache<String, String> cache = factory.getCache("c");
+
+        assertEquals(0.0, registry.get("tiercache.breaker.state").gauge().value(),
+                "closed");
+
+        l2.fail();
+        cache.get("probe-1"); // failure 1
+        cache.get("probe-2"); // failure 2 -> open
+        assertEquals(2.0, registry.get("tiercache.breaker.state").gauge().value(),
+                "open");
+
+        Thread.sleep(100); // past halfOpenAfter
+        assertEquals(1.0, registry.get("tiercache.breaker.state").gauge().value(),
+                "half-open once the wait elapses");
+
+        l2.heal();
+        cache.getOrCompute("k", key -> "v"); // successful probe -> close
+        assertEquals(0.0, registry.get("tiercache.breaker.state").gauge().value(),
+                "closed after recovery");
         factory.close();
     }
 

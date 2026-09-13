@@ -24,7 +24,7 @@ class DashboardCoverageTest {
         // counters gain _total).
         for (String metric : new String[]{"tiercache_requests_total", "tiercache_latency",
                 "tiercache_invalidation_total", "tiercache_degraded", "tiercache_breaker_state",
-                "tiercache_journal_size", "tiercache_entry_age_max", "tiercache_null_entries_total",
+                "tiercache_journal_size", "tiercache_last_load_age", "tiercache_null_entries_total",
                 "tiercache_l2_stale_hits_total", "tiercache_l2_revalidation_triggers_total",
                 "tiercache_l2_revalidation_completions_total", "tiercache_l2_revalidation_failures_total"}) {
             assertTrue(json.contains(metric), "dashboard misses " + metric);

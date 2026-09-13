@@ -37,7 +37,7 @@ First milestone: the complete two-level cache stack — core engine, Redis trans
 
 #### Observability
 
-- Micrometer metrics for every failure mode: request outcomes per level, L2 latency, invalidation flow, journal size, degraded state, breaker state, entry age, null entries.
+- Micrometer metrics for every failure mode: request outcomes per level, L2 latency, invalidation flow, journal size, degraded state, breaker state, last load age, null entries.
 - OpenTelemetry tracing of L2 operations and invalidation processing.
 - JMX inspection.
 - Reference Grafana dashboard and alert rules (`docs/grafana/`).

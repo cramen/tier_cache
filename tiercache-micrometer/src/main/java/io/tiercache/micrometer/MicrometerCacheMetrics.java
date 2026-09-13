@@ -22,13 +22,13 @@ import java.util.concurrent.TimeUnit;
  * {@code tiercache.latency{cache,level}},
  * {@code tiercache.invalidation{cache,direction}}, {@code tiercache.degraded},
  * {@code tiercache.breaker.state}, {@code tiercache.journal.size},
- * {@code tiercache.entry.age.max}, {@code tiercache.null.entries},
+ * {@code tiercache.last.load.age}, {@code tiercache.null.entries},
  * {@code tiercache.l2.stale.hits{cache}},
  * {@code tiercache.l2.revalidation.triggers{cache}},
  * {@code tiercache.l2.revalidation.completions{cache}},
  * {@code tiercache.l2.revalidation.failures{cache}}.
  *
- * <p>Entry age is approximate: tracked from store events, not per-entry
+ * <p>Load age is approximate: tracked from store events, not per-entry
  * metadata.
  */
 public final class MicrometerCacheMetrics
@@ -132,20 +132,20 @@ public final class MicrometerCacheMetrics
 
     /**
      * Registers factory-level gauges: degraded, breaker state, journal size,
-     * max entry age (approximate). Call once per factory.
+     * last load age (approximate). Call once per factory.
      */
     public void registerGauges(TierCacheFactory factory, InvalidationJournal journal,
             List<String> cacheNames) {
         Gauge.builder("tiercache.degraded", factory, f -> f.isDegraded() ? 1 : 0)
                 .register(registry);
-        Gauge.builder("tiercache.breaker.state", factory, f -> f.isDegraded() ? 1 : 0)
+        Gauge.builder("tiercache.breaker.state", factory, f -> f.breakerState().ordinal())
                 .register(registry);
         for (String cache : cacheNames) {
             Gauge.builder("tiercache.journal.size", journal,
                             j -> j != null ? j.size(cache) : 0)
                     .tags("cache", cache)
                     .register(registry);
-            Gauge.builder("tiercache.entry.age.max", cache,
+            Gauge.builder("tiercache.last.load.age", cache,
                             c -> ageMillis(c))
                     .tags("cache", cache)
                     .register(registry);

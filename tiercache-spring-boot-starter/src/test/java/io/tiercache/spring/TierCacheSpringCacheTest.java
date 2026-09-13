@@ -5,6 +5,7 @@ import io.tiercache.InvalidationMode;
 import io.tiercache.CacheSettings;
 import io.tiercache.NullPolicy;
 import io.tiercache.TierCacheFactory;
+import io.tiercache.testkit.CountingRemoteCache;
 import io.tiercache.testkit.InMemoryLockProvider;
 import io.tiercache.testkit.InMemoryRemoteCache;
 import org.junit.jupiter.api.Test;
@@ -23,13 +24,18 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class TierCacheSpringCacheTest {
 
     private TierCacheSpringCache newCache(String name, NullPolicy nullPolicy) {
-        TierCacheFactory factory = TierCacheFactory.builder()
+        TierCacheFactory factory = newFactory(new InMemoryRemoteCache<>(), nullPolicy);
+        return new TierCacheSpringCache(name, factory.getCache(name));
+    }
+
+    private TierCacheFactory newFactory(io.tiercache.spi.RemoteCache<Object, Object> l2,
+            NullPolicy nullPolicy) {
+        return TierCacheFactory.builder()
                 .defaults(new CacheSettings(10_000, Duration.ofMinutes(5), null,
                         Duration.ofHours(1), 0.0, nullPolicy, InvalidationMode.INVALIDATE, 64 * 1024))
-                .remoteCache(new InMemoryRemoteCache<>())
+                .remoteCache(l2)
                 .lockProvider(new InMemoryLockProvider())
                 .build();
-        return new TierCacheSpringCache(name, factory.getCache(name));
     }
 
     @Test
@@ -79,13 +85,29 @@ class TierCacheSpringCacheTest {
 
     @Test
     void retrieveIsMultilevel() throws Exception {
-        TierCacheSpringCache cache = newCache("c", NullPolicy.deny());
-        cache.put("k", "v");
-        // Drop only L1 via a fresh adapter on a fresh L1 (simulates L1 expiry):
-        // retrieve must complete from L2 and re-warm.
-        Cache.ValueWrapper wrapper = cache.retrieve("k").get();
+        CountingRemoteCache<Object, Object> l2 = new CountingRemoteCache<>();
+        TierCacheFactory factory = newFactory(l2, NullPolicy.deny());
+        // Populate L2 (and L1 of the "writer" cache).
+        TierCacheSpringCache writer = new TierCacheSpringCache("writer", factory.getCache("writer"));
+        writer.put("k", "v");
+        // The factory memoizes one core cache per name, so a different name
+        // yields a genuinely cold L1 over the same L2 (reusing "writer" would
+        // serve the read from its already-warm L1 and prove nothing).
+        TierCacheSpringCache reader = new TierCacheSpringCache("reader", factory.getCache("reader"));
+
+        int l2GetsBefore = l2.gets.get();
+        Cache.ValueWrapper wrapper = reader.retrieve("k").get();
         assertThat(wrapper.get()).isEqualTo("v");
-        assertThat(cache.retrieve("absent").get()).isNull();
+        assertThat(l2.gets.get()).isGreaterThan(l2GetsBefore)
+                .as("cold L1 must be served from L2");
+
+        // The L2 hit must have warmed L1: a second retrieve stays on L1.
+        l2GetsBefore = l2.gets.get();
+        assertThat(reader.retrieve("k").get().get()).isEqualTo("v");
+        assertThat(l2.gets.get()).isEqualTo(l2GetsBefore)
+                .as("L2 hit must warm L1; second retrieve must not touch L2");
+
+        assertThat(reader.retrieve("absent").get()).isNull();
     }
 
     @Test

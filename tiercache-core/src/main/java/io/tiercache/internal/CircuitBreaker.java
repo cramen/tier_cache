@@ -1,5 +1,7 @@
 package io.tiercache.internal;
 
+import io.tiercache.BreakerState;
+
 import java.time.Duration;
 import java.util.Objects;
 
@@ -74,6 +76,25 @@ public final class CircuitBreaker {
             probesSucceeded = 0;
         }
         return state == State.OPEN;
+    }
+
+    /**
+     * Current state of the breaker machine. An open breaker whose wait has
+     * elapsed is reported as {@link BreakerState#HALF_OPEN} even before the
+     * next probe call (the same lazy transition {@link #isOpen()} performs).
+     */
+    public synchronized BreakerState state() {
+        if (state == State.OPEN
+                && System.nanoTime() - openedAtNanos >= config.halfOpenAfter().toNanos()) {
+            state = State.HALF_OPEN;
+            probesInFlight = 0;
+            probesSucceeded = 0;
+        }
+        return switch (state) {
+            case CLOSED -> BreakerState.CLOSED;
+            case OPEN -> BreakerState.OPEN;
+            case HALF_OPEN -> BreakerState.HALF_OPEN;
+        };
     }
 
     /**

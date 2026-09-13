@@ -17,7 +17,7 @@ public interface TiercacheInspectionMXBean {
 
     double getL2HitRatio(String cache);
 
-    /** "closed" or "open" (open = degraded L1-only mode). */
+    /** "closed", "half_open", or "open" (open = degraded L1-only mode). */
     String getBreakerState();
 
     long getJournalSize(String cache);

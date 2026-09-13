@@ -37,9 +37,9 @@ All meters are created by
 | `tiercache.latency` | Timer | `cache`, `level` | Latency of cache operations by level. The level enum defines `l1`/`l2`; core times only L2-touching operations, so `level="l2"` is what you will see in practice (L1 hits are deliberately not timed — zero clock reads on the hot path). |
 | `tiercache.invalidation` | Counter | `cache`, `direction` | Invalidation events by direction: `sent`, `received`, `replayed` (from the journal on recovery), `dropped` (journal overflow — a staleness incident). |
 | `tiercache.degraded` | Gauge | — | `1` while the L2 circuit breaker is open (L1-only mode), else `0`. |
-| `tiercache.breaker.state` | Gauge | — | Breaker state as `1` (open) / `0` (closed). Currently the same value as `tiercache.degraded`; both read the factory's degraded flag. |
+| `tiercache.breaker.state` | Gauge | — | Breaker machine state: `0` = closed, `1` = half-open (recovery probing), `2` = open. During half-open `tiercache.degraded` is already back at `0`. |
 | `tiercache.journal.size` | Gauge | `cache` | Invalidation journal entries currently held for the cache. |
-| `tiercache.entry.age.max` | Gauge | `cache` | Approximate entry age in milliseconds, tracked from store events (time since the last load for the cache), not per-entry metadata. |
+| `tiercache.last.load.age` | Gauge | `cache` | Milliseconds since the last load event for the cache, tracked from store events, not per-entry metadata. |
 | `tiercache.null.entries` | Counter | `cache` | Null-markers stored under the `allow` null policy. |
 | `tiercache.l2.stale.hits` | Counter | `cache` | L2 entries served stale (past logical TTL, inside the stale window). |
 | `tiercache.l2.revalidation.triggers` | Counter | `cache` | Asynchronous revalidations claimed and submitted (stale-while-revalidate and XFetch). |
@@ -77,14 +77,17 @@ name `io.tiercache:type=Inspection` implementing
 | `CacheNames` | `String[]` | Configured cache names. |
 | `getL1HitRatio(cache)` | `double` | L1 hits over all requests for the cache (misses and loads count as the non-L1 bucket). |
 | `getL2HitRatio(cache)` | `double` | L2 hits over all requests for the cache. |
-| `BreakerState` | `String` | `"closed"` or `"open"` (open = L1-only degraded mode). |
+| `BreakerState` | `String` | `"closed"`, `"half_open"`, or `"open"` (open = L1-only degraded mode). |
 | `getJournalSize(cache)` | `long` | Journal entries held for the cache; `-1` when no journal is wired. |
 
-Registration is programmatic: create one `TiercacheInspection(registry,
-factory, journal, cacheNames)` per factory, call `register()`, and `close()`
-to unregister. There is deliberately no top-N-keys operation: per-key
-counting would tax the hot path, so key-level inspection is refused by
-design.
+With Spring Boot, the starter auto-registers one `TiercacheInspection` bean
+at `io.tiercache:type=Inspection` when the `tiercache-micrometer` module is
+on the classpath (and unregisters it on shutdown) — nothing to wire. Outside
+Spring, registration is programmatic: create one
+`TiercacheInspection(registry, factory, journal, cacheNames)` per factory,
+call `register()`, and `close()` to unregister. There is deliberately no
+top-N-keys operation: per-key counting would tax the hot path, so key-level
+inspection is refused by design.
 
 ## Grafana dashboard
 
@@ -101,7 +104,7 @@ Panels:
 | Degraded | `max(tiercache_degraded)` |
 | Breaker state | `max(tiercache_breaker_state)` |
 | Journal size | `tiercache_journal_size` |
-| Max entry age (ms) | `tiercache_entry_age_max` |
+| Last load age (ms) | `tiercache_last_load_age` |
 | Null entries | `sum by (cache) (rate(tiercache_null_entries_total[$5m]))` |
 | L2 stale hits | `sum by (cache) (rate(tiercache_l2_stale_hits_total[$5m]))` |
 | Revalidation triggers / completions / failures | `sum by (cache) (rate(tiercache_l2_revalidation_{triggers,completions,failures}_total[$5m]))` |
