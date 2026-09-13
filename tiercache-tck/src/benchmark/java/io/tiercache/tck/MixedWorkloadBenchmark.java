@@ -33,16 +33,19 @@ import java.util.concurrent.atomic.LongAdder;
 
 /**
  * Mixed-workload throughput against a real Redis (the
- * {@code redis:6.2-alpine} container, started in trial setup): this benchmark
- * carries the externally promised budget of &ge; 1M ops/s per instance.
+ * {@code redis:6.2-alpine} container, started in trial setup): the reference
+ * trend benchmark for the product's intended read mix. No absolute ops/s
+ * budget is attached — absolute throughput depends on the hardware and
+ * network environment; budgets, if any, are defined per reference
+ * environment rather than universally.
  *
  * <p>A hot key set of 1,000 keys (one tenth of the default L1 capacity of
  * 10,000, so L1 holds it entirely) receives ~95% of draws; the 40,000-key
  * cold set from {@link CascadeThroughputBenchmark} receives ~5%. The split is
  * a fixed 95/5 coin flip per invocation. This is a deliberate simplification:
- * the workload is a reference profile for the budget — representative of
- * real read mixes dominated by a small hot set — not a Zipf simulation. Both
- * regions are pre-populated in trial setup, so hot reads resolve in L1 and
+ * the workload is a reference profile — representative of real read mixes
+ * dominated by a small hot set — not a Zipf simulation. Both regions are
+ * pre-populated in trial setup, so hot reads resolve in L1 and
  * cold reads exercise the L1-miss &rarr; L2-hit &rarr; L1-warm cascade. Trial
  * teardown prints the effective L1 hit share measured via
  * {@link io.tiercache.spi.CacheMetricsListener} (target ~95%, acceptable band

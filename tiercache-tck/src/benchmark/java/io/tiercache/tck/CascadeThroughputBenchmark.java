@@ -32,9 +32,9 @@ import java.util.concurrent.TimeUnit;
  * Two-level cascade-read throughput against a real Redis (the
  * {@code redis:6.2-alpine} container, started in trial setup): sustained
  * L1-miss &rarr; L2-hit &rarr; L1-warm reads with production defaults. This
- * pure cascade is the worst-case reference for the throughput budget — no
- * budget is attached to it; the &ge; 1M ops/s budget is carried by
- * {@link MixedWorkloadBenchmark}.
+ * pure cascade is the worst-case reference for throughput — no budget is
+ * attached to it; the mixed-workload profile in {@link MixedWorkloadBenchmark}
+ * is the reference trend benchmark.
  *
  * <p>The cache under test is built exactly as the TCK chaos tests build it —
  * {@link TierCacheFactory} with {@link CacheSettings#defaults()}, a

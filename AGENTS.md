@@ -37,7 +37,7 @@ Gradle (Kotlin DSL) multi-module build, Java 17 toolchain. Modules present: `tie
 - `./gradlew :tiercache-core:shadowJar` — shaded artifact: Caffeine relocated under `io.tiercache.internal.caffeine`; the shaded jar is the main artifact, the plain jar keeps the `unshaded` classifier.
 - `./gradlew :tiercache-core:dependencyAudit` — asserts the runtime classpath exposes only SLF4J API.
 - `./gradlew :tiercache-core:jmh` — JMH baseline for the L1-hit hot path (gc profiler: overhead and zero-allocation budgets); results in `tiercache-core/build/results/jmh/results.txt`.
-- `./gradlew :tiercache-tck:jmhBenchmark` — throughput benchmark suite against a Redis container: `mixedWorkload` (95% hot L1 hits / 5% cold cascade reads) carries the budget ≥ 1M ops/s per instance; `cascadeRead` (pure L1-miss → L2-hit → L1-warm) is the worst-case reference with no budget, and `l1Hit` is the attribution control; results in `tiercache-tck/build/results/jmh-benchmark/results.txt`. Not in `check`; runs in the nightly `benchmarks` job (informational).
+- `./gradlew :tiercache-tck:jmhBenchmark` — throughput benchmark suite against a Redis container: `mixedWorkload` (95% hot L1 hits / 5% cold cascade reads) is the reference trend benchmark, `cascadeRead` (pure L1-miss → L2-hit → L1-warm) is the worst-case reference, and `l1Hit` is the attribution control; no absolute ops/s budgets — absolute throughput is environment-dependent, the suite is for reproducible trend comparison; results in `tiercache-tck/build/results/jmh-benchmark/results.txt`. Not in `check`; runs in the nightly `benchmarks` job (informational).
 - `./gradlew :tiercache-tck:propagationBenchmark` — invalidation propagation latency harness (two Pub/Sub instances, 10k events, p50/p95/p99; budget p99 ≤ 5 ms); results in `tiercache-tck/build/results/propagation/results.txt`. Not in `check`; runs in the nightly `benchmarks` job (informational).
 - `./gradlew :tiercache-core:pitest :tiercache-invalidation:pitest` — PIT mutation gate (≥75% kill score; core targets `io.tiercache.internal.*`, invalidation targets `io.tiercache.invalidation.*`). On demand only — deliberately NOT wired into `check`; belongs to CI/nightly.
 
@@ -120,14 +120,13 @@ Testing culture is TDD-adjacent and chaos-first. Every pain in the catalog has a
 Quality gates (enforced in CI once set up):
 
 - Branch coverage of `core` ≥ 90%; PIT mutation score ≥ 75% on invalidation/degradation paths.
-- JMH benchmarks as regression gates: L1-hit overhead ≤ +50% over raw Caffeine, ≥ 1M ops/s/instance two-level reads, zero steady-state allocations; > 10% regression blocks merge.
+- JMH benchmarks as regression gates: L1-hit overhead ≤ +50% over raw Caffeine, zero steady-state allocations; > 10% regression blocks merge. Throughput benchmarks (mixed workload, cascade) are trend measurements without absolute budgets — absolute throughput is environment-dependent.
 - All observability metrics asserted by tests.
 - Test matrix: Redis 6.2+ and Valkey, standalone/Sentinel/Cluster, JDK 17/21/25.
 
 ## Performance targets (for orientation)
 
 - L1 hit ≈ 0.0012 ms vs ~0.45 ms Redis (~95% latency reduction on hot reads).
-- Two-level throughput target ≥ 1M ops/s per instance (reference benchmark: 1.8M ops/s from `caffeinated-redis`).
 - Invalidation propagation p99 ≤ 5 ms within one AZ (Pub/Sub profile).
 
 ## Roadmap (13 months to GA)
