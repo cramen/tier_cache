@@ -71,12 +71,19 @@ public class DemoApplication {
     @org.springframework.stereotype.Service
     static class GreetingService {
 
+        private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(GreetingService.class);
+
         /**
          * Simulates an expensive computation; the second call for the same
-         * name is served from the two-level cache.
+         * name is served from the two-level cache. The log line marks every
+         * real loader execution (used by the cluster test to count them).
+         * sync=true routes misses through the cache's value-loader path, so
+         * concurrent misses for one key coalesce (singleflight + distributed
+         * rebuild coordination) instead of each caller running the loader.
          */
-        @Cacheable("greetings")
+        @Cacheable(value = "greetings", sync = true)
         public String greeting(String name) {
+            log.info("expensive computation for {}", name);
             try {
                 Thread.sleep(500);
             } catch (InterruptedException e) {

@@ -1,7 +1,10 @@
 package io.tiercache.spring;
 
+import io.lettuce.core.ClientOptions;
+import io.lettuce.core.RedisClient;
 import io.tiercache.CacheConfigurationException;
 import io.tiercache.TierCacheFactory;
+import io.tiercache.redis.LettuceRemoteCache;
 import io.tiercache.testkit.InMemoryRemoteCache;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
@@ -142,5 +145,26 @@ class TiercacheAutoConfigurationTest {
                             .hasMessageContaining("bad")
                             .hasMessageContaining("staleTtl");
                 });
+    }
+
+    /**
+     * The shared Redis client must carry the fast timeouts (100 ms connect,
+     * 250 ms command) so an L2 outage trips the circuit breaker instead of
+     * hanging on Lettuce's 60 s default. Regression: the starter previously
+     * created the client with default options, and LettuceRemoteCache skips
+     * its own timeout setup for caller-provided clients.
+     */
+    @Test
+    void redisClientCarriesFastTimeouts() {
+        TiercacheProperties properties = new TiercacheProperties();
+        properties.setRedisUri("redis://localhost:6379");
+        RedisClient client = new TiercacheAutoConfiguration().tiercacheRedisClient(properties);
+        try {
+            assertThat(client.getOptions()).isNotEqualTo(ClientOptions.create());
+            assertThat(client.getOptions().getSocketOptions().getConnectTimeout())
+                    .isEqualTo(LettuceRemoteCache.DEFAULT_CONNECT_TIMEOUT);
+        } finally {
+            client.shutdown();
+        }
     }
 }

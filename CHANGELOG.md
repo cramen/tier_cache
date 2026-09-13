@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The Spring Boot starter created the shared Redis client with Lettuce defaults (60 s command timeout), so an L2 outage hung business requests instead of tripping the circuit breaker; the client now carries the documented fast timeouts (100 ms connect, 250 ms command). Found by a multi-instance Docker cluster test behind a load balancer.
+
+### Changed
+
+- The demo's expensive-computation endpoint uses `@Cacheable(sync = true)` so concurrent misses coalesce through the value-loader path; the default `sync = false` get/put flow bypasses stampede protection (documented behavior of Spring Cache).
+
+
 ## [0.1.0] - 2026-09-13
 
 First milestone: the complete two-level cache stack — core engine, Redis transport, invalidation protocol, degradation handling, observability, Kotlin and Spring Boot integrations, GraalVM support, and the quality-gate infrastructure.

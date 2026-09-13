@@ -1,6 +1,9 @@
 package io.tiercache.spring;
 
+import io.lettuce.core.ClientOptions;
 import io.lettuce.core.RedisClient;
+import io.lettuce.core.SocketOptions;
+import io.lettuce.core.TimeoutOptions;
 import io.lettuce.core.codec.ByteArrayCodec;
 import io.tiercache.TierCacheFactory;
 import io.tiercache.VersionGenerator;
@@ -52,7 +55,19 @@ public class TiercacheAutoConfiguration {
                     "tiercache.redis-uri is required when tiercache.enabled=true "
                             + "(or provide your own RemoteCache bean)");
         }
-        return RedisClient.create(properties.getRedisUri());
+        // The shared client must carry the same timeouts LettuceRemoteCache
+        // applies to self-created clients: they keep L2 outages below business
+        // timeouts so the circuit breaker trips fast instead of requests
+        // hanging on Lettuce's 60 s default. A caller-provided RemoteCache
+        // takes over this responsibility.
+        RedisClient client = RedisClient.create(properties.getRedisUri());
+        client.setOptions(ClientOptions.builder()
+                .socketOptions(SocketOptions.builder()
+                        .connectTimeout(LettuceRemoteCache.DEFAULT_CONNECT_TIMEOUT)
+                        .build())
+                .timeoutOptions(TimeoutOptions.enabled(LettuceRemoteCache.DEFAULT_COMMAND_TIMEOUT))
+                .build());
+        return client;
     }
 
     @Bean
