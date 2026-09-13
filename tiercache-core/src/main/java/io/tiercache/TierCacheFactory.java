@@ -5,6 +5,7 @@ import io.tiercache.internal.BreakerLockProvider;
 import io.tiercache.internal.CircuitBreaker;
 import io.tiercache.internal.CircuitBreakerRemoteCache;
 import io.tiercache.internal.CaffeineLocalCache;
+import io.tiercache.internal.DefaultAsyncTierCache;
 import io.tiercache.internal.DefaultTierCache;
 import io.tiercache.internal.TtlJitter;
 import io.tiercache.spi.DistributedLockProvider;
@@ -35,7 +36,9 @@ import java.util.function.BiFunction;
  * serves traffic (fail-fast startup validation).
  *
  * <p>The factory owns a daemon watchdog scheduler used for rebuild-lock
- * lease extension; close the factory when done.
+ * lease extension and a shared daemon executor used for fire-and-forget
+ * revalidation and the async view's offloaded operations; close the
+ * factory when done.
  *
  * <p>Consistency model: caches built here are eventually consistent;
  * no strong-consistency guarantees are given or implied.
@@ -60,6 +63,7 @@ public final class TierCacheFactory implements AutoCloseable {
     private final TtlJitter jitter;
     private final java.util.concurrent.ExecutorService revalidationExecutor;
     private final Map<String, TierCache<?, ?>> liveCaches = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Map<String, AsyncTierCache<?, ?>> liveAsyncCaches = new java.util.concurrent.ConcurrentHashMap<>();
 
     private TierCacheFactory(Builder builder) {
         this.defaults = builder.defaults;
@@ -169,6 +173,23 @@ public final class TierCacheFactory implements AutoCloseable {
             }
             return cache;
         });
+    }
+
+    /**
+     * Returns the async (non-blocking) view of the named cache. The
+     * factory form is the accessor by design: the view's operations run
+     * on the factory's shared daemon executor, so the owner of the
+     * executor hands out the view. Memoized alongside {@link #getCache} —
+     * repeated calls with the same name return the same view over the
+     * same underlying cache (shared L1, singleflight state, metrics).
+     * Closing the factory shuts the executor down; async operations
+     * submitted afterwards are rejected with
+     * {@link java.util.concurrent.RejectedExecutionException}.
+     */
+    @SuppressWarnings("unchecked")
+    public <K, V> AsyncTierCache<K, V> asyncCache(String name) {
+        return (AsyncTierCache<K, V>) liveAsyncCaches.computeIfAbsent(name,
+                n -> new DefaultAsyncTierCache<>(getCache(n), revalidationExecutor));
     }
 
     /**

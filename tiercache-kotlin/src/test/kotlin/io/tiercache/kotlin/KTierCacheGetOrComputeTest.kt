@@ -7,22 +7,23 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import java.util.concurrent.CompletableFuture
-import java.util.concurrent.CompletionException
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors as JExecutors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * Suspending loader (design D2): coalescing stays in core's singleflight,
- * loader failures reach every coalesced caller, and the caller dispatcher
- * never performs the blocking call.
+ * Suspending loader (design D3): coalescing stays in core's singleflight,
+ * loader failures reach every coalesced caller unwrapped, and awaiting a
+ * cache call suspends the coroutine without parking an IO worker.
  */
 class KTierCacheGetOrComputeTest {
 
@@ -55,7 +56,7 @@ class KTierCacheGetOrComputeTest {
     }
 
     @Test
-    fun `loader failure reaches all callers and stores nothing`() = runTest {
+    fun `loader failure reaches all callers unwrapped and stores nothing`() = runTest {
         newFactory().use { factory ->
             val cache = factory.getCache<String, String>("c")
             val gate = CountDownLatch(1)
@@ -73,44 +74,73 @@ class KTierCacheGetOrComputeTest {
             gate.countDown()
             val results = callers.awaitAll()
             assertThat(results).allMatch { it.isFailure }
-            assertThat(results.map { unwrap(it.exceptionOrNull()!!) })
+            assertThat(results.map { it.exceptionOrNull()!! })
                 .allMatch { it is IllegalStateException && it.message == "boom" }
             assertThat(cache.lookup("k")).isEqualTo(LookupResult.miss<String>())
         }
     }
 
     @Test
-    fun `blocking call never runs on the caller dispatcher`() = runTest {
+    fun `suspension needs no IO dispatcher worker`() = runTest {
         val executor = JExecutors.newSingleThreadExecutor { r -> Thread(r, "caller-dispatcher") }
         val callerDispatcher = executor.asCoroutineDispatcher()
         try {
             newFactory().use { factory ->
                 val cache = factory.getCache<String, String>("c")
                 val loaderThread = CompletableFuture<String>()
-                val gate = CountDownLatch(1)
+                val release = CompletableDeferred<Unit>()
                 withContext(callerDispatcher) {
                     val operation = async {
                         cache.getOrCompute("k") {
                             loaderThread.complete(Thread.currentThread().name)
-                            gate.await(10, TimeUnit.SECONDS)
+                            release.await()
                             "v"
                         }
                     }
                     // While the cache operation above is in flight, another
-                    // coroutine on the same single-threaded dispatcher proceeds.
+                    // coroutine on the same single-threaded dispatcher
+                    // proceeds: the awaiting coroutine suspends instead of
+                    // blocking, and no Dispatchers.IO worker is involved.
                     val progressed = CompletableDeferred<Boolean>()
                     launch { progressed.complete(true) }
                     assertThat(progressed.await()).isTrue()
-                    gate.countDown()
+                    release.complete(Unit)
                     assertThat(operation.await()).isEqualTo("v")
                 }
-                assertThat(loaderThread.get()).isNotEqualTo("caller-dispatcher")
+                // The suspending loader runs as a child of the calling scope —
+                // on the caller's own dispatcher, not an IO worker.
+                assertThat(loaderThread.get()).startsWith("caller-dispatcher")
             }
         } finally {
             callerDispatcher.close()
         }
     }
 
-    private fun unwrap(t: Throwable): Throwable =
-        if (t is CompletionException && t.cause != null) unwrap(t.cause!!) else t
+    @Test
+    fun `cancelling the awaiting coroutine cancels the loader coroutine`() = runTest {
+        newFactory().use { factory ->
+            val cache = factory.getCache<String, String>("c")
+            val loaderStarted = CompletableDeferred<Unit>()
+            val loaderFinished = CompletableDeferred<Unit>()
+            val job = launch(Dispatchers.Default) {
+                runCatching {
+                    cache.getOrCompute("k") {
+                        loaderStarted.complete(Unit)
+                        try {
+                            awaitCancellation()
+                        } finally {
+                            loaderFinished.complete(Unit)
+                        }
+                    }
+                }
+            }
+            loaderStarted.await()
+            // cancelAndJoin also waits for the loader child coroutine: it is
+            // cancelled with the caller, not leaked.
+            job.cancelAndJoin()
+            assertThat(loaderFinished.isCompleted).isTrue()
+            assertThat(cache.lookup("k")).isEqualTo(LookupResult.miss<String>())
+            assertThat(cache.getOrCompute("k") { "v" }).isEqualTo("v")
+        }
+    }
 }

@@ -50,6 +50,20 @@ class TiercacheMetricsAutoConfigurationTest {
     }
 
     @Test
+    void factoryGaugesRegisterEagerly() {
+        runner.withUserConfiguration(RegistryConfig.class)
+                .withPropertyValues("tiercache.enabled=true", "tiercache.caches.demo.l2-ttl=1h")
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    SimpleMeterRegistry registry = context.getBean(SimpleMeterRegistry.class);
+                    assertThat(registry.find("tiercache.degraded").gauge()).isNotNull();
+                    assertThat(registry.find("tiercache.breaker.state").gauge().value()).isEqualTo(0.0);
+                    assertThat(registry.find("tiercache.journal.size").tags("cache", "demo").gauge()).isNotNull();
+                    assertThat(registry.find("tiercache.last.load.age").tags("cache", "demo").gauge()).isNotNull();
+                });
+    }
+
+    @Test
     void metricsSkippedWithoutRegistry() {
         runner.withUserConfiguration(TiercacheAutoConfigurationTest.InMemoryL2Config.class)
                 .withPropertyValues("tiercache.enabled=true")

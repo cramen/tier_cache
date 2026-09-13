@@ -156,14 +156,14 @@ class KTierCacheTest {
     }
 
     @Test
-    fun `operations run on the configured dispatcher`() = runTest {
-        val executor = Executors.newSingleThreadExecutor { r -> Thread(r, "cache-io") }
+    fun `cache calls do not run on the deprecated dispatcher`() = runTest {
+        val executor = Executors.newSingleThreadExecutor { r -> Thread(r, "unused-dispatcher") }
         val dispatcher = executor.asCoroutineDispatcher()
         try {
             newFactory().use { factory ->
                 val cache = KTierCache(factory.delegate.getCache<String, String>("c"), dispatcher)
                 val loaderThread = cache.getOrCompute("k") { Thread.currentThread().name }
-                assertThat(loaderThread).startsWith("cache-io")
+                assertThat(loaderThread).doesNotStartWith("unused-dispatcher")
             }
         } finally {
             dispatcher.close()

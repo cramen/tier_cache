@@ -21,6 +21,7 @@ kotlin {
 dependencies {
     api(project(":tiercache-core"))
     api("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
+    api("org.jetbrains.kotlinx:kotlinx-coroutines-jdk8:1.10.2")
 
     testImplementation(platform(libs.junit.bom))
     testImplementation(libs.junit.jupiter)

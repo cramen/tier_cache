@@ -41,11 +41,13 @@ class KTierCacheFactory internal constructor(
 
     /**
      * Returns the suspend facade for the named cache. The underlying
-     * [TierCacheFactory.getCache] is memoized by name, so all facades for one
-     * name share the same cache.
+     * [TierCacheFactory.getCache] and [TierCacheFactory.asyncCache] are
+     * memoized by name, so all facades for one name share the same cache and
+     * the same async view (whose operations run on the factory's shared
+     * daemon executor).
      */
     fun <K, V> getCache(name: String): KTierCache<K, V> =
-        KTierCache(delegate.getCache(name), dispatcher)
+        KTierCache(delegate.getCache(name), delegate.asyncCache(name), dispatcher)
 
     /** True while the L2 circuit breaker is open (L1-only degraded mode). */
     fun isDegraded(): Boolean = delegate.isDegraded()

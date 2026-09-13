@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `AsyncTierCache`: a non-blocking `CompletionStage` view of the cache (all operations, plus sync and async loader forms for `getOrCompute`), obtained via `TierCacheFactory.asyncCache(name)`; coalescing stays in the engine's singleflight.
+- The Spring Boot starter now registers the factory-level gauges (`tiercache.degraded`, `tiercache.breaker.state`, `tiercache.journal.size`, `tiercache.last.load.age`) eagerly — they were previously never registered in the Spring path.
+
+### Changed
+
+- `KTierCache` suspend operations now await the core's async view instead of offloading blocking calls to `Dispatchers.IO`; loader failures reach coalesced callers directly (unwrapped) instead of `CompletionException`-wrapped. Public Kotlin API is unchanged.
+- The shaded core's Gradle `.module` metadata now matches its POM (shaded jar as the default variant, no Caffeine leak; previously Gradle-metadata consumers got the unshaded jar).
+
+
 ## [0.2.0] - 2026-09-13
 
 Second release: multi-instance hardening. Two significant defects found and fixed by Docker cluster testing behind a load balancer (3-8 application instances + Redis + nginx), plus per-cache L2 isolation.

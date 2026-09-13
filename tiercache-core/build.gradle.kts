@@ -1,3 +1,9 @@
+import org.gradle.api.attributes.Category
+import org.gradle.api.attributes.LibraryElements
+import org.gradle.api.attributes.Usage
+import org.gradle.api.attributes.java.TargetJvmVersion
+import org.gradle.api.component.AdhocComponentWithVariants
+
 plugins {
     `java-library`
     `java-test-fixtures`
@@ -50,8 +56,9 @@ tasks.shadowJar {
     isZip64 = false
 }
 
-// The unshaded jar stays available (under a classifier) because Gradle's
-// test/test-fixtures classpath resolution needs the main output.
+// The unshaded jar stays available under a classifier: its coordinates must
+// not collide with the shaded main artifact, and the unshadedRuntimeElements
+// variant below publishes it for consumers that manage Caffeine themselves.
 tasks.jar {
     archiveClassifier.set("unshaded")
 }
@@ -59,9 +66,9 @@ tasks.jar {
 // --- Publishing (release automation): the shaded jar is the published main
 // artifact; the unshaded jar ships alongside with its `unshaded` classifier,
 // matching the jar layout above. Caffeine is relocated into the shaded jar,
-// so the published POM must not declare it: consumers get Caffeine inside the
-// jar, not from Central. (The dependency audit below asserts the same about
-// the external runtime classpath.)
+// so published metadata must not declare it: consumers get Caffeine inside
+// the jar, not from Central. (The dependency audit below asserts the same
+// about the external runtime classpath.)
 mavenPublishing {
     pom {
         name.set("tiercache-core")
@@ -72,12 +79,58 @@ mavenPublishing {
     }
 }
 
+// Gradle module metadata carries variants, not a flat dependency list, so it
+// needs more than the POM treatment: the standard variants must serve the
+// shaded jar (the same artifact Maven consumers get as the main jar) and
+// declare only what it needs externally — SLF4J API. Nothing resolves
+// runtimeElements locally (it is consumable only), so trimming its hierarchy
+// affects published metadata exclusively.
+configurations.apiElements {
+    outgoing.artifacts.clear()
+    outgoing.artifact(tasks.shadowJar)
+}
+configurations.runtimeElements {
+    // implementation deps are embedded (relocated) in the shaded jar; the
+    // published runtime variant exposes only the api deps (SLF4J API).
+    setExtendsFrom(listOf(configurations.api.get()))
+    outgoing.artifacts.clear()
+    outgoing.artifact(tasks.shadowJar)
+}
+
+shadow {
+    // The standard variants above already carry the shaded jar; the plugin's
+    // extra shadow variant would only duplicate it (with an empty dependency
+    // set that drops even SLF4J).
+    addShadowVariantIntoJavaComponent = false
+}
+
+// The unshaded jar stays selectable through its own optional variant. It is
+// NOT shaded, so unlike the default variants it genuinely needs Caffeine from
+// the repository — this variant must keep that dependency. The Bundling
+// attribute is deliberately left unset: default consumers (which prefer
+// `external`) keep matching runtimeElements exactly, while this variant is
+// only reachable through an explicit artifact-view/attribute request.
+val unshadedRuntimeElements = configurations.consumable("unshadedRuntimeElements") {
+    extendsFrom(configurations.implementation.get(), configurations.api.get())
+    attributes {
+        attribute(Usage.USAGE_ATTRIBUTE, objects.named(Usage.JAVA_RUNTIME))
+        attribute(Category.CATEGORY_ATTRIBUTE, objects.named(Category.LIBRARY))
+        attribute(LibraryElements.LIBRARY_ELEMENTS_ATTRIBUTE, objects.named(LibraryElements.JAR))
+        attribute(TargetJvmVersion.TARGET_JVM_VERSION_ATTRIBUTE, 17)
+    }
+    outgoing.artifact(tasks.jar)
+}
+(components["java"] as AdhocComponentWithVariants)
+    .addVariantsFromConfiguration(unshadedRuntimeElements.get()) {}
+
 publishing {
     // The publication is registered by the publishing plugin in afterEvaluate,
-    // so match lazily by type instead of looking it up by name. The java
-    // component already contributes the shaded jar as the main artifact plus
-    // the unshaded jar under its classifier (Shadow plugin integration), so
-    // only the POM needs fixing here.
+    // so match lazily by type instead of looking it up by name. The POM is a
+    // flat view over every component variant, so the unshaded variant's
+    // Caffeine dependency (which only applies to the unshaded classifier jar)
+    // would leak into it — strip it. The default (shaded) artifact embeds
+    // Caffeine relocated; declaring it would put a second, clashing copy on
+    // every consumer's classpath.
     publications.withType<MavenPublication>().configureEach {
         pom.withXml {
             val dependencies = asNode().children()

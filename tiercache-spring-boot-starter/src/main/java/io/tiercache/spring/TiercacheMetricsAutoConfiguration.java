@@ -13,8 +13,6 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 
-import java.util.function.Consumer;
-
 /**
  * Metrics auto-binding: when a {@link MeterRegistry} exists and the metrics
  * module is on the classpath, the factory's metrics listener is wired and the
@@ -44,16 +42,18 @@ public class TiercacheMetricsAutoConfiguration {
     }
 
     /**
-     * Applies the listener to the factory and registers factory-level gauges.
+     * Eagerly registers the factory-level gauges (degraded, breaker state,
+     * journal size, last load age) once all singletons are up. Runs after
+     * context refresh so the factory bean exists; covers the configured
+     * cache names, matching the inspection view.
      */
     @Bean
-    Consumer<TierCacheFactory> tiercacheMetricsWiring(MicrometerCacheMetrics metrics,
-            ObjectProvider<RedisStreamJournal> journal,
-            TiercacheProperties properties) {
-        return factory -> {
-            metrics.registerGauges(factory, journal.getIfAvailable(),
-                    properties.getCaches().keySet().stream().toList());
-        };
+    @ConditionalOnBean({TierCacheFactory.class, MicrometerCacheMetrics.class})
+    org.springframework.beans.factory.SmartInitializingSingleton tiercacheGaugeRegistration(
+            MicrometerCacheMetrics metrics, TierCacheFactory factory,
+            ObjectProvider<RedisStreamJournal> journal, TiercacheProperties properties) {
+        return () -> metrics.registerGauges(factory, journal.getIfAvailable(),
+                properties.getCaches().keySet().stream().toList());
     }
 
     /**
