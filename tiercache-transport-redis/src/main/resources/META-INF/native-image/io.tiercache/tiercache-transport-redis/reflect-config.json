@@ -92,6 +92,22 @@
     ]
   },
   {
+    "name": "io.netty.util.ReferenceCountUtil",
+    "queryAllDeclaredMethods": true,
+    "methods": [
+      { "name": "touch", "parameterTypes": ["java.lang.Object"] },
+      { "name": "touch", "parameterTypes": ["java.lang.Object", "java.lang.Object"] }
+    ]
+  },
+  {
+    "name": "io.netty.buffer.AdvancedLeakAwareByteBuf",
+    "queryAllDeclaredMethods": true,
+    "methods": [
+      { "name": "touch", "parameterTypes": [] },
+      { "name": "recordLeakNonRefCountingOperation", "parameterTypes": ["io.netty.util.ResourceLeakTracker"] }
+    ]
+  },
+  {
     "name": "sun.misc.Unsafe",
     "fields": [
       { "name": "theUnsafe" }
