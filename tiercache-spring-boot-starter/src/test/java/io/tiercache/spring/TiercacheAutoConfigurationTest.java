@@ -12,6 +12,8 @@ import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.cache.CacheManager;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.testcontainers.containers.GenericContainer;
+import org.testcontainers.utility.DockerImageName;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -29,6 +31,20 @@ class TiercacheAutoConfigurationTest {
         @Bean
         io.tiercache.spi.RemoteCache<Object, Object> testRemoteCache() {
             return new InMemoryRemoteCache<>();
+        }
+    }
+
+    /**
+     * Per-name L2 factory form, mirroring the wiring the auto-configuration
+     * builds for the default Lettuce transport (one L2 namespace per cache).
+     */
+    @Configuration(proxyBeanMethods = false)
+    static class PerCacheL2Config {
+        @Bean
+        TierCacheFactory testTierCacheFactory() {
+            return TierCacheFactory.builder()
+                    .remoteCacheFactory(InMemoryRemoteCache.perName())
+                    .build();
         }
     }
 
@@ -145,6 +161,78 @@ class TiercacheAutoConfigurationTest {
                             .hasMessageContaining("bad")
                             .hasMessageContaining("staleTtl");
                 });
+    }
+
+    /**
+     * Per-cache L2 keyspaces: the same key in two caches holds independent
+     * values (a value written via one cache is not served to the other from
+     * L2), and {@code evictAll} through the Spring Cache SPI clears only its
+     * own cache. Regression: a single shared L2 namespace served the other
+     * cache's value and wiped both caches on clear.
+     */
+    @Test
+    void perCacheL2IsolatesSameKeyAndEvictAll() {
+        runner.withUserConfiguration(PerCacheL2Config.class)
+                .withPropertyValues(
+                        "tiercache.enabled=true",
+                        "tiercache.redis-uri=redis://localhost:6379",
+                        "tiercache.invalidation.enabled=false")
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    CacheManager manager = context.getBean(CacheManager.class);
+                    org.springframework.cache.Cache greetings = manager.getCache("greetings");
+                    org.springframework.cache.Cache demo = manager.getCache("demo");
+
+                    demo.put("shared-key", "marker");
+                    // L1 miss -> the greetings L2 namespace must not hold demo's value.
+                    assertThat(greetings.get("shared-key")).isNull();
+
+                    greetings.put("shared-key", "hello");
+                    assertThat(greetings.get("shared-key", String.class)).isEqualTo("hello");
+                    assertThat(demo.get("shared-key", String.class)).isEqualTo("marker");
+
+                    greetings.clear();
+                    assertThat(greetings.get("shared-key")).isNull();
+                    assertThat(demo.get("shared-key", String.class)).isEqualTo("marker");
+                });
+    }
+
+    /**
+     * The default Lettuce wiring builds one L2 per cache name over the
+     * shared client: over real Redis, the same key in two caches holds
+     * independent values and one cache's {@code evictAll} leaves the other
+     * cache's L2 entries intact (keys are namespaced {@code spring:<name>}).
+     */
+    @Test
+    void defaultWiringIsolatesPerCacheL2Namespaces() {
+        try (GenericContainer<?> redis = new GenericContainer<>(
+                DockerImageName.parse("redis:6.2-alpine")).withExposedPorts(6379)) {
+            redis.start();
+            String uri = "redis://" + redis.getHost() + ":" + redis.getMappedPort(6379);
+            runner.withPropertyValues("tiercache.enabled=true", "tiercache.redis-uri=" + uri)
+                    .run(context -> {
+                        assertThat(context).hasNotFailed();
+                        TierCacheFactory factory = context.getBean(TierCacheFactory.class);
+                        io.tiercache.TierCache<Object, Object> greetings = factory.getCache("greetings");
+                        io.tiercache.TierCache<Object, Object> demo = factory.getCache("demo");
+
+                        demo.put("shared-key", "marker");
+                        // L1 miss -> the greetings L2 namespace must not hold demo's value.
+                        assertThat(greetings.get("shared-key")).isNull();
+
+                        greetings.put("shared-key", "hello");
+                        greetings.evictAll();
+                        assertThat(greetings.get("shared-key")).isNull();
+                        assertThat(demo.get("shared-key")).isEqualTo("marker");
+
+                        try (RedisClient probe = RedisClient.create(uri);
+                                io.lettuce.core.api.StatefulRedisConnection<String, String> conn =
+                                        probe.connect()) {
+                            assertThat(conn.sync().keys("spring:demo:*")).isNotEmpty();
+                            assertThat(conn.sync().keys("spring:greetings:*")).isEmpty();
+                        }
+                    });
+        }
     }
 
     /**

@@ -67,7 +67,7 @@ results —
 | Behavior | What you get | Proof |
 |---|---|---|
 | L1 warm on L2 hit | A local miss that hits Redis warms the in-process L1, so subsequent reads are served in-process. `CompositeCacheManager` never did this; here `Cache.retrieve(...)` implements the honest L1 → L2 → empty cascade by construction. | Core: `DefaultTierCacheTest.l2HitWarmsL1` (`tiercache-core/src/test/java/io/tiercache/DefaultTierCacheTest.java`). Adapter: `TierCacheSpringCacheTest.retrieveIsMultilevel`. |
-| Stampede protection | Concurrent misses of one key coalesce: `get(key, loader)` under annotations delegates to the core's singleflight path, so one loader execution serves all waiters — per instance, and cluster-wide via distributed rebuild coordination when the Redis transport is present. | [`TierCacheSpringCacheTest.concurrentValueLoadersCoalesce`](../tiercache-spring-boot-starter/src/test/java/io/tiercache/spring/TierCacheSpringCacheTest.java) (16 threads, 1 loader call). |
+| Stampede protection | Concurrent misses of one key coalesce when the miss goes through the value-loader path (`sync = true` — see [below](#stampede-protection-and-sync--true)): `get(key, loader)` delegates to the core's singleflight path, so one loader execution serves all waiters — per instance, and cluster-wide via distributed rebuild coordination when the Redis transport is present. | [`TierCacheSpringCacheTest.concurrentValueLoadersCoalesce`](../tiercache-spring-boot-starter/src/test/java/io/tiercache/spring/TierCacheSpringCacheTest.java) (16 threads, 1 loader call). |
 | Null caching | Opt-in `allow` policy caches null results as markers in both levels (penetration defense); Spring's `ConcurrentMapCache` does not cache nulls. | `TierCacheSpringCacheTest.nullResultMapsToMarkerUnderAllow` / `nullResultIsSkippedUnderDeny`. |
 | Cross-instance invalidation | Writes and evictions propagate to other instances (Pub/Sub by default, Streams optional); missed events are replayed from a journal on recovery. Wired automatically with the Redis transport. | [`InvalidationAutoConfigurationTest`](../tiercache-spring-boot-starter/src/test/java/io/tiercache/spring/InvalidationAutoConfigurationTest.java). |
 | Degradation | An L2 circuit breaker (on by default) drops the cache to L1-only mode when Redis fails — no infrastructure exceptions escape into business code — and recovers automatically. | Core: `DegradationTest` (`tiercache-core/src/test/java/io/tiercache/DegradationTest.java`); see [configuration](configuration.md#circuit-breaker-and-degradation). |
@@ -77,6 +77,20 @@ results —
 Everything above is on by default; protections are disabled only via
 explicit programmatic opt-ins, which are logged as risks. See
 [configuration](configuration.md) for the full knob reference.
+
+## Stampede protection and `sync = true`
+
+Miss coalescing engages only on the value-loader path. With the default
+`@Cacheable(sync = false)`, Spring performs a get-then-put: a miss reads the
+cache, invokes your method, and stores the result — concurrent misses each
+invoke the method, with no coalescing (standard Spring Cache behavior, not
+specific to Tiercache). Setting `sync = true` routes misses through
+`Cache.get(key, Callable)` instead, which the starter's adapter
+(`TierCacheSpringCache`) implements via the core's `getOrCompute` — engaging
+singleflight (one loader execution per key per instance) plus distributed
+rebuild coordination (one loader per key across the cluster when the Redis
+transport is present). Use `sync = true` on `@Cacheable` methods whose
+loader is expensive or whose keys are hot.
 
 ## What changes semantically
 

@@ -47,6 +47,7 @@ public final class TierCacheFactory implements AutoCloseable {
     private final CacheSettings defaults;
     private final Map<String, CacheSettings> caches;
     private final RemoteCache<Object, Object> remoteCache;
+    private final Function<String, ? extends RemoteCache<?, ?>> remoteCacheFactory; // null = single shared L2
     private final BiFunction<String, CacheSettings, LocalCache<?, ?>> localCacheFactory;
     private final boolean singleflightEnabled;
     private final boolean coordinationEnabled;
@@ -63,6 +64,7 @@ public final class TierCacheFactory implements AutoCloseable {
     private TierCacheFactory(Builder builder) {
         this.defaults = builder.defaults;
         RemoteCache<Object, Object> rawRemoteCache = builder.remoteCache;
+        this.remoteCacheFactory = builder.remoteCacheFactory;
         this.localCacheFactory = builder.localCacheFactory;
         this.singleflightEnabled = builder.singleflightEnabled;
         this.coordinationEnabled = builder.coordinationEnabled;
@@ -129,7 +131,9 @@ public final class TierCacheFactory implements AutoCloseable {
                     degradationListener.onRecovered();
                 }
             });
-            rawRemoteCache = new CircuitBreakerRemoteCache<>(rawRemoteCache, breaker);
+            if (rawRemoteCache != null) {
+                rawRemoteCache = new CircuitBreakerRemoteCache<>(rawRemoteCache, breaker);
+            }
             if (provider != null) {
                 provider = new BreakerLockProvider(provider, breaker);
             }
@@ -157,7 +161,7 @@ public final class TierCacheFactory implements AutoCloseable {
             CacheSettings settings = caches.getOrDefault(n, defaults);
             LocalCache<K, V> l1 = (LocalCache<K, V>) localCacheFactory.apply(n, settings);
             DefaultTierCache<K, V> cache = new DefaultTierCache<>(n, l1,
-                    (RemoteCache<K, V>) remoteCache, settings, singleflightEnabled,
+                    (RemoteCache<K, V>) l2For(n), settings, singleflightEnabled,
                     coordinationEnabled ? lockProvider : null, watchdog, versionGenerator, invalidation,
                     breaker, metricsListener, revalidationExecutor, jitter);
             if (invalidation != null) {
@@ -165,6 +169,26 @@ public final class TierCacheFactory implements AutoCloseable {
             }
             return cache;
         });
+    }
+
+    /**
+     * Resolves the L2 for a cache name: the single shared instance, or a
+     * per-name instance from {@link Builder#remoteCacheFactory}. Called
+     * inside {@code liveCaches.computeIfAbsent}, so a factory-supplied L2
+     * is created once per cache name — the same memoization discipline as
+     * {@link #getCache} itself. Per-name instances are wrapped with the
+     * circuit breaker here (the shared instance is wrapped at construction).
+     */
+    @SuppressWarnings("unchecked")
+    private RemoteCache<?, ?> l2For(String name) {
+        if (remoteCacheFactory == null) {
+            return remoteCache;
+        }
+        RemoteCache<?, ?> l2 = Objects.requireNonNull(remoteCacheFactory.apply(name),
+                () -> "remoteCacheFactory returned null for cache '" + name + "'");
+        return breaker != null
+                ? new CircuitBreakerRemoteCache<>((RemoteCache<Object, Object>) l2, breaker)
+                : l2;
     }
 
     /**
@@ -221,6 +245,7 @@ public final class TierCacheFactory implements AutoCloseable {
         private CacheSettings defaults = CacheSettings.defaults();
         private final Map<String, CacheOverride> overrides = new LinkedHashMap<>();
         private RemoteCache<Object, Object> remoteCache;
+        private Function<String, ? extends RemoteCache<?, ?>> remoteCacheFactory;
         private BiFunction<String, CacheSettings, LocalCache<?, ?>> localCacheFactory =
                 (name, settings) -> new CaffeineLocalCache<>(settings);
         private boolean singleflightEnabled = true;
@@ -245,13 +270,40 @@ public final class TierCacheFactory implements AutoCloseable {
         }
 
         /**
-         * The L2 implementation shared by all caches. Required. If it
-         * implements {@link LockProviderSource}, the rebuild-lock provider
-         * is derived automatically unless set explicitly.
+         * The L2 implementation shared by all caches. Required unless
+         * {@link #remoteCacheFactory} is used; the two are mutually
+         * exclusive. If it implements {@link LockProviderSource}, the
+         * rebuild-lock provider is derived automatically unless set
+         * explicitly.
+         *
+         * <p><b>Shared namespace:</b> every named cache stores through
+         * this one instance, so the same key in two named caches collides
+         * in L2 (and one cache's {@code evictAll} may wipe another cache's
+         * entries when the transport prefixes keys by instance). Use
+         * {@link #remoteCacheFactory} for per-cache key-space isolation.
          */
         @SuppressWarnings("unchecked")
         public Builder remoteCache(RemoteCache<?, ?> remoteCache) {
             this.remoteCache = (RemoteCache<Object, Object>) Objects.requireNonNull(remoteCache, "remoteCache");
+            return this;
+        }
+
+        /**
+         * Supplies the L2 per cache name, for key-space isolation between
+         * named caches: the factory resolves one instance per name
+         * (memoized with the same discipline as
+         * {@link TierCacheFactory#getCache}), so the same key in two caches
+         * never collides in L2 and each cache's {@code evictAll} is scoped
+         * to its own instance. Mutually exclusive with
+         * {@link #remoteCache}.
+         *
+         * <p>Note: {@link LockProviderSource} auto-derivation applies only
+         * to the single-instance form; with a factory, set
+         * {@link #lockProvider} explicitly when distributed rebuild
+         * coordination is needed.
+         */
+        public Builder remoteCacheFactory(Function<String, ? extends RemoteCache<?, ?>> factory) {
+            this.remoteCacheFactory = Objects.requireNonNull(factory, "factory");
             return this;
         }
 
@@ -356,7 +408,14 @@ public final class TierCacheFactory implements AutoCloseable {
         }
 
         public TierCacheFactory build() {
-            Objects.requireNonNull(remoteCache, "remoteCache is required");
+            if (remoteCache != null && remoteCacheFactory != null) {
+                throw new CacheConfigurationException(
+                        "remoteCache and remoteCacheFactory are mutually exclusive: choose a single "
+                                + "shared L2 instance or a per-cache L2 factory, not both.");
+            }
+            if (remoteCache == null && remoteCacheFactory == null) {
+                throw new NullPointerException("remoteCache is required");
+            }
             if (!singleflightEnabled) {
                 log.warn("Singleflight protection disabled by explicit opt-in. "
                         + "Concurrent misses of one key will each invoke the loader "

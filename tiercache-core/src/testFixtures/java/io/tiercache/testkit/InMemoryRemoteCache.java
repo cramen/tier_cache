@@ -6,6 +6,7 @@ import io.tiercache.spi.StoredEntry;
 import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Function;
 
 /**
  * In-memory {@link RemoteCache} for tests and TCK harnesses (design D4).
@@ -15,6 +16,15 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class InMemoryRemoteCache<K, V> implements RemoteCache<K, V> {
 
     private final Map<K, Entry<V>> store = new ConcurrentHashMap<>();
+
+    /**
+     * Factory form for {@code TierCacheFactory.Builder.remoteCacheFactory}:
+     * every cache name gets its own instance, so the same key in two named
+     * caches is isolated in L2.
+     */
+    public static Function<String, InMemoryRemoteCache<Object, Object>> perName() {
+        return name -> new InMemoryRemoteCache<>();
+    }
 
     @Override
     public StoredEntry<V> get(K key) {

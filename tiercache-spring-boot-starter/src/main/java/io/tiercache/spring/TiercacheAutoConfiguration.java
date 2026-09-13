@@ -9,6 +9,7 @@ import io.tiercache.TierCacheFactory;
 import io.tiercache.VersionGenerator;
 import io.tiercache.invalidation.InvalidationService;
 import io.tiercache.redis.JdkCacheSerializer;
+import io.tiercache.redis.LettuceLockProvider;
 import io.tiercache.redis.LettucePubSubInvalidationTransport;
 import io.tiercache.redis.LettuceRemoteCache;
 import io.tiercache.redis.RedisStreamJournal;
@@ -32,13 +33,17 @@ import java.util.function.Function;
  * classpath and {@code tiercache.enabled=true}; contributes a
  * {@link TierCacheManager} backed by the two-level cache.
  *
- * <p>The L2 bean is a plain {@link RemoteCache}: by default a
- * {@link LettuceRemoteCache} is created from {@code tiercache.redis-uri},
- * but an application may provide its own implementation (it takes
- * precedence; cross-instance invalidation is then skipped unless the app
- * wires it itself). With the default transport, the Pub/Sub invalidation
- * profile is wired automatically ({@code tiercache.invalidation.enabled=false}
- * opts out). Bean destroy methods are inferred.
+ * <p>By default, each named cache gets its own {@link LettuceRemoteCache}
+ * built from {@code tiercache.redis-uri} over one shared {@link RedisClient},
+ * namespaced as {@code spring:<cache-name>} so the same key in two caches
+ * never collides in L2 and {@code evictAll} is scoped per cache. An
+ * application may instead provide its own {@link RemoteCache} bean (it takes
+ * precedence and is then shared by all caches — see the shared-namespace
+ * warning on {@link TierCacheFactory.Builder#remoteCache}; cross-instance
+ * invalidation is also skipped unless the app wires it itself). With the
+ * default transport, the Pub/Sub invalidation profile is wired automatically
+ * ({@code tiercache.invalidation.enabled=false} opts out). Bean destroy
+ * methods are inferred.
  */
 @AutoConfiguration
 @ConditionalOnClass(TierCacheFactory.class)
@@ -68,22 +73,6 @@ public class TiercacheAutoConfiguration {
                 .timeoutOptions(TimeoutOptions.enabled(LettuceRemoteCache.DEFAULT_COMMAND_TIMEOUT))
                 .build());
         return client;
-    }
-
-    @Bean
-    @ConditionalOnMissingBean(RemoteCache.class)
-    @SuppressWarnings("unchecked")
-    RemoteCache<Object, Object> tiercacheRemoteCache(TiercacheProperties properties,
-            RedisClient tiercacheRedisClient, ObjectProvider<RedisStreamJournal> journal) {
-        io.tiercache.CacheSettings defaultSettings = properties.getDefaults()
-                .toSettings(io.tiercache.CacheSettings.defaults());
-        return (RemoteCache<Object, Object>) LettuceRemoteCache.builder(properties.getRedisUri())
-                .client(tiercacheRedisClient)
-                .cacheName("spring")
-                .journal(journal.getIfAvailable())
-                .invalidationMode(defaultSettings.invalidationMode(),
-                        defaultSettings.payloadCapBytes())
-                .build();
     }
 
     @Bean
@@ -119,13 +108,28 @@ public class TiercacheAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean
     TierCacheFactory tierCacheFactory(TiercacheProperties properties,
-            RemoteCache<Object, Object> remoteCache,
+            ObjectProvider<RemoteCache<Object, Object>> remoteCache,
+            ObjectProvider<RedisClient> redisClient,
+            ObjectProvider<RedisStreamJournal> journal,
             ObjectProvider<Function<VersionGenerator, InvalidationHandler>> invalidation,
             ObjectProvider<io.tiercache.spi.CacheMetricsListener> metrics) {
         TierCacheFactory.Builder builder = TierCacheFactory.builder()
-                .defaults(properties.getDefaults().toSettings(io.tiercache.CacheSettings.defaults()))
-                .remoteCache(remoteCache);
+                .defaults(properties.getDefaults().toSettings(io.tiercache.CacheSettings.defaults()));
         properties.getCaches().forEach((name, props) -> builder.cache(name, props.toOverride()));
+        RemoteCache<Object, Object> sharedRemoteCache = remoteCache.getIfAvailable();
+        if (sharedRemoteCache != null) {
+            // Application-provided L2 takes precedence; it is shared by all
+            // caches (shared namespace — see TierCacheFactory.Builder#remoteCache).
+            builder.remoteCache(sharedRemoteCache);
+        } else {
+            RedisClient client = redisClient.getObject();
+            RedisStreamJournal sharedJournal = journal.getIfAvailable();
+            builder.remoteCacheFactory(name -> perCacheRemoteCache(properties, client, sharedJournal, name))
+                    // LockProviderSource auto-derivation does not apply to the
+                    // factory form: the rebuild-lock provider must be explicit
+                    // or coordination silently degrades to per-instance.
+                    .lockProvider(new LettuceLockProvider(client));
+        }
         Function<VersionGenerator, InvalidationHandler> handlerFactory = invalidation.getIfAvailable();
         if (handlerFactory != null) {
             builder.invalidation(handlerFactory);
@@ -137,6 +141,27 @@ public class TiercacheAutoConfiguration {
         // build() runs core's fail-fast startup validation: invalid
         // configuration aborts application startup with an actionable error.
         return builder.build();
+    }
+
+    /**
+     * One L2 per cache name over the shared client, namespaced
+     * {@code spring:<name>} so equal keys in different caches never collide.
+     * Per-cache invalidation settings resolve the same way the factory
+     * resolves them: the named override against the global defaults (a cache
+     * without configured overrides uses the defaults).
+     */
+    private static LettuceRemoteCache<Object, Object> perCacheRemoteCache(
+            TiercacheProperties properties, RedisClient client, RedisStreamJournal journal, String name) {
+        io.tiercache.CacheSettings base = properties.getDefaults()
+                .toSettings(io.tiercache.CacheSettings.defaults());
+        TiercacheProperties.CacheProps override = properties.getCaches().get(name);
+        io.tiercache.CacheSettings settings = override != null ? override.toSettings(base) : base;
+        return LettuceRemoteCache.builder(properties.getRedisUri())
+                .client(client)
+                .cacheName("spring:" + name)
+                .journal(journal)
+                .invalidationMode(settings.invalidationMode(), settings.payloadCapBytes())
+                .build();
     }
 
     @Bean

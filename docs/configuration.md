@@ -89,6 +89,14 @@ shortens TTLs: the effective TTL of each write is drawn uniformly from
 null-marker TTLs. The default is `0.10`; `0` disables jitter. Range
 validation: `[0, 1)`.
 
+Jitter covers L1 only — L2 entries are shared by all instances and are
+stored with the unjittered `l2-ttl` by design. Keys written together
+(deploy-time warm-up, mass invalidation, a fleet restart) therefore expire
+from L2 together: an L2-expiry cliff. The synchronized reload wave shows up
+as tail latency on the loader path, not as errors. The mitigation is XFetch
+(`xfetch-enabled` / `xfetch-beta`, off by default), which refreshes hot
+entries probabilistically **before** they expire — see [XFetch](#xfetch).
+
 ## Null-caching policy
 
 Controls what happens when the loader returns `null`:

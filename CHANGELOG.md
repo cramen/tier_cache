@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Spring Boot starter users: the L2 key layout is now namespaced per cache — each named cache gets its own Redis key prefix, fixing cross-cache key collisions and making per-cache `evictAll` correct. Entries written by older versions become unreachable after the upgrade (a cold-start effect: one reload per key, not corruption); acceptable pre-1.0.
 - The demo's expensive-computation endpoint uses `@Cacheable(sync = true)` so concurrent misses coalesce through the value-loader path; the default `sync = false` get/put flow bypasses stampede protection (documented behavior of Spring Cache).
 
 
