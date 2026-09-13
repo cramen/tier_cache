@@ -96,6 +96,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
     private final long l2TtlMillis;
     private final long staleBoundaryMillis;            // l2TtlMillis + staleTtl
     private final double xfetchBetaNanos;
+    private final TtlJitter jitter;
     /** EMA of loader durations in nanoseconds; updated on every load. */
     private final AtomicLong loaderDurationEmaNanos = new AtomicLong(EMA_UNINITIALIZED);
     private final Map<K, CompletableFuture<StoredEntry<V>>> inflight = new ConcurrentHashMap<>();
@@ -133,6 +134,22 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
             DistributedLockProvider lockProvider, ScheduledExecutorService watchdog,
             VersionGenerator versionGenerator, InvalidationHandler invalidation,
             CircuitBreaker breaker, CacheMetricsListener metrics, Executor revalidationExecutor) {
+        this(cacheName, l1, l2, settings, singleflightEnabled, lockProvider, watchdog,
+                versionGenerator, invalidation, breaker, metrics, revalidationExecutor,
+                new TtlJitter());
+    }
+
+    /**
+     * Full constructor with an explicit TTL jitter source. {@code jitter}
+     * is a test seam for deterministic TTL spreads; production wiring uses
+     * the overload above, which draws from ThreadLocalRandom.
+     */
+    public DefaultTierCache(String cacheName, LocalCache<K, V> l1, RemoteCache<K, V> l2,
+            CacheSettings settings, boolean singleflightEnabled,
+            DistributedLockProvider lockProvider, ScheduledExecutorService watchdog,
+            VersionGenerator versionGenerator, InvalidationHandler invalidation,
+            CircuitBreaker breaker, CacheMetricsListener metrics, Executor revalidationExecutor,
+            TtlJitter jitter) {
         this.cacheName = cacheName;
         this.l1 = l1;
         this.l2 = l2;
@@ -145,6 +162,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         this.breaker = breaker;
         this.metrics = metrics;
         this.revalidationExecutor = revalidationExecutor;
+        this.jitter = jitter;
         this.staleTtl = settings.staleTtl();
         this.staleWindowEnabled = staleTtl.toMillis() > 0;
         this.xfetchEnabled = settings.xfetchEnabled();
@@ -287,7 +305,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         if (won == null) {
             // Degraded: per-instance atomicity on L1 only.
             return l1.setIfAbsent(key, StoredEntry.ofValue(value, version),
-                    TtlJitter.apply(settings.l1ExpireAfterWrite(), settings.jitterAmplitude()));
+                    jitter.apply(settings.l1ExpireAfterWrite(), settings.jitterAmplitude()));
         }
         if (won) {
             StoredEntry<V> stored = StoredEntry.ofValue(value, version);
@@ -325,7 +343,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         StoredEntry<V> marker = StoredEntry.nullMarker(version);
         metrics.onNullEntry(cacheName);
         storeVersioned(key, marker, markerTtl, version,
-                TtlJitter.apply(markerTtl, settings.jitterAmplitude()));
+                jitter.apply(markerTtl, settings.jitterAmplitude()));
     }
 
     @Override
@@ -412,7 +430,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
             return; // stale update
         }
         l1.put(typedKey, StoredEntry.ofValue((V) value, eventVersion),
-                TtlJitter.apply(settings.l1ExpireAfterWrite(), settings.jitterAmplitude()));
+                jitter.apply(settings.l1ExpireAfterWrite(), settings.jitterAmplitude()));
     }
 
     private Version nextVersion() {
@@ -716,7 +734,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
             StoredEntry<V> marker = StoredEntry.nullMarker(version);
             metrics.onNullEntry(cacheName);
             storeVersioned(key, marker, markerTtl, version,
-                    TtlJitter.apply(markerTtl, settings.jitterAmplitude()));
+                    jitter.apply(markerTtl, settings.jitterAmplitude()));
             return marker;
         }
         Version version = nextVersion();
@@ -731,7 +749,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         Boolean stored = l2ConditionalPut(key, entry, l2Ttl, version != null);
         if (stored == null) {
             l1.put(key, entry, l1TtlOverride != null ? l1TtlOverride
-                    : TtlJitter.apply(settings.l1ExpireAfterWrite(), settings.jitterAmplitude()));
+                    : jitter.apply(settings.l1ExpireAfterWrite(), settings.jitterAmplitude()));
             return; // degraded: L1 only
         }
         if (!stored) {
@@ -753,7 +771,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
 
     /** Writes into L1 with a jittered TTL that never exceeds the L2 TTL. */
     private void warmL1(K key, StoredEntry<V> entry) {
-        Duration ttl = TtlJitter.apply(settings.l1ExpireAfterWrite(), settings.jitterAmplitude());
+        Duration ttl = jitter.apply(settings.l1ExpireAfterWrite(), settings.jitterAmplitude());
         l1.put(key, entry, ttl);
     }
 

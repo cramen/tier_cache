@@ -172,7 +172,9 @@ class LettuceRemoteCacheTest {
             long before = System.currentTimeMillis();
             cache.put("k", io.tiercache.spi.StoredEntry.ofValue("v"),
                     Duration.ofSeconds(1), Duration.ofSeconds(10));
-            TimeUnit.MILLISECONDS.sleep(1500);
+            // Poll until the logical TTL has elapsed; the physical lifetime
+            // (ttl + staleTtl = 11s) leaves a wide assertion window.
+            waitFor(() -> System.currentTimeMillis() - before > 1_000);
             io.tiercache.spi.StoredEntry<String> entry = cache.get("k");
             assertTrue(entry != null && !entry.isNullMarker(),
                     "entry must survive past its logical TTL within the stale window");
@@ -191,7 +193,8 @@ class LettuceRemoteCacheTest {
                         .build()) {
             cache.put("k", io.tiercache.spi.StoredEntry.ofValue("v"),
                     Duration.ofMillis(500), Duration.ofSeconds(1));
-            TimeUnit.MILLISECONDS.sleep(1800);
+            // Poll for actual server-side expiry instead of a fixed sleep.
+            waitFor(() -> cache.get("k") == null);
             assertTrue(cache.get("k") == null,
                     "entry must be gone once ttl + staleTtl has elapsed");
         }
@@ -213,6 +216,20 @@ class LettuceRemoteCacheTest {
             assertEquals(ValueFrame.TAG_VALUE, rawValue(cache, "stale-frame", "plain")[0]);
             assertTrue(cache.get("plain").hasWriteTimestamp() == false);
         }
+    }
+
+    private static void waitFor(Check check) throws InterruptedException {
+        long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
+        while (!check.ok()) {
+            if (System.nanoTime() > deadline) {
+                throw new AssertionError("condition not met within 10s");
+            }
+            TimeUnit.MILLISECONDS.sleep(25);
+        }
+    }
+
+    private interface Check {
+        boolean ok();
     }
 
     private static byte[] rawValue(LettuceRemoteCache<String, String> cache, String cacheName, String key) {

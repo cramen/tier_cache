@@ -33,3 +33,12 @@ groups:
           severity: critical
         annotations:
           summary: "Cache in L1-only degraded mode > 5 minutes"
+
+      # Sustained revalidation failures: stale entries are served but never refreshed.
+      - alert: TiercacheRevalidationFailures
+        expr: sum(rate(tiercache_l2_revalidation_failures_total[5m])) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SWR revalidations failing for > 10 minutes"

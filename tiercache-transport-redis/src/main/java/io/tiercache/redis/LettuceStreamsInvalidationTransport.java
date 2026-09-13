@@ -71,6 +71,11 @@ public final class LettuceStreamsInvalidationTransport implements InvalidationTr
 
     @Override
     public AutoCloseable subscribe(String cache, java.util.function.Consumer<InvalidationMessage> handler) {
+        // Create the consumer group eagerly: its cursor starts at creation
+        // time, so entries published immediately after subscription are
+        // delivered. Lazy creation in the read loop left a permanent gap for
+        // anything published between subscribe() and the loop's first pass.
+        ensureGroup(RedisStreamJournal.streamKeyBytes(cache), group(cache), cache);
         handlers.put(cache, handler);
         readers.computeIfAbsent(cache, this::startReader);
         return () -> {
@@ -120,9 +125,7 @@ public final class LettuceStreamsInvalidationTransport implements InvalidationTr
                 List<StreamMessage<byte[], byte[]>> messages = commands.xreadgroup(
                         io.lettuce.core.Consumer.<byte[]>from(group, consumerName), args,
                         XReadArgs.StreamOffset.lastConsumed(stream));
-                System.out.println("readLoop " + cache + " got " + (messages == null ? "null" : messages.size())
-                        + " xlen=" + commands.xlen(stream));
-                
+
                 if (messages == null || messages.isEmpty()) {
                     sleepQuietly(50);
                     continue;

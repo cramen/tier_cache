@@ -6,12 +6,14 @@ import io.tiercache.CacheSettings;
 import io.tiercache.TierCache;
 import io.tiercache.TierCacheFactory;
 import io.tiercache.NullPolicy;
+import io.tiercache.internal.TtlJitter;
 import io.tiercache.testkit.InMemoryRemoteCache;
 import io.tiercache.testkit.RecordingLocalCache;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.SplittableRandom;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -22,7 +24,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * not expire simultaneously.
  *
  * <p>Checked on assigned TTLs (not wall-clock expiry): uniformity of the
- * TTL-jitter assignment is the actual defense.
+ * TTL-jitter assignment is the actual defense. The jitter draws from a
+ * fixed-seed source, so the chi-square assertion is deterministic.
  */
 class AvalancheTest {
 
@@ -30,6 +33,8 @@ class AvalancheTest {
     private static final int BINS = 10;
     /** Chi-square critical value, df = BINS-1, p = 0.001. */
     private static final double CHI_SQUARE_CRITICAL = 27.88;
+    /** Fixed jitter seed: the uniformity assertion is deterministic. */
+    private static final long JITTER_SEED = 42L;
 
     @Test
     void defaultJitterSpreadsExpiryUniformly() {
@@ -40,6 +45,7 @@ class AvalancheTest {
                         Duration.ofHours(2), amplitude, NullPolicy.deny(), InvalidationMode.INVALIDATE, 64 * 1024))
                 .remoteCache(new InMemoryRemoteCache<>())
                 .localCacheFactory((name, settings) -> recorder)
+                .jitter(new TtlJitter(new SplittableRandom(JITTER_SEED)))
                 .build()
                 .getCache("avalanche");
 

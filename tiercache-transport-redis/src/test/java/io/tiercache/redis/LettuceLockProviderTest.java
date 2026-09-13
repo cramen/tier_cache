@@ -62,8 +62,7 @@ class LettuceLockProviderTest {
         LettuceLockProvider provider = new LettuceLockProvider(client.connect());
         DistributedLock first = provider.tryLock("tsr", Duration.ofMillis(80));
         assertNotNull(first);
-        Thread.sleep(200); // let it expire
-        DistributedLock second = provider.tryLock("tsr", Duration.ofMinutes(1));
+        DistributedLock second = awaitLock(provider, "tsr");
         assertNotNull(second, "expired lock is re-acquirable");
         first.release(); // stale holder must not release the new lock
         assertNull(provider.tryLock("tsr", Duration.ofMinutes(1)),
@@ -76,9 +75,12 @@ class LettuceLockProviderTest {
         LettuceLockProvider provider = new LettuceLockProvider(client.connect());
         DistributedLock lock = provider.tryLock("ext", Duration.ofMillis(300));
         assertNotNull(lock);
-        for (int i = 0; i < 5; i++) {
-            Thread.sleep(200);
-            assertTrue(lock.extend(Duration.ofMillis(300)), "watchdog extension round " + i);
+        // Extend promptly, well inside the lease, until ~1s has elapsed.
+        long start = System.nanoTime();
+        int round = 0;
+        while (System.nanoTime() - start < Duration.ofSeconds(1).toNanos()) {
+            TimeUnit.MILLISECONDS.sleep(100);
+            assertTrue(lock.extend(Duration.ofMillis(300)), "watchdog extension round " + round++);
         }
         // Total elapsed ~1s on a 300ms initial lease: still held.
         assertNull(provider.tryLock("ext", Duration.ofMinutes(1)), "extended lock stays held");
@@ -91,8 +93,7 @@ class LettuceLockProviderTest {
         DistributedLock lock = provider.tryLock("death", Duration.ofMillis(150));
         assertNotNull(lock);
         // Holder "dies": no release, no extension.
-        Thread.sleep(300);
-        assertNotNull(provider.tryLock("death", Duration.ofMinutes(1)),
+        assertNotNull(awaitLock(provider, "death"),
                 "lock must expire and be re-acquirable");
     }
 
@@ -101,8 +102,25 @@ class LettuceLockProviderTest {
         LettuceLockProvider provider = new LettuceLockProvider(client.connect());
         DistributedLock lock = provider.tryLock("lost", Duration.ofMillis(100));
         assertNotNull(lock);
-        Thread.sleep(200);
+        // Observe server-side expiry by re-acquiring, then let it go.
+        DistributedLock reacquired = awaitLock(provider, "lost");
+        assertNotNull(reacquired, "lock expired and re-acquired");
+        reacquired.release();
         assertFalse(lock.extend(Duration.ofMinutes(1)), "expired lock cannot be extended");
+    }
+
+    /** Polls until the named lock is re-acquirable (i.e. the previous lease expired). */
+    private static DistributedLock awaitLock(LettuceLockProvider provider, String name)
+            throws InterruptedException {
+        long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+        DistributedLock lock;
+        while ((lock = provider.tryLock(name, Duration.ofMinutes(1))) == null) {
+            if (System.nanoTime() > deadline) {
+                return null;
+            }
+            TimeUnit.MILLISECONDS.sleep(20);
+        }
+        return lock;
     }
 
     @Test

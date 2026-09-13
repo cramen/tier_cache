@@ -30,21 +30,23 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * Two-level cascade-read throughput against a real Redis (the
- * {@code redis:6.2-alpine} container, started in trial setup): the externally
- * promised budget is &ge; 1M ops/s per instance for sustained
- * L1-miss &rarr; L2-hit &rarr; L1-warm reads with production defaults.
+ * {@code redis:6.2-alpine} container, started in trial setup): sustained
+ * L1-miss &rarr; L2-hit &rarr; L1-warm reads with production defaults. This
+ * pure cascade is the worst-case reference for the throughput budget — no
+ * budget is attached to it; the &ge; 1M ops/s budget is carried by
+ * {@link MixedWorkloadBenchmark}.
  *
  * <p>The cache under test is built exactly as the TCK chaos tests build it —
  * {@link TierCacheFactory} with {@link CacheSettings#defaults()}, a
  * {@link LettuceRemoteCache} with a stream journal, and the Pub/Sub
- * invalidation profile — with no benchmark-specific tuning: the budget
- * applies to default behavior.
+ * invalidation profile — with no benchmark-specific tuning, so the numbers
+ * reflect default behavior.
  *
  * <p>Key-space sizing: the default L1 capacity is
  * {@code CacheSettings.defaults().l1MaxSize()} (10,000 entries). The cascade
  * key space is 4x that (40,000 keys), so a uniform-random read stream
  * provably cannot fit L1; at steady state most reads miss L1, hit L2, and
- * warm L1 — the budget scenario. The {@link #l1Hit} control uses 1,000 keys
+ * warm L1 — the worst case. The {@link #l1Hit} control uses 1,000 keys
  * (one tenth of L1 capacity), which L1 holds entirely, so the L1-hit vs
  * cascade gap keeps attribution honest.
  *
@@ -125,7 +127,7 @@ public class CascadeThroughputBenchmark {
         server.stop();
     }
 
-    /** Budget scenario: steady-state L1 miss &rarr; L2 hit &rarr; L1 warm. */
+    /** Worst-case reference: steady-state L1 miss &rarr; L2 hit &rarr; L1 warm. */
     @Benchmark
     public void cascadeRead(Blackhole bh) {
         bh.consume(cascadeCache.get(cascadeKeys[ThreadLocalRandom.current().nextInt(CASCADE_KEYS)]));

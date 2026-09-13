@@ -6,6 +6,7 @@ import io.tiercache.internal.CircuitBreaker;
 import io.tiercache.internal.CircuitBreakerRemoteCache;
 import io.tiercache.internal.CaffeineLocalCache;
 import io.tiercache.internal.DefaultTierCache;
+import io.tiercache.internal.TtlJitter;
 import io.tiercache.spi.DistributedLockProvider;
 import io.tiercache.spi.CacheMetricsListener;
 import io.tiercache.spi.DegradationListener;
@@ -57,6 +58,7 @@ public final class TierCacheFactory implements AutoCloseable {
     private final InvalidationHandler invalidation; // null = single-node
     private final CircuitBreaker breaker;           // null = unguarded L2 (opt-out)
     private final CacheMetricsListener metricsListener;
+    private final TtlJitter jitter;
     private final java.util.concurrent.ExecutorService revalidationExecutor;
     private final Map<String, TierCache<?, ?>> liveCaches = new java.util.concurrent.ConcurrentHashMap<>();
 
@@ -105,6 +107,7 @@ public final class TierCacheFactory implements AutoCloseable {
             this.invalidation.setEventListener(builder.invalidationEventListener);
         }
         this.metricsListener = builder.metricsListener;
+        this.jitter = builder.jitter;
 
         DegradationListener degradationListener = builder.degradationListener;
         if (builder.circuitBreakerEnabled) {
@@ -158,7 +161,7 @@ public final class TierCacheFactory implements AutoCloseable {
             DefaultTierCache<K, V> cache = new DefaultTierCache<>(n, l1,
                     (RemoteCache<K, V>) remoteCache, settings, singleflightEnabled,
                     coordinationEnabled ? lockProvider : null, watchdog, versionGenerator, invalidation,
-                    breaker, metricsListener, revalidationExecutor);
+                    breaker, metricsListener, revalidationExecutor, jitter);
             if (invalidation != null) {
                 invalidation.registerTarget(n, cache);
             }
@@ -217,6 +220,7 @@ public final class TierCacheFactory implements AutoCloseable {
         private CircuitBreaker.Config breakerConfig = CircuitBreaker.Config.defaults();
         private DegradationListener degradationListener = DegradationListener.NOOP;
         private CacheMetricsListener metricsListener = CacheMetricsListener.NOOP;
+        private TtlJitter jitter = new TtlJitter();
 
         public Builder defaults(CacheSettings defaults) {
             this.defaults = Objects.requireNonNull(defaults, "defaults");
@@ -307,6 +311,16 @@ public final class TierCacheFactory implements AutoCloseable {
         /** Metrics events listener (bind a registry via the metrics module). */
         public Builder metricsListener(CacheMetricsListener listener) {
             this.metricsListener = Objects.requireNonNull(listener, "listener");
+            return this;
+        }
+
+        /**
+         * TTL jitter source. Internal/testing; the default draws from
+         * ThreadLocalRandom. Inject a seeded instance for deterministic
+         * TTL spreads in tests.
+         */
+        public Builder jitter(TtlJitter jitter) {
+            this.jitter = Objects.requireNonNull(jitter, "jitter");
             return this;
         }
 

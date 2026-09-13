@@ -66,6 +66,38 @@
       "targets": [
         {"expr": "sum by (cache) (rate(tiercache_null_entries_total[$5m]))", "legendFormat": "{{cache}}"}
       ]
+    },
+    {
+      "id": 9,
+      "title": "L2 stale hits",
+      "type": "timeseries",
+      "targets": [
+        {"expr": "sum by (cache) (rate(tiercache_l2_stale_hits_total[$5m]))", "legendFormat": "{{cache}}"}
+      ]
+    },
+    {
+      "id": 10,
+      "title": "Revalidation triggers",
+      "type": "timeseries",
+      "targets": [
+        {"expr": "sum by (cache) (rate(tiercache_l2_revalidation_triggers_total[$5m]))", "legendFormat": "{{cache}}"}
+      ]
+    },
+    {
+      "id": 11,
+      "title": "Revalidation completions",
+      "type": "timeseries",
+      "targets": [
+        {"expr": "sum by (cache) (rate(tiercache_l2_revalidation_completions_total[$5m]))", "legendFormat": "{{cache}}"}
+      ]
+    },
+    {
+      "id": 12,
+      "title": "Revalidation failures",
+      "type": "timeseries",
+      "targets": [
+        {"expr": "sum by (cache) (rate(tiercache_l2_revalidation_failures_total[$5m]))", "legendFormat": "{{cache}}"}
+      ]
     }
   ]
 }

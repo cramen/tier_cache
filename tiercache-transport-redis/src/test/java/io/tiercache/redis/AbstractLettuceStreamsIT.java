@@ -14,7 +14,10 @@ import org.junit.jupiter.api.Test;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.utility.DockerImageName;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.Arrays;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -87,6 +90,7 @@ abstract class AbstractLettuceStreamsIT {
     void eventsFlowThroughStreamsProfile() throws Exception {
         TierCache<String, String> a = factoryA.getCache("streams");
         TierCache<String, String> b = factoryB.getCache("streams");
+        awaitConsumerGroup("streams");
 
         a.put("k", "old");
         assertEquals("old", b.get("k")); // warms B's L1
@@ -95,10 +99,32 @@ abstract class AbstractLettuceStreamsIT {
         waitFor(() -> "new".equals(b.get("k")));
     }
 
+    /**
+     * Regression: the consumer group must exist by the time subscription
+     * returns. With lazy creation in the reader thread, entries published
+     * between subscribe() and the loop's first pass sat permanently behind
+     * the group cursor and were never delivered.
+     */
+    @Test
+    void subscriptionCreatesConsumerGroupEagerly() {
+        factoryB.getCache("streams");
+        byte[] stream = RedisStreamJournal.streamKeyBytes("streams");
+        byte[] group = (LettuceStreamsInvalidationTransport.GROUP_PREFIX + "streams:" + instanceB)
+                .getBytes(StandardCharsets.UTF_8);
+        var connection = clientB.connect(ByteArrayCodec.INSTANCE);
+        try {
+            assertTrue(groupExists(connection.sync(), stream, group),
+                    "consumer group must exist synchronously after subscribe");
+        } finally {
+            connection.close();
+        }
+    }
+
     @Test
     void disconnectHealsWithoutFullFlush() throws Exception {
         TierCache<String, String> a = factoryA.getCache("streams");
         TierCache<String, String> b = factoryB.getCache("streams");
+        awaitConsumerGroup("streams");
 
         a.put("keep", "v");
         assertEquals("v", b.get("keep")); // warm B's L1
@@ -127,6 +153,52 @@ abstract class AbstractLettuceStreamsIT {
         waitFor(() -> b.get("keep") == null);
         assertEquals("v0", b.get("flood-0"));
         reconnected.close();
+    }
+
+    /**
+     * Subscription creates the consumer group eagerly (see
+     * {@link #subscriptionCreatesConsumerGroupEagerly}), so this helper is a
+     * belt-and-braces confirmation rather than a race guard.
+     */
+    private void awaitConsumerGroup(String cache) throws InterruptedException {
+        byte[] stream = RedisStreamJournal.streamKeyBytes(cache);
+        byte[] group = (LettuceStreamsInvalidationTransport.GROUP_PREFIX + cache + ":" + instanceB)
+                .getBytes(StandardCharsets.UTF_8);
+        var connection = clientB.connect(ByteArrayCodec.INSTANCE);
+        try {
+            var sync = connection.sync();
+            waitFor(() -> groupExists(sync, stream, group));
+        } finally {
+            connection.close();
+        }
+    }
+
+    private static boolean groupExists(io.lettuce.core.api.sync.RedisCommands<byte[], byte[]> sync,
+            byte[] stream, byte[] group) {
+        List<Object> groups;
+        try {
+            groups = sync.xinfoGroups(stream);
+        } catch (RuntimeException e) {
+            return false; // stream not created yet (mkstream still pending)
+        }
+        for (Object g : groups) {
+            List<Object> row = (List<Object>) g;
+            for (int i = 0; i + 1 < row.size(); i += 2) {
+                if ("name".equals(asString(row.get(i)))
+                        && Arrays.equals(group, asBytes(row.get(i + 1)))) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private static String asString(Object o) {
+        return o instanceof byte[] ? new String((byte[]) o, StandardCharsets.UTF_8) : String.valueOf(o);
+    }
+
+    private static byte[] asBytes(Object o) {
+        return o instanceof byte[] ? (byte[]) o : String.valueOf(o).getBytes(StandardCharsets.UTF_8);
     }
 
     private static void waitFor(Check check) throws InterruptedException {
