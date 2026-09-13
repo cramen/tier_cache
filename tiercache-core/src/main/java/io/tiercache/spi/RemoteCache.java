@@ -5,9 +5,6 @@ import java.time.Duration;
 /**
  * SPI for the L2 (distributed) cache level.
  *
- * <p><b>Incubating:</b> this interface is part of the 0.x API and may change
- * incompatibly until the public API freeze.
- *
  * <p>Implementations must be thread-safe. TTLs are per entry: each
  * {@link #put} carries the entry TTL. Entries are opaque {@link StoredEntry}
  * holders — implementations must persist null-markers like any other entry.

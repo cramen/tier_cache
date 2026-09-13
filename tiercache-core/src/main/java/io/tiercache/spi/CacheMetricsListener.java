@@ -7,8 +7,6 @@ package io.tiercache.spi;
  * <p>Hot-path contract: an L1 hit produces exactly one {@link #onRequest}
  * call with no allocation and no clock reads; latency is timed only for
  * L2-touching operations. The default {@link #NOOP} costs nothing.
- *
- * <p><b>Incubating:</b> 0.x API, may change before 1.0.
  */
 public interface CacheMetricsListener {
 

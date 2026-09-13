@@ -44,7 +44,7 @@ Gradle (Kotlin DSL) multi-module build, Java 17 toolchain. Modules present: `tie
 
 - `.github/workflows/ci.yml` — push to `main` and PRs. JDK matrix 17/21/25: the 17-leg runs the full `./gradlew build` (all tests, TCK, coverage gates); the 21/25 legs run a lean build (`-x :tiercache-tck:test`) plus `:tiercache-tck:vtStressTest`. TCK runs on the 17-leg only — it validates runtime behavior, not compiler compatibility, so tripling its wall time buys nothing. The 17-leg also publishes the CycloneDX `sbom` artifact. The `offline-build` job proves `build --offline` works on a primed cache (Docker tasks excluded — image pulls are outside the offline artifact-build scope).
 - `.github/workflows/nightly.yml` — scheduled (03:47 UTC) and manual (`workflow_dispatch`, `soakDuration` input for smoke runs). Jobs: `soak` (PT24H gate), `pitest` (≥75% gate), `reproducible-build` (core shaded jar must be byte-identical across two independent checkouts), `cve-scan` (Trivy HIGH+CRITICAL, non-blocking report), `native-smoke`, `benchmarks`, `jmh` (informational; hosted-runner numbers never gate).
-- `.github/workflows/release-candidate.yml` — manual dispatch: builds the six module jars, creates SLSA build provenance (`actions/attest-build-provenance`) and Sigstore keyless signatures (`cosign sign-blob`, `.sigstore.json` bundles). Verification commands are printed by the workflow and mirrored in SECURITY.md.
+- `.github/workflows/release-candidate.yml` — manual dispatch: builds the six module jars plus the TCK compliance-suite jar (`tests` classifier), creates SLSA build provenance (`actions/attest-build-provenance`) and Sigstore keyless signatures (`cosign sign-blob`, `.sigstore.json` bundles). Verification commands are printed by the workflow and mirrored in SECURITY.md.
 - Blocking gates: build+tests+coverage (per push), soak, PIT, reproducible-build (nightly). Informational: JMH, benchmarks, CVE scan. A red nightly does not block merges but must be investigated the same day.
 - Dependency hygiene: Dependabot runs weekly for Gradle and GitHub Actions (grouped minor/patch PRs).
 - To rerun nightly manually: `gh workflow run nightly.yml -f soakDuration=PT10M`.
@@ -56,6 +56,16 @@ Gradle (Kotlin DSL) multi-module build, Java 17 toolchain. Modules present: `tie
 - The `native-smoke` job in `nightly.yml` compiles `examples/demo-spring` natively (GraalVM 25 toolchain; sources stay at release 17) and exercises its cache endpoints against a Redis service container.
 - The GraalVM reachability metadata **repository is disabled** for the demo build (`metadataRepository.enabled = false`): its Netty entries are `override=true` and target the 4.1 line, which silently replaces the version-matched metadata inside the Netty 4.2 jars Lettuce 7 requires. Do not re-enable it without re-checking the override semantics.
 - Local native builds work if a GraalVM 25 toolchain is installed (`native-image` lives under `lib/svm/bin`, NBT probes it automatically): `./gradlew :examples:demo-spring:nativeCompile`.
+
+## User documentation
+
+- `README.md` — front page: features, quick starts (Spring Boot and programmatic), requirements, docs index.
+- `docs/configuration.md` — full configuration reference (every core knob and starter property, defaults, invariants, validation).
+- `docs/migration-from-spring-cache.md` — zero-threshold migration from Spring Cache, behavior map linked to proof tests.
+- `docs/observability.md` — metrics/tracing/JMX catalog, Grafana dashboard import, alerts.
+- `docs/tck.md` — consuming and running the compliance suite (chaos tests, optional gates).
+- `CHANGELOG.md` — Keep a Changelog, `0.1.0 (unreleased)`.
+- `SECURITY.md` — vulnerability reporting and fix SLAs.
 
 ## Module structure (target)
 

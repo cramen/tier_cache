@@ -8,8 +8,6 @@ import java.util.UUID;
  * last-write-wins application and the origin instance ID so publishers can
  * ignore their own events. In UPDATE mode the message also carries the new
  * value payload, letting receivers warm L1 without an L2 read.
- *
- * <p><b>Incubating:</b> 0.x API, may change before 1.0.
  */
 public record InvalidationMessage(
         String cache,

@@ -14,8 +14,6 @@ import java.util.Objects;
  * lookups of nonexistent keys are absorbed by the cache (penetration
  * defense). The marker is distinguishable from a miss via
  * {@link TierCache#lookup}.
- *
- * <p><b>Incubating:</b> 0.x API, may change before 1.0.
  */
 public sealed interface NullPolicy {
 

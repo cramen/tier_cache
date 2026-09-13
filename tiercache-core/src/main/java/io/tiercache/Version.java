@@ -8,8 +8,6 @@ import java.util.UUID;
  * number plus the origin instance ID. Compared lexicographically (sequence
  * first, instance ID as tiebreak) — a total order per key across writers,
  * which is all last-write-wins invalidation needs.
- *
- * <p><b>Incubating:</b> 0.x API, may change before the public API freeze.
  */
 public record Version(long sequence, UUID instanceId) implements Comparable<Version> {
 

@@ -125,6 +125,27 @@ tasks.register<Test>("soakTest") {
         providers.systemProperty("tiercache.soak.duration").orElse("PT10M").get())
 }
 
+// Compliance-suite artifact (TCK publication design D5): the TCK's value is
+// its Testcontainers chaos suite, which lives in the test source set and is
+// not packaged by the default `jar`. Ship it as a dedicated jar with a
+// `tests` classifier; the main output is included because the suite uses
+// StampedeHarness from it. The `benchmark` and `vtStress` source sets stay
+// out of this artifact. No module in this build configures maven-publish, so
+// there is no pom metadata to mirror; group/version come from the root
+// subprojects block like every other module.
+val tckTestsJar = tasks.register<Jar>("tckTestsJar") {
+    description = "Compliance-suite classes (chaos TCK) for consumer runs."
+    group = "build"
+    dependsOn("testClasses")
+    from(sourceSets.main.get().output)
+    from(sourceSets.test.get().output)
+    archiveClassifier.set("tests")
+}
+
+tasks.named("assemble") {
+    dependsOn(tckTestsJar)
+}
+
 // The plugin's own `jmh` task would run an empty fork: this module's JMH
 // entry point is `jmhBenchmark` (below) over the `benchmark` source set.
 tasks.named("jmh") {

@@ -3,8 +3,6 @@ package io.tiercache;
 /**
  * Tri-state result of {@link TierCache#lookup}: distinguishes a hit, a
  * cached-null marker, and a miss.
- *
- * <p><b>Incubating:</b> 0.x API, may change before 1.0.
  */
 public sealed interface LookupResult<V> {
 

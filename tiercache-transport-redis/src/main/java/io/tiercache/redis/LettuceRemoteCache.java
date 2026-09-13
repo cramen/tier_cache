@@ -46,8 +46,6 @@ import java.util.Objects;
  * configurable via the builder and deliberately below a typical business
  * timeout. Infrastructure failures surface as Lettuce unchecked exceptions;
  * degradation handling (circuit breaker) lives in core, not here.
- *
- * <p><b>Incubating:</b> 0.x API, may change before the public API freeze.
  */
 public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockProviderSource, AutoCloseable {
 

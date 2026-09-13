@@ -6,8 +6,6 @@ import io.tiercache.Version;
  * The L1 side of a cache instance, exposed to the invalidation engine for
  * inbound events. Implementations apply events with last-write-wins
  * semantics.
- *
- * <p><b>Incubating:</b> 0.x API, may change before the public API freeze.
  */
 public interface InvalidationTarget {
 

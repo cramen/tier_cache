@@ -17,8 +17,6 @@ import kotlinx.coroutines.withContext
  * AND on a cached-null marker; use [lookup] to distinguish hit / cached-null
  * / miss. All semantics (cascade, L1 warm-up, null-markers, tags) are exactly
  * those of the underlying [TierCache].
- *
- * **Incubating:** 0.x API, may change before 1.0.
  */
 class KTierCache<K, V>(
     /** The underlying blocking cache. */

@@ -19,8 +19,6 @@ import io.tiercache.Version;
  * so readers can classify freshness without extra round trips. Entries from
  * legacy frames (or from stores that do not track write time) have no write
  * timestamp.
- *
- * <p><b>Incubating:</b> 0.x API, may change before 1.0.
  */
 public final class StoredEntry<V> {
 

@@ -26,8 +26,6 @@ import java.util.concurrent.TimeUnit;
  * they do not fan out — one group per instance is the broadcast shape).
  * The group cursor survives disconnects, so arbitrarily long partitions
  * (within stream retention) heal without a full L1 flush.
- *
- * <p><b>Incubating:</b> 0.x API, may change before 1.0.
  */
 public final class LettuceStreamsInvalidationTransport implements InvalidationTransport {
 

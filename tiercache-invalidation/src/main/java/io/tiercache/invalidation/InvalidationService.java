@@ -27,8 +27,6 @@ import java.util.concurrent.ConcurrentHashMap;
  * .invalidation(versions -> new InvalidationService(transport, journal,
  *         versions.instanceId(), listener))
  * }</pre>
- *
- * <p><b>Incubating:</b> 0.x API, may change before 1.0.
  */
 public final class InvalidationService implements InvalidationHandler {
 

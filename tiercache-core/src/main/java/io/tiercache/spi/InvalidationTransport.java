@@ -8,8 +8,6 @@ import java.util.function.Consumer;
  * SPI for the invalidation event transport. Default profile: Redis Pub/Sub
  * (minimal latency); a durable Streams profile and third-party buses (e.g.
  * Kafka) plug in through this interface without core changes.
- *
- * <p><b>Incubating:</b> 0.x API, may change before the public API freeze.
  */
 public interface InvalidationTransport extends AutoCloseable {
 

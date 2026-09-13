@@ -6,8 +6,6 @@ package io.tiercache.spi;
  * While degraded, cross-instance guarantees (putIfAbsent, rebuild
  * coordination) hold only per-instance. Operators must see these
  * transitions; metrics bind to this callback.
- *
- * <p><b>Incubating:</b> 0.x API, may change before 1.0.
  */
 public interface DegradationListener {
 

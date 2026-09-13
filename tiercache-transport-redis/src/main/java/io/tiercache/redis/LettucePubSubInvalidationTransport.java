@@ -27,8 +27,6 @@ import java.util.function.Consumer;
  * <p>On reconnect (detected via the Lettuce event bus) the registered
  * reconnect listener fires so the engine can replay the journal — Pub/Sub
  * itself is not durable.
- *
- * <p><b>Incubating:</b> 0.x API, may change before 1.0.
  */
 public final class LettucePubSubInvalidationTransport implements InvalidationTransport {
 

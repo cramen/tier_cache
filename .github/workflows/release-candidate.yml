@@ -29,8 +29,9 @@ jobs:
       - name: Build module jars
         run: ./gradlew build -x test :tiercache-core:shadowJar
 
-      # Publishable set: the six library module jars (core shaded + unshaded),
-      # excluding jmh/test-fixtures jars, the TCK, and the demo app.
+      # Publishable set: the six library module jars (core shaded + unshaded)
+      # plus the TCK compliance-suite jar (`tests` classifier), excluding
+      # jmh/test-fixtures jars, the plain TCK jar, and the demo app.
       - name: Stage artifacts
         run: |
           set -euo pipefail
@@ -40,6 +41,7 @@ jobs:
           for module in tiercache-invalidation tiercache-transport-redis tiercache-spring-boot-starter tiercache-micrometer tiercache-kotlin; do
             cp "$module/build/libs/$module"-*.jar dist/
           done
+          cp tiercache-tck/build/libs/tiercache-tck-*-tests.jar dist/
           ls -l dist/
 
       # SLSA-style build provenance as GitHub Artifact Attestations.

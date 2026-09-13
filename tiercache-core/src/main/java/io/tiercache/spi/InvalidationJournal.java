@@ -9,8 +9,6 @@ import java.util.List;
  * invalidation message in the same atomic unit as the data write; receivers
  * replay missed ranges after a reconnect. If the missed range has been
  * trimmed, receivers flush L1 (signaled via {@link InvalidationListener}).
- *
- * <p><b>Incubating:</b> 0.x API, may change before the public API freeze.
  */
 public interface InvalidationJournal {
 

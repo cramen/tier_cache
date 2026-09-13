@@ -3,9 +3,6 @@ package io.tiercache;
 /**
  * A two-level cache: cascading reads L1 (local) &rarr; L2 (remote) &rarr; loader.
  *
- * <p><b>Incubating:</b> this interface is part of the 0.x API and may change
- * incompatibly until the public API freeze.
- *
  * <p>Read semantics: a lookup checks L1, then L2, then (for
  * {@link #getOrCompute}) the loader. An L2 hit always warms L1, so the next
  * lookup of the same key is served locally. Concurrent

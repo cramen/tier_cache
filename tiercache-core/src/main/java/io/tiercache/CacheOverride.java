@@ -5,8 +5,6 @@ import java.time.Duration;
 /**
  * Per-cache configuration overrides. Any field left {@code null} inherits
  * the global default (see {@link TierCacheFactory}).
- *
- * <p><b>Incubating:</b> 0.x API, may change before 1.0.
  */
 public final class CacheOverride {
 

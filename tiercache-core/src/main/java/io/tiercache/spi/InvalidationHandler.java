@@ -7,8 +7,6 @@ import io.tiercache.Version;
  * Core-side hook between cache instances and the invalidation engine.
  * Caches report their local writes; the engine publishes them. The engine
  * registers caches as {@link InvalidationTarget}s for inbound events.
- *
- * <p><b>Incubating:</b> 0.x API, may change before the public API freeze.
  */
 public interface InvalidationHandler extends AutoCloseable {
 

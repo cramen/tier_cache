@@ -20,8 +20,6 @@ import java.util.UUID;
  * release another's lock. Extend: Lua token-checked {@code PEXPIRE ... XX}.
  * Locks live in the {@code tiercache:rebuild:*} keyspace, separate from data
  * entries.
- *
- * <p><b>Incubating:</b> 0.x API, may change before the public API freeze.
  */
 public final class LettuceLockProvider implements DistributedLockProvider {
 

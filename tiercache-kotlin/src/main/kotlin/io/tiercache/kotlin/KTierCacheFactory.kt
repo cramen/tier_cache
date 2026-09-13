@@ -31,8 +31,6 @@ import java.util.function.Function
  * the builder installs a fan-out listener on the core invalidation-event hook
  * at build time, so exactly one transport subscription is shared by any
  * number of flow collectors.
- *
- * **Incubating:** 0.x API, may change before 1.0.
  */
 class KTierCacheFactory internal constructor(
     /** The underlying blocking factory. */

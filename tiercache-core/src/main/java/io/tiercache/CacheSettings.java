@@ -7,8 +7,6 @@ import java.util.Objects;
 /**
  * Fully-resolved settings for one named cache: every field is concrete.
  *
- * <p><b>Incubating:</b> 0.x API, may change before 1.0.
- *
  * @param l1MaxSize          maximum number of entries in L1
  * @param l1ExpireAfterWrite L1 TTL since write (before jitter)
  * @param l1ExpireAfterAccess L1 TTL since last access, or {@code null} to disable

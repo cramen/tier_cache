@@ -5,9 +5,6 @@ import java.time.Duration;
 /**
  * SPI for acquiring distributed rebuild locks. Separate from
  * {@link RemoteCache}: coordination is not storage.
- *
- * <p><b>Incubating:</b> this interface is part of the 0.x API and may change
- * incompatibly until the public API freeze.
  */
 public interface DistributedLockProvider {
 

@@ -37,8 +37,6 @@ import java.util.function.BiFunction;
  * <p>The factory owns a daemon watchdog scheduler used for rebuild-lock
  * lease extension; close the factory when done.
  *
- * <p><b>Incubating:</b> 0.x API, may change before 1.0.
- *
  * <p>Consistency model: caches built here are eventually consistent;
  * no strong-consistency guarantees are given or implied.
  */
@@ -244,8 +242,8 @@ public final class TierCacheFactory implements AutoCloseable {
         }
 
         /**
-         * Replaces the L1 implementation (default: shaded Caffeine). SPI is
-         * incubating; see {@link LocalCache}.
+         * Replaces the L1 implementation (default: shaded Caffeine); see
+         * {@link LocalCache}.
          */
         public Builder localCacheFactory(BiFunction<String, CacheSettings, LocalCache<?, ?>> factory) {
             this.localCacheFactory = Objects.requireNonNull(factory, "factory");

@@ -5,9 +5,6 @@ import java.time.Duration;
 /**
  * SPI for distributed rebuild locks. Acquired via
  * {@link DistributedLockProvider#tryLock}.
- *
- * <p><b>Incubating:</b> this interface is part of the 0.x API and may change
- * incompatibly until the public API freeze.
  */
 public interface DistributedLock extends AutoCloseable {
 
