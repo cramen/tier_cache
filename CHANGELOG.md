@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-13
+
 ### Changed
 
 - The absolute two-level throughput budget (1M ops/s per instance) is dropped from the requirements: absolute throughput depends on the hardware and network environment the code runs on, so it is not a fair library contract. The throughput benchmarks stay as reproducible trend/regression measurements; budgets, if any, are defined per reference environment.
