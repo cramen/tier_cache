@@ -36,6 +36,8 @@ Gradle (Kotlin DSL) multi-module build, Java 17 toolchain. Modules present: `tie
 - `./gradlew :tiercache-core:shadowJar` — shaded artifact: Caffeine relocated under `io.tiercache.internal.caffeine`; the shaded jar is the main artifact, the plain jar keeps the `unshaded` classifier.
 - `./gradlew :tiercache-core:dependencyAudit` — asserts the runtime classpath exposes only SLF4J API.
 - `./gradlew :tiercache-core:jmh` — JMH baseline for the L1-hit hot path (gc profiler: overhead and zero-allocation budgets); results in `tiercache-core/build/results/jmh/results.txt`.
+- `./gradlew :tiercache-tck:jmhBenchmark` — cascade throughput budget benchmark (L1-miss → L2-hit → L1-warm against a Redis container; budget ≥ 1M ops/s per instance); results in `tiercache-tck/build/results/jmh-benchmark/results.txt`. Not in `check`; runs in the nightly `benchmarks` job (informational).
+- `./gradlew :tiercache-tck:propagationBenchmark` — invalidation propagation latency harness (two Pub/Sub instances, 10k events, p50/p95/p99; budget p99 ≤ 5 ms); results in `tiercache-tck/build/results/propagation/results.txt`. Not in `check`; runs in the nightly `benchmarks` job (informational).
 - `./gradlew :tiercache-core:pitest :tiercache-invalidation:pitest` — PIT mutation gate (≥75% kill score; core targets `io.tiercache.internal.*`, invalidation targets `io.tiercache.invalidation.*`). On demand only — deliberately NOT wired into `check`; belongs to CI/nightly.
 
 ## CI (GitHub Actions)
