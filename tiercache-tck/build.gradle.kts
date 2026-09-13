@@ -1,5 +1,6 @@
 plugins {
     `java-library`
+    alias(libs.plugins.jmh)
 }
 
 java {
@@ -13,6 +14,15 @@ java {
 // Java 17 baseline toolchain.
 val vtStress = sourceSets.create("vtStress") {
     java.srcDir("src/vtStress/java")
+}
+
+// Benchmark source set for the cascade throughput benchmark (benchmark-suite
+// design D1): JMH against a real Redis container. The JMH plugin is applied
+// for its task types and the `jmh` dependency bucket (jmh-core + generator),
+// but the plugin's own `jmh` source set/task stay unused so this module keeps
+// a single benchmark entry point named `jmhBenchmark`.
+val benchmark = sourceSets.create("benchmark") {
+    java.srcDir("src/benchmark/java")
 }
 
 dependencies {
@@ -34,6 +44,21 @@ dependencies {
     "vtStressImplementation"(platform(libs.junit.bom))
     "vtStressImplementation"(libs.junit.jupiter)
     "vtStressRuntimeOnly"(libs.junit.platform.launcher)
+
+    // JMH generator on the annotation-processor path: generated benchmark
+    // classes are compiled with the benchmark sources, no bytecode
+    // post-processing tasks needed. Version matches the plugin default.
+    "benchmarkAnnotationProcessor"("org.openjdk.jmh:jmh-generator-annprocess:1.36")
+}
+
+configurations {
+    named("benchmarkImplementation") {
+        extendsFrom(configurations.api.get(), configurations.implementation.get(),
+            configurations.jmh.get())
+    }
+    named("benchmarkRuntimeOnly") {
+        extendsFrom(configurations.runtimeOnly.get())
+    }
 }
 
 // JDK 21+ toolchain for the virtual-thread stress gate. Resolution is lazy:
@@ -98,4 +123,44 @@ tasks.register<Test>("soakTest") {
     }
     systemProperty("tiercache.soak.duration",
         providers.systemProperty("tiercache.soak.duration").orElse("PT10M").get())
+}
+
+// The plugin's own `jmh` task would run an empty fork: this module's JMH
+// entry point is `jmhBenchmark` (below) over the `benchmark` source set.
+tasks.named("jmh") {
+    enabled = false
+}
+
+val jmhBenchmarkJar = tasks.register<Jar>("jmhBenchmarkJar") {
+    description = "Benchmark classes for the cascade throughput benchmark."
+    group = "jmh"
+    dependsOn("benchmarkClasses")
+    from(benchmark.output)
+    from(sourceSets.main.get().output)
+    archiveClassifier.set("jmh-benchmark")
+}
+
+tasks.register<me.champeau.jmh.JMHTask>("jmhBenchmark") {
+    description = "Cascade-read throughput benchmark (L1 miss -> L2 hit -> L1 warm) against a Redis container."
+    group = "jmh"
+    dependsOn(jmhBenchmarkJar)
+    jmhClasspath.from(configurations.jmh.get())
+    testRuntimeClasspath.from(benchmark.runtimeClasspath)
+    jarArchive.set(jmhBenchmarkJar.flatMap { it.archiveFile })
+    resultsFile.set(layout.buildDirectory.file("results/jmh-benchmark/results.txt"))
+    fork.set(providers.gradleProperty("jmh.fork").map(String::toInt).orElse(1))
+    warmupIterations.set(providers.gradleProperty("jmh.warmupIterations").map(String::toInt).orElse(3))
+    iterations.set(providers.gradleProperty("jmh.iterations").map(String::toInt).orElse(5))
+    javaLauncher.set(javaToolchains.launcherFor(java.toolchain))
+}
+
+tasks.register<JavaExec>("propagationBenchmark") {
+    description = "Invalidation propagation latency harness (Pub/Sub profile): p50/p95/p99 publish-to-applied."
+    group = "verification"
+    mainClass.set("io.tiercache.tck.PropagationBenchmark")
+    classpath = sourceSets.test.get().runtimeClasspath
+    systemProperty("tiercache.propagation.events",
+        providers.systemProperty("tiercache.propagation.events").orElse("10000").get())
+    systemProperty("tiercache.propagation.report",
+        layout.buildDirectory.dir("results/propagation").get().file("results.txt").asFile.absolutePath)
 }
