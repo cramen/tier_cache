@@ -47,7 +47,7 @@ jobs:
         with:
           subject-path: 'dist/*.jar'
 
-      - uses: sigstore/cosign-installer@v4
+      - uses: sigstore/cosign-installer@v4.1.2
 
       # Keyless signing via the runner's OIDC identity. Cosign v3 requires
       # --bundle: each jar gets a <jar>.sigstore.json bundle holding the
