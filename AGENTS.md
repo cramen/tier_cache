@@ -45,6 +45,14 @@ Gradle (Kotlin DSL) multi-module build, Java 17 toolchain. Modules present: `tie
 - Blocking gates: build+tests+coverage (per push), soak, PIT (nightly). Informational: JMH. A red nightly does not block merges but must be investigated the same day.
 - To rerun nightly manually: `gh workflow run nightly.yml -f soakDuration=PT10M`.
 
+## GraalVM Native Image support
+
+- The three published jars (`tiercache-core`, `tiercache-transport-redis`, `tiercache-spring-boot-starter`) ship reachability metadata under `META-INF/native-image/`: the full Caffeine cache-implementation family for both shaded and unshaded layouts (core), Netty's shaded jctools queues plus the `ResourceLeakDetector.addExclusions` method surface and `java.lang.String` JDK serialization (transport). The starter needs none — Spring AOT covers it.
+- **User obligation:** applications using `JdkCacheSerializer` must register their own key/value classes for JDK serialization (standard Native Image practice; `java.lang.String` is covered by the library).
+- The `native-smoke` job in `nightly.yml` compiles `examples/demo-spring` natively (GraalVM 25 toolchain; sources stay at release 17) and exercises its cache endpoints against a Redis service container.
+- The GraalVM reachability metadata **repository is disabled** for the demo build (`metadataRepository.enabled = false`): its Netty entries are `override=true` and target the 4.1 line, which silently replaces the version-matched metadata inside the Netty 4.2 jars Lettuce 7 requires. Do not re-enable it without re-checking the override semantics.
+- Local native builds work if a GraalVM 25 toolchain is installed (`native-image` lives under `lib/svm/bin`, NBT probes it automatically): `./gradlew :examples:demo-spring:nativeCompile`.
+
 ## Module structure (target)
 
 | Module | Purpose | Dependency rules |
