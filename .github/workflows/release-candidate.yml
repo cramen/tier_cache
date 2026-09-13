@@ -38,7 +38,7 @@ jobs:
           mkdir -p dist
           cp tiercache-core/build/libs/tiercache-core-*.jar dist/
           rm -f dist/*-jmh.jar dist/*-test-fixtures.jar
-          for module in tiercache-invalidation tiercache-transport-redis tiercache-spring-boot-starter tiercache-micrometer tiercache-kotlin; do
+          for module in tiercache-invalidation tiercache-transport-redis tiercache-spring-boot-starter tiercache-micrometer tiercache-kotlin tiercache-reactor; do
             cp "$module/build/libs/$module"-*.jar dist/
           done
           cp tiercache-tck/build/libs/tiercache-tck-*-tests.jar dist/

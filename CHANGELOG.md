@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `tiercache-reactor`: Reactor bridge over the async view — `ReactorTierCache` Mono facade (all operations; sync and Mono loader forms of `getOrCompute`, coalescing stays in the engine's singleflight) and `ReactorCacheFactory` exposing inbound invalidation events as a cold `Flux` with bounded per-subscriber buffering and a drop signal.
+
 ## [0.3.0] - 2026-09-13
 
 ### Added
