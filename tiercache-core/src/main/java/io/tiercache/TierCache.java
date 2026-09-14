@@ -21,6 +21,7 @@ package io.tiercache;
  *
  * @param <K> key type
  * @param <V> value type
+ * @since 0.1.0
  */
 public interface TierCache<K, V> {
 
@@ -28,6 +29,10 @@ public interface TierCache<K, V> {
      * Returns the value for {@code key}, cascading L1 &rarr; L2 and warming
      * L1 on an L2 hit. Returns {@code null} on a miss AND on a cached-null
      * marker (use {@link #lookup} to distinguish); no loader is invoked.
+     *
+     * @param key the key to look up
+     * @return the cached value, or {@code null} if absent or cached-null
+     * @since 0.1.0
      */
     V get(K key);
 
@@ -35,6 +40,10 @@ public interface TierCache<K, V> {
      * Tri-state lookup: reports hit (with value), cached-null (marker
      * present), or miss. Cascades L1 &rarr; L2 like {@link #get}
      * (including L1 warm-up) and never invokes a loader.
+     *
+     * @param key the key to look up
+     * @return the tri-state lookup outcome; never {@code null}
+     * @since 0.1.0
      */
     LookupResult<V> lookup(K key);
 
@@ -49,8 +58,12 @@ public interface TierCache<K, V> {
      * <p>Concurrent calls for the same key coalesce onto one loader
      * execution.
      *
+     * @param key    the key to look up or compute
      * @param loader computes the value on a full miss; may return
      *               {@code null} to signal absence
+     * @return the cached or computed value, or {@code null} if the loader
+     *         signaled absence
+     * @since 0.1.0
      */
     V getOrCompute(K key, java.util.function.Function<? super K, ? extends V> loader);
 
@@ -58,6 +71,10 @@ public interface TierCache<K, V> {
      * Stores {@code value} under {@code key} in L2 and then L1 (write
      * order: L2 first), replacing any null-marker. The entry lives no longer
      * than the cache's L2 TTL; the L1 copy expires no later than the L2 copy.
+     *
+     * @param key   the key to store under
+     * @param value the value to store
+     * @since 0.1.0
      */
     void put(K key, V value);
 
@@ -70,12 +87,18 @@ public interface TierCache<K, V> {
      * <p>Atomicity is cross-instance only while L2 is healthy; the degraded
      * mode lands with the circuit breaker change.
      *
+     * @param key   the key to store under
+     * @param value the value to store
      * @return {@code true} if this call stored the value
+     * @since 0.1.0
      */
     boolean putIfAbsent(K key, V value);
 
     /**
      * Removes {@code key} from both L1 and L2.
+     *
+     * @param key the key to remove
+     * @since 0.1.0
      */
     void evict(K key);
 
@@ -84,12 +107,17 @@ public interface TierCache<K, V> {
      * the {@code deny} policy; under {@code allow(ttl)} stores the marker in
      * both levels with the marker TTL. Used by framework adapters to cache
      * null method results.
+     *
+     * @param key the key to mark as known-absent
+     * @since 0.1.0
      */
     void putNull(K key);
 
     /**
      * Removes all entries of this cache from both levels (supports
      * {@code @CacheEvict(allEntries = true)}).
+     *
+     * @since 0.1.0
      */
     void evictAll();
 
@@ -97,17 +125,28 @@ public interface TierCache<K, V> {
      * Stores {@code value} under {@code key}, tagging it for later
      * {@link #evictByTag}. An empty {@code tags} behaves like
      * {@link #put(Object, Object)}.
+     *
+     * @param key   the key to store under
+     * @param value the value to store
+     * @param tags  tags to associate with the entry
+     * @since 0.1.0
      */
     void put(K key, V value, String... tags);
 
     /**
      * Removes all entries tagged with {@code tag} from both levels, on all
      * instances (per-key invalidation events).
+     *
+     * @param tag the tag whose entries are removed
+     * @since 0.1.0
      */
     void evictByTag(String tag);
 
     /**
      * Removes the given keys from both levels, on all instances.
+     *
+     * @param keys the keys to remove
+     * @since 0.1.0
      */
     void evictAll(java.util.Collection<K> keys);
 }

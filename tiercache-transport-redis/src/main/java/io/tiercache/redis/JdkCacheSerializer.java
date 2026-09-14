@@ -13,6 +13,11 @@ import java.io.UncheckedIOException;
  * <p><b>Not recommended for production payloads:</b> JDK serialization is
  * brittle across class changes and unsafe for untrusted data. Provide your
  * own {@link CacheSerializer} (e.g. JSON-based) for real deployments.
+ *
+ * <p><b>Internal — not part of the supported API.</b>
+ *
+ * @param <T> the type being serialized
+ * @since 0.1.0
  */
 public final class JdkCacheSerializer<T> implements CacheSerializer<T> {
 

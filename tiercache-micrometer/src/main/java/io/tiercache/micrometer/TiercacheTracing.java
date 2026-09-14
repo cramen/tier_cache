@@ -11,11 +11,21 @@ import io.tiercache.spi.CacheMetricsListener;
  * processing. No spans on the L1-hit path (core never calls the hooks
  * there). Attributes: {@code cache.name}, {@code cache.hit},
  * {@code db.system=redis}.
+ *
+ * @since 0.1.0
  */
 public final class TiercacheTracing implements CacheMetricsListener {
 
     private final Tracer tracer;
 
+    /**
+     * Creates spans via a tracer named {@code io.tiercache} obtained from the
+     * given {@link OpenTelemetry} instance.
+     *
+     * @param openTelemetry the OpenTelemetry entry point to obtain the
+     *     tracer from
+     * @since 0.1.0
+     */
     public TiercacheTracing(OpenTelemetry openTelemetry) {
         this.tracer = openTelemetry.getTracer("io.tiercache");
     }

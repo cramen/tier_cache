@@ -14,16 +14,32 @@ import java.time.Duration;
  *
  * <p>Note: a two-level cache is eventually consistent by design.
  * Implementations must not claim or attempt to provide strong consistency.
+ *
+ * <p><b>Internal — not part of the supported API.</b> Extension point for
+ * L2 transport implementations.
+ *
+ * @param <K> key type
+ * @param <V> value type
+ * @since 0.1.0
  */
 public interface RemoteCache<K, V> {
 
     /**
      * Returns the entry for {@code key}, or {@code null} if absent or expired.
+     *
+     * @param key the key to look up
+     * @return the stored entry, or {@code null}
+     * @since 0.1.0
      */
     StoredEntry<V> get(K key);
 
     /**
      * Stores {@code entry} under {@code key} with the given TTL.
+     *
+     * @param key   the key to store under
+     * @param entry the entry to store
+     * @param ttl   the entry TTL
+     * @since 0.1.0
      */
     void put(K key, StoredEntry<V> entry, Duration ttl);
 
@@ -36,6 +52,12 @@ public interface RemoteCache<K, V> {
      * stale window — identical to {@link #put(Object, StoredEntry, Duration)}.
      * The default ignores the stale window; stale-capable transports
      * override.
+     *
+     * @param key      the key to store under
+     * @param entry    the entry to store
+     * @param ttl      the logical entry TTL
+     * @param staleTtl the stale window beyond the logical TTL
+     * @since 0.1.0
      */
     default void put(K key, StoredEntry<V> entry, Duration ttl, Duration staleTtl) {
         put(key, entry, ttl);
@@ -47,6 +69,12 @@ public interface RemoteCache<K, V> {
      * lose). Returns {@code true} if the write won. The default
      * implementation writes unconditionally; versioned transports override
      * with an atomic compare. This is the write side of last-write-wins.
+     *
+     * @param key   the key to store under
+     * @param entry the entry to store
+     * @param ttl   the entry TTL
+     * @return {@code true} if the write won
+     * @since 0.1.0
      */
     default boolean putIfNewer(K key, StoredEntry<V> entry, Duration ttl) {
         put(key, entry, ttl);
@@ -60,6 +88,13 @@ public interface RemoteCache<K, V> {
      * its stale window. The default writes through the stale-window
      * {@link #put(Object, StoredEntry, Duration, Duration)}; versioned
      * transports override to keep the compare atomic.
+     *
+     * @param key      the key to store under
+     * @param entry    the entry to store
+     * @param ttl      the logical entry TTL
+     * @param staleTtl the stale window beyond the logical TTL
+     * @return {@code true} if the write won
+     * @since 0.1.0
      */
     default boolean putIfNewer(K key, StoredEntry<V> entry, Duration ttl, Duration staleTtl) {
         put(key, entry, ttl, staleTtl);
@@ -68,6 +103,9 @@ public interface RemoteCache<K, V> {
 
     /**
      * Removes {@code key} if present.
+     *
+     * @param key the key to remove
+     * @since 0.1.0
      */
     void evict(K key);
 
@@ -75,6 +113,10 @@ public interface RemoteCache<K, V> {
      * Removes {@code key} if present, stamping the tombstone with the given
      * write version. Implementations with an invalidation journal use the
      * version for the journal entry; the default ignores it.
+     *
+     * @param key     the key to remove
+     * @param version the write version of the removal
+     * @since 0.1.0
      */
     default void evict(K key, io.tiercache.Version version) {
         evict(key);
@@ -83,6 +125,8 @@ public interface RemoteCache<K, V> {
     /**
      * Removes all entries of this cache's namespace. Used for
      * {@code evictAll} / Spring's {@code Cache.clear()}.
+     *
+     * @since 0.1.0
      */
     void clear();
 
@@ -95,14 +139,24 @@ public interface RemoteCache<K, V> {
      * atomic across all clients of that store. Note: a stored null-marker
      * counts as PRESENT for this operation.
      *
+     * @param key   the key to store under
+     * @param entry the entry to store
+     * @param ttl   the entry TTL
      * @return {@code true} if this call created the entry, {@code false} if
      *         the key already existed (not expired)
+     * @since 0.1.0
      */
     boolean setIfAbsent(K key, StoredEntry<V> entry, Duration ttl);
 
     /**
      * Stores {@code entry} recording tag membership for later
      * tag-based eviction. Default: plain put (tags not tracked).
+     *
+     * @param key   the key to store under
+     * @param entry the entry to store
+     * @param ttl   the entry TTL
+     * @param tags  the tags to associate with the entry
+     * @since 0.1.0
      */
     default void putTagged(K key, StoredEntry<V> entry, Duration ttl, String[] tags) {
         put(key, entry, ttl);
@@ -110,6 +164,11 @@ public interface RemoteCache<K, V> {
 
     /**
      * Keys currently tagged with {@code tag} (deserialized). Default: none.
+     *
+     * @param tag the tag to look up
+     * @return the tagged keys; empty if the tag is unknown or tags are not
+     *         tracked
+     * @since 0.1.0
      */
     default java.util.List<K> keysByTag(String tag) {
         return java.util.List.of();

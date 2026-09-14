@@ -26,10 +26,18 @@ import java.util.concurrent.TimeUnit;
  * they do not fan out — one group per instance is the broadcast shape).
  * The group cursor survives disconnects, so arbitrarily long partitions
  * (within stream retention) heal without a full L1 flush.
+ *
+ * <p><b>Internal — not part of the supported API.</b>
+ *
+ * @since 0.1.0
  */
 public final class LettuceStreamsInvalidationTransport implements InvalidationTransport {
 
-    /** Consumer-group keyspace: one group per instance per cache. */
+    /**
+     * Consumer-group keyspace: one group per instance per cache.
+     *
+     * @since 0.1.0
+     */
     public static final String GROUP_PREFIX = "tiercache:cg:";
 
     private final StatefulRedisConnection<byte[], byte[]> connection;
@@ -42,6 +50,15 @@ public final class LettuceStreamsInvalidationTransport implements InvalidationTr
     private volatile boolean closed;
     volatile Throwable lastReaderError; // test diagnostics
 
+    /**
+     * Creates a transport with a random instance identity (a fresh consumer
+     * group cursor per start).
+     *
+     * @param client          the Redis client to connect through
+     * @param keySerializer   serializer for message keys
+     * @param valueSerializer serializer for UPDATE payloads
+     * @since 0.1.0
+     */
     public LettuceStreamsInvalidationTransport(RedisClient client,
             CacheSerializer<Object> keySerializer, CacheSerializer<Object> valueSerializer) {
         this(client, keySerializer, valueSerializer, UUID.randomUUID());
@@ -50,6 +67,12 @@ public final class LettuceStreamsInvalidationTransport implements InvalidationTr
     /**
      * Stable instance identity: the same id reconnects to the same consumer
      * group (durable cursor). Random per default (new instance).
+     *
+     * @param client          the Redis client to connect through
+     * @param keySerializer   serializer for message keys
+     * @param valueSerializer serializer for UPDATE payloads
+     * @param instanceId      the stable identity of this instance
+     * @since 0.1.0
      */
     public LettuceStreamsInvalidationTransport(RedisClient client,
             CacheSerializer<Object> keySerializer, CacheSerializer<Object> valueSerializer,

@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-09-14
+
+GA release. No runtime behavior changes versus 0.4.0.
+
+### Added
+
+- Complete Javadoc with `@since` tags across all published modules, plus package-level documentation.
+- `UPGRADING.md` with per-release upgrade notes.
+- "Compatibility and versioning" policy documented in the README: semantic versioning, the definition of the public API, and deprecation/removal rules.
+
+### Changed
+
+- CI workflows moved to `actions/setup-java` v5.
+
 ## [0.4.0] - 2026-09-13
 
 ### Changed

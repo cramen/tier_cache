@@ -16,6 +16,8 @@ import java.util.Locale;
  * JMX registration for {@link TiercacheInspectionMXBean}. One instance per
  * factory; call {@link #register()} to expose and {@link #close()} to
  * unregister.
+ *
+ * @since 0.1.0
  */
 public final class TiercacheInspection implements TiercacheInspectionMXBean, AutoCloseable {
 
@@ -25,6 +27,19 @@ public final class TiercacheInspection implements TiercacheInspectionMXBean, Aut
     private final List<String> cacheNames;
     private ObjectName objectName;
 
+    /**
+     * Creates an inspection MBean reading counters from the given registry
+     * and state from the given factory.
+     *
+     * @param registry the registry holding the {@code tiercache.requests}
+     *     counters the hit ratios are computed from
+     * @param factory the factory whose circuit-breaker state is reported
+     * @param journal the invalidation journal backing
+     *     {@link #getJournalSize(String)}; may be {@code null}, in which case
+     *     the journal size is reported as {@code -1}
+     * @param cacheNames the named caches exposed by {@link #getCacheNames()}
+     * @since 0.1.0
+     */
     public TiercacheInspection(MeterRegistry registry, TierCacheFactory factory,
             InvalidationJournal journal, List<String> cacheNames) {
         this.registry = registry;
@@ -33,6 +48,14 @@ public final class TiercacheInspection implements TiercacheInspectionMXBean, Aut
         this.cacheNames = cacheNames;
     }
 
+    /**
+     * Registers this MBean with the platform MBean server under
+     * {@code io.tiercache:type=Inspection}. A second call while the name is
+     * already registered is a no-op.
+     *
+     * @throws IllegalStateException if JMX registration fails
+     * @since 0.1.0
+     */
     public void register() {
         try {
             objectName = new ObjectName("io.tiercache:type=Inspection");

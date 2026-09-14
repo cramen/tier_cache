@@ -25,6 +25,7 @@ import java.util.function.Function;
  *
  * @param <K> key type
  * @param <V> value type
+ * @since 0.3.0
  */
 public interface AsyncTierCache<K, V> {
 
@@ -33,16 +34,42 @@ public interface AsyncTierCache<K, V> {
      * {@link #getOrComputeAsyncStage(Object, AsyncLoader)} — a separate
      * name rather than an overload of {@code getOrComputeAsync}, because
      * implicitly typed lambdas would make the two overloads ambiguous.
+     *
+     * @param <K> key type
+     * @param <V> value type
+     * @since 0.3.0
      */
     @FunctionalInterface
     interface AsyncLoader<K, V> {
+
+        /**
+         * Computes the value for {@code key} asynchronously.
+         *
+         * @param key the key to load
+         * @return a stage producing the value; may produce {@code null} to
+         *         signal absence
+         * @since 0.3.0
+         */
         CompletionStage<? extends V> load(K key);
     }
 
-    /** Async form of {@link TierCache#get}. */
+    /**
+     * Async form of {@link TierCache#get}.
+     *
+     * @param key the key to look up
+     * @return a stage producing the cached value, or {@code null} if absent
+     *         or cached-null
+     * @since 0.3.0
+     */
     CompletionStage<V> getAsync(K key);
 
-    /** Async form of {@link TierCache#lookup} (tri-state). */
+    /**
+     * Async form of {@link TierCache#lookup} (tri-state).
+     *
+     * @param key the key to look up
+     * @return a stage producing the tri-state lookup outcome
+     * @since 0.3.0
+     */
     CompletionStage<LookupResult<V>> lookupAsync(K key);
 
     /**
@@ -50,6 +77,12 @@ public interface AsyncTierCache<K, V> {
      * runs on the shared executor, off the calling thread. Concurrent
      * calls for the same absent key coalesce onto one loader execution
      * through the engine's singleflight.
+     *
+     * @param key    the key to look up or compute
+     * @param loader computes the value on a full miss; may return
+     *               {@code null} to signal absence
+     * @return a stage producing the cached or computed value
+     * @since 0.3.0
      */
     CompletionStage<V> getOrComputeAsync(K key, Function<? super K, ? extends V> loader);
 
@@ -63,30 +96,86 @@ public interface AsyncTierCache<K, V> {
      * exceptionally, the failure is unwrapped and propagated exactly like
      * a synchronous loader throwing it: every coalesced caller's stage
      * completes exceptionally and nothing is stored.
+     *
+     * @param key    the key to look up or compute
+     * @param loader computes the value asynchronously on a full miss
+     * @return a stage producing the cached or computed value
+     * @since 0.3.0
      */
     CompletionStage<V> getOrComputeAsyncStage(K key, AsyncLoader<? super K, ? extends V> loader);
 
-    /** Async form of {@link TierCache#put}. */
+    /**
+     * Async form of {@link TierCache#put}.
+     *
+     * @param key   the key to store under
+     * @param value the value to store
+     * @return a stage completing when the write is done
+     * @since 0.3.0
+     */
     CompletionStage<Void> putAsync(K key, V value);
 
-    /** Async form of {@link TierCache#put(Object, Object, String...)}. */
+    /**
+     * Async form of {@link TierCache#put(Object, Object, String...)}.
+     *
+     * @param key   the key to store under
+     * @param value the value to store
+     * @param tags  tags to associate with the entry
+     * @return a stage completing when the write is done
+     * @since 0.3.0
+     */
     CompletionStage<Void> putAsync(K key, V value, String... tags);
 
-    /** Async form of {@link TierCache#putIfAbsent}. */
+    /**
+     * Async form of {@link TierCache#putIfAbsent}.
+     *
+     * @param key   the key to store under
+     * @param value the value to store
+     * @return a stage producing {@code true} if this call stored the value
+     * @since 0.3.0
+     */
     CompletionStage<Boolean> putIfAbsentAsync(K key, V value);
 
-    /** Async form of {@link TierCache#putNull}. */
+    /**
+     * Async form of {@link TierCache#putNull}.
+     *
+     * @param key the key to mark as known-absent
+     * @return a stage completing when the write is done
+     * @since 0.3.0
+     */
     CompletionStage<Void> putNullAsync(K key);
 
-    /** Async form of {@link TierCache#evict}. */
+    /**
+     * Async form of {@link TierCache#evict}.
+     *
+     * @param key the key to remove
+     * @return a stage completing when the eviction is done
+     * @since 0.3.0
+     */
     CompletionStage<Void> evictAsync(K key);
 
-    /** Async form of {@link TierCache#evictAll()}. */
+    /**
+     * Async form of {@link TierCache#evictAll()}.
+     *
+     * @return a stage completing when the eviction is done
+     * @since 0.3.0
+     */
     CompletionStage<Void> evictAllAsync();
 
-    /** Async form of {@link TierCache#evictAll(Collection)}. */
+    /**
+     * Async form of {@link TierCache#evictAll(Collection)}.
+     *
+     * @param keys the keys to remove
+     * @return a stage completing when the eviction is done
+     * @since 0.3.0
+     */
     CompletionStage<Void> evictAllAsync(Collection<K> keys);
 
-    /** Async form of {@link TierCache#evictByTag}. */
+    /**
+     * Async form of {@link TierCache#evictByTag}.
+     *
+     * @param tag the tag whose entries are removed
+     * @return a stage completing when the eviction is done
+     * @since 0.3.0
+     */
     CompletionStage<Void> evictByTagAsync(String tag);
 }

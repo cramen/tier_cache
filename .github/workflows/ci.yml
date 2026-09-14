@@ -23,7 +23,7 @@ jobs:
       # needs JDK 17 installed next to the matrix JDK. The 21-leg relies on
       # its primary JDK for the vtStress toolchain; the 25-leg gets JDK 21
       # as an extra toolchain for the same purpose.
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: |
@@ -79,7 +79,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: |

@@ -20,10 +20,18 @@ import java.util.UUID;
  * release another's lock. Extend: Lua token-checked {@code PEXPIRE ... XX}.
  * Locks live in the {@code tiercache:rebuild:*} keyspace, separate from data
  * entries.
+ *
+ * <p><b>Internal — not part of the supported API.</b>
+ *
+ * @since 0.1.0
  */
 public final class LettuceLockProvider implements DistributedLockProvider {
 
-    /** Keyspace prefix for rebuild locks (never collides with data keys). */
+    /**
+     * Keyspace prefix for rebuild locks (never collides with data keys).
+     *
+     * @since 0.1.0
+     */
     public static final String LOCK_KEYSPACE = "tiercache:rebuild:";
 
     private static final String RELEASE_SCRIPT =
@@ -38,10 +46,24 @@ public final class LettuceLockProvider implements DistributedLockProvider {
 
     private final RedisCommands<String, String> commands;
 
+    /**
+     * Creates a provider that opens its own connection from {@code client}.
+     * The caller keeps ownership of the client.
+     *
+     * @param client the Redis client to connect through
+     * @since 0.1.0
+     */
     public LettuceLockProvider(RedisClient client) {
         this(client.connect());
     }
 
+    /**
+     * Creates a provider over an existing connection. The caller keeps
+     * ownership of the connection.
+     *
+     * @param connection the connection to issue lock commands on
+     * @since 0.1.0
+     */
     public LettuceLockProvider(StatefulRedisConnection<String, String> connection) {
         this.commands = connection.sync();
     }

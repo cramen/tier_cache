@@ -5,7 +5,7 @@
 
 **Tiercache** is a family of JVM libraries providing a correct-out-of-the-box **two-level cache**: L1 in-process (Caffeine) + L2 Redis/Valkey, with cross-instance invalidation, built-in protection against the classic high-load failure modes (stampede, avalanche, penetration, L2 degradation), and first-class observability. A framework-independent core with thin adapters — pull in exactly one starter module and keep your existing cache code.
 
-Status: 0.x, incubating API (may change before 1.0). The cache is eventually consistent by design; no strong-consistency guarantees are given or implied.
+The cache is eventually consistent by design; no strong-consistency guarantees are given or implied.
 
 ## Features
 
@@ -15,7 +15,7 @@ Status: 0.x, incubating API (may change before 1.0). The cache is eventually con
 - **Honest degradation** — a circuit breaker switches the cache to L1-only when Redis fails; business code never sees infrastructure exceptions. Recovery replays the missed invalidations and never flushes L1 (no healing-partition stampede).
 - **Stale serving** — stale-while-revalidate and XFetch early refresh keep hot keys fast while values refresh in the background.
 - **Observability as a feature** — Micrometer metrics for every failure mode, OpenTelemetry tracing, JMX inspection, and a reference Grafana dashboard with alert rules in [`docs/grafana/`](docs/grafana/).
-- **Kotlin coroutines** — `suspend` API, invalidation `Flow`, and a `tierCache { }` config DSL in `tiercache-kotlin`.
+- **Kotlin coroutines** — `suspend` API, invalidation `Flow`, and a `tierCache { }` config DSL in `tiercache-kotlin`. A suspending loader runs on the caller's coroutine dispatcher, so a blocking loader blocks that dispatcher — offload blocking work with `withContext(Dispatchers.IO)`.
 - **GraalVM Native Image** — reachability metadata ships inside the published jars; the demo application compiles natively in CI.
 
 ## Quick start
@@ -24,7 +24,7 @@ Status: 0.x, incubating API (may change before 1.0). The cache is eventually con
 
 ```kotlin
 // build.gradle.kts
-implementation("io.github.cramen:tiercache-spring-boot-starter:0.1.0-SNAPSHOT")
+implementation("io.github.cramen:tiercache-spring-boot-starter:1.0.0")
 ```
 
 ```yaml
@@ -40,8 +40,8 @@ The starter replaces the standard cache manager: `@Cacheable` / `@CachePut` / `@
 
 ```kotlin
 // build.gradle.kts
-implementation("io.github.cramen:tiercache-core:0.1.0-SNAPSHOT")
-implementation("io.github.cramen:tiercache-transport-redis:0.1.0-SNAPSHOT")
+implementation("io.github.cramen:tiercache-core:1.0.0")
+implementation("io.github.cramen:tiercache-transport-redis:1.0.0")
 ```
 
 ```java
@@ -81,6 +81,21 @@ Reads cascade L1 → L2 → loader; concurrent loads of the same key share one l
 - Java 17 or newer
 - Redis 6.2+ or Valkey (for L2 and cross-instance features)
 - Docker, to run the integration tests and TCK chaos suite locally
+
+## Compatibility and versioning
+
+All published Maven artifacts follow **semantic versioning**: patch releases for backwards-compatible fixes, minor releases for backwards-compatible additions, major releases for breaking changes.
+
+**Supported public API** — the documented entry points only:
+
+- `io.tiercache` core API: `TierCache`, `AsyncTierCache`, `TierCacheFactory`, `CacheSettings`, `CacheOverride`
+- Spring Boot starter properties (`tiercache.*`) and annotations
+- Kotlin `suspend`/`Flow` extensions in `tiercache-kotlin`
+- Reactor `Mono`/`Flux` facade in `tiercache-reactor`
+
+Everything else — builders, transport internals, metrics helpers, and any type not listed above — is internal and may change in any release without notice. Minor and patch upgrades never break consumers who use only the supported API.
+
+**Deprecation and removal** — before any public API element is removed, it is marked `@Deprecated` with a documented replacement and stays functional for at least one minor release. Removals are recorded in [CHANGELOG.md](CHANGELOG.md) and `UPGRADING.md`, which describes the migration path per release.
 
 ## Documentation
 

@@ -44,6 +44,14 @@ import java.util.function.Function;
  * default transport, the Pub/Sub invalidation profile is wired automatically
  * ({@code tiercache.invalidation.enabled=false} opts out). Bean destroy
  * methods are inferred.
+ *
+ * <p><strong>Internal:</strong> not part of the supported public API.
+ * Spring Boot loads this class through its auto-configuration mechanism;
+ * applications configure it via the {@code tiercache.*} properties
+ * ({@link TiercacheProperties}). It may change in any release without
+ * notice.
+ *
+ * @since 0.1.0
  */
 @AutoConfiguration
 @ConditionalOnClass(TierCacheFactory.class)

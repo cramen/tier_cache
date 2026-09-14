@@ -24,10 +24,18 @@ import java.util.Map;
  *
  * <p>Cursors are stream entry IDs ({@code millis-seq}); replay reads
  * {@code XRANGE (cursor, +]}.
+ *
+ * <p><b>Internal — not part of the supported API.</b>
+ *
+ * @since 0.1.0
  */
 public final class RedisStreamJournal implements InvalidationJournal {
 
-    /** Stream keyspace prefix. */
+    /**
+     * Stream keyspace prefix.
+     *
+     * @since 0.1.0
+     */
     public static final String JOURNAL_KEYSPACE = "tiercache:journal:";
 
     private static final byte[] FIELD_TYPE = "t".getBytes();
@@ -39,6 +47,16 @@ public final class RedisStreamJournal implements InvalidationJournal {
     private final int capacity;
     private final CacheSerializer<Object> keySerializer;
 
+    /**
+     * Creates a journal over an existing byte-codec connection. The caller
+     * keeps ownership of the connection.
+     *
+     * @param connection    the connection to issue stream commands on
+     * @param capacity      maximum entries kept per cache stream (approximate
+     *                      MAXLEN trimming)
+     * @param keySerializer serializer for message keys
+     * @since 0.1.0
+     */
     public RedisStreamJournal(StatefulRedisConnection<byte[], byte[]> connection, int capacity,
             CacheSerializer<Object> keySerializer) {
         this.commands = connection.sync();
@@ -50,12 +68,23 @@ public final class RedisStreamJournal implements InvalidationJournal {
         return (JOURNAL_KEYSPACE + cache).getBytes(java.nio.charset.StandardCharsets.UTF_8);
     }
 
-    /** Stream key bytes for a cache (public for the transport's Lua script). */
+    /**
+     * Stream key bytes for a cache (public for the transport's Lua script).
+     *
+     * @param cache the cache name
+     * @return the stream key bytes ({@code tiercache:journal:<cache>})
+     * @since 0.1.0
+     */
     public static byte[] streamKeyBytes(String cache) {
         return streamKey(cache);
     }
 
-    /** Configured journal capacity (entries per cache stream). */
+    /**
+     * Configured journal capacity (entries per cache stream).
+     *
+     * @return the capacity passed to the constructor
+     * @since 0.1.0
+     */
     public int capacity() {
         return capacity;
     }
@@ -97,6 +126,11 @@ public final class RedisStreamJournal implements InvalidationJournal {
     /**
      * Last applied journal cursor per cache for replay bookkeeping: we return
      * the id of the newest entry, so readRange is exclusive-consistent.
+     *
+     * @param cache the cache name
+     * @return the id of the newest journal entry, or {@code "0-0"} when the
+     *         stream is empty
+     * @since 0.1.0
      */
     public String lastCursor(String cache) {
         return endCursor(cache);

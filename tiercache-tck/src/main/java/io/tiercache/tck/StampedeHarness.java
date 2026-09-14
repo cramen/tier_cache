@@ -24,12 +24,22 @@ import java.util.concurrent.atomic.AtomicInteger;
  * <p>Against a real Redis transport this becomes the full stampede chaos
  * test; the harness shape (threads, expiry timing, loader counting) is fixed
  * here so the later change only swaps the L2 implementation.
+ *
+ * @since 0.1.0
  */
 public final class StampedeHarness {
 
     private final int threads;
     private final Duration l1Ttl;
 
+    /**
+     * Creates a harness that stampedes a hot key with the given concurrency.
+     *
+     * @param threads number of threads released onto the hot key simultaneously
+     * @param l1Ttl L1 time-to-live of the cache under test; the key must
+     *              expire from L1 before the stampede is released
+     * @since 0.1.0
+     */
     public StampedeHarness(int threads, Duration l1Ttl) {
         this.threads = threads;
         this.l1Ttl = l1Ttl;
@@ -41,6 +51,9 @@ public final class StampedeHarness {
      *
      * @param singleflightEnabled whether the cache under test coalesces loads
      * @return number of times the loader executed during the stampede
+     * @throws Exception if a stamped thread is interrupted or a stampede
+     *                   round does not finish within its timeout
+     * @since 0.1.0
      */
     public int run(boolean singleflightEnabled) throws Exception {
         InMemoryRemoteCache<String, String> l2 = new InMemoryRemoteCache<>();

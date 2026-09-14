@@ -17,12 +17,26 @@ import java.util.function.Function;
  * to the synchronous engine on the factory's shared daemon executor
  * (supplyAsync-style). Adds no coalescing of its own — concurrent calls
  * for one key join the engine's inflight singleflight entry.
+ *
+ * <p><b>Internal — not part of the supported API.</b>
+ *
+ * @param <K> key type
+ * @param <V> value type
+ * @since 0.3.0
  */
 public final class DefaultAsyncTierCache<K, V> implements AsyncTierCache<K, V> {
 
     private final TierCache<K, V> delegate;
     private final Executor executor;
 
+    /**
+     * Creates the async view over a synchronous cache.
+     *
+     * @param delegate the synchronous engine; must not be {@code null}
+     * @param executor the shared executor cache work is offloaded to; must
+     *                 not be {@code null}
+     * @since 0.3.0
+     */
     public DefaultAsyncTierCache(TierCache<K, V> delegate, Executor executor) {
         this.delegate = Objects.requireNonNull(delegate, "delegate");
         this.executor = Objects.requireNonNull(executor, "executor");

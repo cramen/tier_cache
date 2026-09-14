@@ -46,10 +46,31 @@ import java.util.Objects;
  * configurable via the builder and deliberately below a typical business
  * timeout. Infrastructure failures surface as Lettuce unchecked exceptions;
  * degradation handling (circuit breaker) lives in core, not here.
+ *
+ * <p><b>Internal — not part of the supported API.</b> Wire through
+ * {@code TierCacheFactory.Builder.remoteCache}/{@code remoteCacheFactory} or
+ * the Spring Boot starter.
+ *
+ * @param <K> key type
+ * @param <V> value type
+ * @since 0.1.0
  */
 public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockProviderSource, AutoCloseable {
 
+    /**
+     * Default connect timeout applied when this transport owns the client
+     * (100 ms).
+     *
+     * @since 0.1.0
+     */
     public static final Duration DEFAULT_CONNECT_TIMEOUT = Duration.ofMillis(100);
+
+    /**
+     * Default per-command timeout applied when this transport owns the client
+     * (250 ms).
+     *
+     * @since 0.1.0
+     */
     public static final Duration DEFAULT_COMMAND_TIMEOUT = Duration.ofMillis(250);
 
     /** Tombstone lifetime after evict: bounds the resurrect-protection window. */
@@ -90,6 +111,16 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
         this.payloadCapBytes = builder.payloadCapBytes;
     }
 
+    /**
+     * Starts building a transport that creates and owns its Redis client from
+     * {@code redisUri} (e.g. {@code redis://localhost:6379}).
+     *
+     * @param <K>      key type
+     * @param <V>      value type
+     * @param redisUri the Redis/Valkey connection URI
+     * @return a new builder
+     * @since 0.1.0
+     */
     public static <K, V> Builder<K, V> builder(String redisUri) {
         return new Builder<>(redisUri);
     }
@@ -208,7 +239,14 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
         } while (!cursor.isFinished());
     }
 
-    /** Namespace-scoped clear plus a journal EVICT_ALL row (not transactional: SCAN can't be). */
+    /**
+     * Namespace-scoped clear plus a journal EVICT_ALL row (not transactional:
+     * SCAN can't be).
+     *
+     * @param version the version stamped on the journal row, or {@code null}
+     *                for an unversioned clear
+     * @since 0.1.0
+     */
     public void clearWithJournal(Version version) {
         clear();
         if (journal != null && version != null) {
@@ -384,8 +422,12 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
     }
 
     /**
+     * Builder for {@link LettuceRemoteCache}; obtain via
+     * {@link LettuceRemoteCache#builder(String)}.
+     *
      * @param <K> key type
      * @param <V> value type
+     * @since 0.1.0
      */
     public static final class Builder<K, V> {
 
@@ -407,7 +449,11 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
         /**
          * Reuses an existing client (e.g. shared across caches/instances)
          * instead of creating one from {@code redisUri}. The caller then owns
-         * the client lifecycle.
+         * the client lifecycle, including its timeout options.
+         *
+         * @param sharedClient the client to reuse
+         * @return this builder
+         * @since 0.1.0
          */
         @SuppressWarnings("unchecked")
         public Builder<K, V> client(RedisClient sharedClient) {
@@ -418,29 +464,66 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
         /**
          * Namespace for keys (used as {@code <cacheName>:} prefix). Required
          * when several caches share one server.
+         *
+         * @param cacheName the cache name
+         * @return this builder
+         * @since 0.1.0
          */
         public Builder<K, V> cacheName(String cacheName) {
             this.cacheName = Objects.requireNonNull(cacheName, "cacheName");
             return this;
         }
 
+        /**
+         * Serializer for keys; defaults to {@link JdkCacheSerializer}.
+         *
+         * @param keySerializer the key serializer
+         * @return this builder
+         * @since 0.1.0
+         */
         @SuppressWarnings("unchecked")
         public Builder<K, V> keySerializer(CacheSerializer<?> keySerializer) {
             this.keySerializer = (CacheSerializer<K>) Objects.requireNonNull(keySerializer);
             return this;
         }
 
+        /**
+         * Serializer for values; defaults to {@link JdkCacheSerializer}.
+         *
+         * @param valueSerializer the value serializer
+         * @return this builder
+         * @since 0.1.0
+         */
         @SuppressWarnings("unchecked")
         public Builder<K, V> valueSerializer(CacheSerializer<?> valueSerializer) {
             this.valueSerializer = (CacheSerializer<V>) Objects.requireNonNull(valueSerializer);
             return this;
         }
 
+        /**
+         * Connect timeout for a client owned by this transport; defaults to
+         * {@link #DEFAULT_CONNECT_TIMEOUT}. Ignored when {@link #client} is
+         * used.
+         *
+         * @param connectTimeout the connect timeout
+         * @return this builder
+         * @since 0.1.0
+         */
         public Builder<K, V> connectTimeout(Duration connectTimeout) {
             this.connectTimeout = Objects.requireNonNull(connectTimeout, "connectTimeout");
             return this;
         }
 
+        /**
+         * Per-command timeout for a client owned by this transport; defaults
+         * to {@link #DEFAULT_COMMAND_TIMEOUT}. Must stay below the business
+         * timeout so L2 outages trip the circuit breaker instead of hanging
+         * requests. Ignored when {@link #client} is used.
+         *
+         * @param commandTimeout the per-command timeout
+         * @return this builder
+         * @since 0.1.0
+         */
         public Builder<K, V> commandTimeout(Duration commandTimeout) {
             this.commandTimeout = Objects.requireNonNull(commandTimeout, "commandTimeout");
             return this;
@@ -450,6 +533,10 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
          * Attaches the invalidation journal: writes become version-conditional
          * with atomic journal rows, and evicts leave versioned tombstones
          * (strict last-write-wins convergence).
+         *
+         * @param journal the journal to append invalidation rows to
+         * @return this builder
+         * @since 0.1.0
          */
         public Builder<K, V> journal(RedisStreamJournal journal) {
             this.journal = journal;
@@ -460,6 +547,12 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
          * UPDATE invalidation mode for this transport's cache: journal rows
          * carry the value payload (up to {@code payloadCapBytes}; larger
          * values fall back to INVALIDATE semantics).
+         *
+         * @param mode            the invalidation mode
+         * @param payloadCapBytes maximum serialized UPDATE payload size in
+         *                        bytes
+         * @return this builder
+         * @since 0.1.0
          */
         public Builder<K, V> invalidationMode(io.tiercache.InvalidationMode mode, long payloadCapBytes) {
             this.invalidationMode = mode;
@@ -467,6 +560,12 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
             return this;
         }
 
+        /**
+         * Builds the transport, opening its connection immediately.
+         *
+         * @return the configured transport
+         * @since 0.1.0
+         */
         public LettuceRemoteCache<K, V> build() {
             if (keySerializer == null) {
                 keySerializer = new JdkCacheSerializer<>();

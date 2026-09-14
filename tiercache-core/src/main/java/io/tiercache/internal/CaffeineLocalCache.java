@@ -16,11 +16,24 @@ import java.time.Duration;
  * {@link Expiry}. The holder is allocated on write only; the steady-state
  * hit path ({@link #get}) allocates nothing. Null-markers are
  * stored like any other entry.
+ *
+ * <p><b>Internal — not part of the supported API.</b>
+ *
+ * @param <K> key type
+ * @param <V> value type
+ * @since 0.1.0
  */
 public final class CaffeineLocalCache<K, V> implements LocalCache<K, V> {
 
     private final Cache<K, Holder<V>> cache;
 
+    /**
+     * Creates an L1 cache honoring the given settings (size cap,
+     * expire-after-access).
+     *
+     * @param settings the resolved cache settings
+     * @since 0.1.0
+     */
     public CaffeineLocalCache(CacheSettings settings) {
         @SuppressWarnings("unchecked")
         Caffeine<K, Holder<V>> builder = (Caffeine<K, Holder<V>>) (Caffeine<?, ?>) Caffeine.newBuilder();

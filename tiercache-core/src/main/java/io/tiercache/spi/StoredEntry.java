@@ -19,6 +19,12 @@ import io.tiercache.Version;
  * so readers can classify freshness without extra round trips. Entries from
  * legacy frames (or from stores that do not track write time) have no write
  * timestamp.
+ *
+ * <p><b>Internal — not part of the supported API.</b> Exchanged between the
+ * cache levels and the engine.
+ *
+ * @param <V> value type
+ * @since 0.1.0
  */
 public final class StoredEntry<V> {
 
@@ -38,10 +44,29 @@ public final class StoredEntry<V> {
         this.writeTimestampMillis = writeTimestampMillis;
     }
 
+    /**
+     * Creates an unversioned value entry.
+     *
+     * @param <V>   value type
+     * @param value the value to store; must not be {@code null}
+     * @return the value entry
+     * @throws NullPointerException if {@code value} is {@code null}
+     * @since 0.1.0
+     */
     public static <V> StoredEntry<V> ofValue(V value) {
         return ofValue(value, null);
     }
 
+    /**
+     * Creates a versioned value entry without a write timestamp.
+     *
+     * @param <V>     value type
+     * @param value   the value to store; must not be {@code null}
+     * @param version the write version, or {@code null} for unversioned
+     * @return the value entry
+     * @throws NullPointerException if {@code value} is {@code null}
+     * @since 0.1.0
+     */
     public static <V> StoredEntry<V> ofValue(V value, Version version) {
         if (value == null) {
             throw new NullPointerException("value must not be null; use nullMarker()");
@@ -49,6 +74,21 @@ public final class StoredEntry<V> {
         return new StoredEntry<>(value, false, version, NO_WRITE_TIMESTAMP);
     }
 
+    /**
+     * Creates a versioned value entry with a write timestamp (extended L2
+     * frames with a stale window).
+     *
+     * @param <V>                  value type
+     * @param value                the value to store; must not be
+     *                             {@code null}
+     * @param version              the write version, or {@code null} for
+     *                             unversioned
+     * @param writeTimestampMillis when the write happened, in milliseconds
+     *                             since the epoch
+     * @return the value entry
+     * @throws NullPointerException if {@code value} is {@code null}
+     * @since 0.1.0
+     */
     public static <V> StoredEntry<V> ofValue(V value, Version version, long writeTimestampMillis) {
         if (value == null) {
             throw new NullPointerException("value must not be null; use nullMarker()");
@@ -56,10 +96,25 @@ public final class StoredEntry<V> {
         return new StoredEntry<>(value, false, version, writeTimestampMillis);
     }
 
+    /**
+     * Returns an unversioned null-marker entry.
+     *
+     * @param <V> value type
+     * @return the null-marker
+     * @since 0.1.0
+     */
     public static <V> StoredEntry<V> nullMarker() {
         return nullMarker(null);
     }
 
+    /**
+     * Returns a versioned null-marker entry without a write timestamp.
+     *
+     * @param <V>     value type
+     * @param version the write version, or {@code null} for unversioned
+     * @return the null-marker
+     * @since 0.1.0
+     */
     @SuppressWarnings("unchecked")
     public static <V> StoredEntry<V> nullMarker(Version version) {
         if (version == null) {
@@ -68,16 +123,36 @@ public final class StoredEntry<V> {
         return new StoredEntry<>(null, true, version, NO_WRITE_TIMESTAMP);
     }
 
+    /**
+     * Returns a versioned null-marker entry with a write timestamp.
+     *
+     * @param <V>                  value type
+     * @param version              the write version, or {@code null} for
+     *                             unversioned
+     * @param writeTimestampMillis when the write happened, in milliseconds
+     *                             since the epoch
+     * @return the null-marker
+     * @since 0.1.0
+     */
     public static <V> StoredEntry<V> nullMarker(Version version, long writeTimestampMillis) {
         return new StoredEntry<>(null, true, version, writeTimestampMillis);
     }
 
+    /**
+     * Whether this entry is a null-marker.
+     *
+     * @return {@code true} if this entry marks a known-absent key
+     * @since 0.1.0
+     */
     public boolean isNullMarker() {
         return nullMarker;
     }
 
     /**
      * The write version, or {@code null} for unversioned entries.
+     *
+     * @return the write version, or {@code null}
+     * @since 0.1.0
      */
     public Version version() {
         return version;
@@ -86,6 +161,9 @@ public final class StoredEntry<V> {
     /**
      * Whether this entry carries the write timestamp of the write that
      * produced it (extended L2 frames; absent for legacy frames).
+     *
+     * @return {@code true} if a write timestamp is present
+     * @since 0.1.0
      */
     public boolean hasWriteTimestamp() {
         return writeTimestampMillis >= 0;
@@ -94,7 +172,9 @@ public final class StoredEntry<V> {
     /**
      * The write timestamp in milliseconds since the epoch.
      *
+     * @return the write timestamp
      * @throws IllegalStateException if this entry has no write timestamp
+     * @since 0.1.0
      */
     public long writeTimestampMillis() {
         if (!hasWriteTimestamp()) {
@@ -106,7 +186,9 @@ public final class StoredEntry<V> {
     /**
      * The stored value.
      *
+     * @return the value; never {@code null}
      * @throws IllegalStateException if this entry is a null-marker
+     * @since 0.1.0
      */
     public V value() {
         if (nullMarker) {

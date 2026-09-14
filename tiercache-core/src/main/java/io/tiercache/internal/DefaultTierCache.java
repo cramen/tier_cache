@@ -58,6 +58,12 @@ import java.util.function.Function;
  * {@code LocalCache.get} plus one reference check, and allocates nothing.
  * With stale serving and XFetch off, the L2-hit path pays one extra boolean
  * check.
+ *
+ * <p><b>Internal — not part of the supported API.</b>
+ *
+ * @param <K> key type
+ * @param <V> value type
+ * @since 0.1.0
  */
 public final class DefaultTierCache<K, V> implements TierCache<K, V>, InvalidationTarget {
 
@@ -101,12 +107,38 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
     private final AtomicLong loaderDurationEmaNanos = new AtomicLong(EMA_UNINITIALIZED);
     private final Map<K, CompletableFuture<StoredEntry<V>>> inflight = new ConcurrentHashMap<>();
 
-    /** Legacy constructor: no coordination, no invalidation (used by tests). */
+    /**
+     * Legacy constructor: no coordination, no invalidation (used by tests).
+     *
+     * @param l1                  the L1 cache
+     * @param l2                  the L2 cache
+     * @param settings            the resolved cache settings
+     * @param singleflightEnabled whether per-instance load coalescing is on
+     * @since 0.1.0
+     */
     public DefaultTierCache(LocalCache<K, V> l1, RemoteCache<K, V> l2,
             CacheSettings settings, boolean singleflightEnabled) {
         this("test", l1, l2, settings, singleflightEnabled, null, null, null, null);
     }
 
+    /**
+     * Constructor with rebuild coordination and invalidation, without a
+     * circuit breaker or metrics.
+     *
+     * @param cacheName           the cache name (lock namespacing, logging)
+     * @param l1                  the L1 cache
+     * @param l2                  the L2 cache
+     * @param settings            the resolved cache settings
+     * @param singleflightEnabled whether per-instance load coalescing is on
+     * @param lockProvider        rebuild-lock provider, or {@code null} for
+     *                            no coordination
+     * @param watchdog            lease-extension scheduler, or {@code null}
+     * @param versionGenerator    write-version source, or {@code null} to
+     *                            disable versioning/publishing
+     * @param invalidation        the invalidation engine, or {@code null} for
+     *                            single-node
+     * @since 0.1.0
+     */
     public DefaultTierCache(String cacheName, LocalCache<K, V> l1, RemoteCache<K, V> l2,
             CacheSettings settings, boolean singleflightEnabled,
             DistributedLockProvider lockProvider, ScheduledExecutorService watchdog,
@@ -115,6 +147,27 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
                 versionGenerator, invalidation, null, CacheMetricsListener.NOOP);
     }
 
+    /**
+     * Constructor with a circuit breaker and metrics, without a revalidation
+     * executor.
+     *
+     * @param cacheName           the cache name (lock namespacing, logging)
+     * @param l1                  the L1 cache
+     * @param l2                  the L2 cache
+     * @param settings            the resolved cache settings
+     * @param singleflightEnabled whether per-instance load coalescing is on
+     * @param lockProvider        rebuild-lock provider, or {@code null} for
+     *                            no coordination
+     * @param watchdog            lease-extension scheduler, or {@code null}
+     * @param versionGenerator    write-version source, or {@code null} to
+     *                            disable versioning/publishing
+     * @param invalidation        the invalidation engine, or {@code null} for
+     *                            single-node
+     * @param breaker             the L2 circuit breaker, or {@code null} for
+     *                            unguarded L2
+     * @param metrics             the metrics listener
+     * @since 0.1.0
+     */
     public DefaultTierCache(String cacheName, LocalCache<K, V> l1, RemoteCache<K, V> l2,
             CacheSettings settings, boolean singleflightEnabled,
             DistributedLockProvider lockProvider, ScheduledExecutorService watchdog,
@@ -128,6 +181,25 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
      * Full constructor. {@code revalidationExecutor} runs fire-and-forget
      * stale revalidations / XFetch refreshes; when {@code null}, stale
      * entries are still served but never revalidated (legacy wiring).
+     *
+     * @param cacheName            the cache name (lock namespacing, logging)
+     * @param l1                   the L1 cache
+     * @param l2                   the L2 cache
+     * @param settings             the resolved cache settings
+     * @param singleflightEnabled  whether per-instance load coalescing is on
+     * @param lockProvider         rebuild-lock provider, or {@code null} for
+     *                             no coordination
+     * @param watchdog             lease-extension scheduler, or {@code null}
+     * @param versionGenerator     write-version source, or {@code null} to
+     *                             disable versioning/publishing
+     * @param invalidation         the invalidation engine, or {@code null}
+     *                             for single-node
+     * @param breaker              the L2 circuit breaker, or {@code null} for
+     *                             unguarded L2
+     * @param metrics              the metrics listener
+     * @param revalidationExecutor executor for async revalidation, or
+     *                             {@code null}
+     * @since 0.1.0
      */
     public DefaultTierCache(String cacheName, LocalCache<K, V> l1, RemoteCache<K, V> l2,
             CacheSettings settings, boolean singleflightEnabled,
@@ -143,6 +215,26 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
      * Full constructor with an explicit TTL jitter source. {@code jitter}
      * is a test seam for deterministic TTL spreads; production wiring uses
      * the overload above, which draws from ThreadLocalRandom.
+     *
+     * @param cacheName            the cache name (lock namespacing, logging)
+     * @param l1                   the L1 cache
+     * @param l2                   the L2 cache
+     * @param settings             the resolved cache settings
+     * @param singleflightEnabled  whether per-instance load coalescing is on
+     * @param lockProvider         rebuild-lock provider, or {@code null} for
+     *                             no coordination
+     * @param watchdog             lease-extension scheduler, or {@code null}
+     * @param versionGenerator     write-version source, or {@code null} to
+     *                             disable versioning/publishing
+     * @param invalidation         the invalidation engine, or {@code null}
+     *                             for single-node
+     * @param breaker              the L2 circuit breaker, or {@code null} for
+     *                             unguarded L2
+     * @param metrics              the metrics listener
+     * @param revalidationExecutor executor for async revalidation, or
+     *                             {@code null}
+     * @param jitter               the TTL jitter source
+     * @since 0.1.0
      */
     public DefaultTierCache(String cacheName, LocalCache<K, V> l1, RemoteCache<K, V> l2,
             CacheSettings settings, boolean singleflightEnabled,
@@ -598,6 +690,10 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
      * Current EMA of loader durations in nanoseconds, or {@code -1} before
      * the first measured load. Diagnostics/testing; independent of any
      * metrics binding.
+     *
+     * @return the loader-duration EMA in nanoseconds, or {@code -1} if
+     *         uninitialized
+     * @since 0.1.0
      */
     public long loaderDurationEmaNanos() {
         return loaderDurationEmaNanos.get();
@@ -775,7 +871,12 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         l1.put(key, entry, ttl);
     }
 
-    /** True while the L2 circuit breaker is open (L1-only mode). */
+    /**
+     * True while the L2 circuit breaker is open (L1-only mode).
+     *
+     * @return {@code true} while this cache runs degraded on L1 only
+     * @since 0.1.0
+     */
     public boolean isDegraded() {
         return breaker != null && breaker.isOpen();
     }

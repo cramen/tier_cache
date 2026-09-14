@@ -3,6 +3,9 @@ plugins {
     // Version comes from the root plugins block (shared classloader with the
     // publishing plugin).
     kotlin("jvm")
+    // KDoc generation for the published javadoc jar (picked up automatically
+    // by the publishing plugin) and the documentation-warning gate.
+    id("org.jetbrains.dokka") version "2.1.0"
     alias(libs.plugins.vanniktech.publish)
 }
 

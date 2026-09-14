@@ -30,6 +30,8 @@ import java.util.concurrent.TimeUnit;
  *
  * <p>Load age is approximate: tracked from store events, not per-entry
  * metadata.
+ *
+ * @since 0.1.0
  */
 public final class MicrometerCacheMetrics
         implements CacheMetricsListener, DegradationListener, InvalidationListener {
@@ -45,6 +47,12 @@ public final class MicrometerCacheMetrics
     private final Map<String, Counter> revalidationFailures = new ConcurrentHashMap<>();
     private final Map<String, Long> lastStoreNanos = new ConcurrentHashMap<>();
 
+    /**
+     * Creates a binder that publishes all metrics to the given registry.
+     *
+     * @param registry the Micrometer registry to bind meters to
+     * @since 0.1.0
+     */
     public MicrometerCacheMetrics(MeterRegistry registry) {
         this.registry = registry;
     }
@@ -133,6 +141,15 @@ public final class MicrometerCacheMetrics
     /**
      * Registers factory-level gauges: degraded, breaker state, journal size,
      * last load age (approximate). Call once per factory.
+     *
+     * @param factory the factory whose degradation and breaker state the
+     *     {@code tiercache.degraded} and {@code tiercache.breaker.state}
+     *     gauges read
+     * @param journal the invalidation journal backing the
+     *     {@code tiercache.journal.size} gauge; may be {@code null}, in which
+     *     case the gauge reports {@code 0}
+     * @param cacheNames the named caches to register per-cache gauges for
+     * @since 0.1.0
      */
     public void registerGauges(TierCacheFactory factory, InvalidationJournal journal,
             List<String> cacheNames) {

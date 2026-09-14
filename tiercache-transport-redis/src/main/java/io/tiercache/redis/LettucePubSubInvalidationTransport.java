@@ -27,10 +27,18 @@ import java.util.function.Consumer;
  * <p>On reconnect (detected via the Lettuce event bus) the registered
  * reconnect listener fires so the engine can replay the journal — Pub/Sub
  * itself is not durable.
+ *
+ * <p><b>Internal — not part of the supported API.</b>
+ *
+ * @since 0.1.0
  */
 public final class LettucePubSubInvalidationTransport implements InvalidationTransport {
 
-    /** Channel keyspace prefix. */
+    /**
+     * Channel keyspace prefix.
+     *
+     * @since 0.1.0
+     */
     public static final String CHANNEL_PREFIX = "tiercache:inv:";
 
     private final RedisClient client;
@@ -44,11 +52,31 @@ public final class LettucePubSubInvalidationTransport implements InvalidationTra
     private volatile Runnable reconnectListener = () -> {
     };
 
+    /**
+     * Creates a transport with one serializer for both keys and UPDATE
+     * payloads and the default payload cap (64 KiB).
+     *
+     * @param client        the Redis client to connect through
+     * @param keySerializer serializer for message keys (also used for UPDATE
+     *                      payloads)
+     * @since 0.1.0
+     */
     public LettucePubSubInvalidationTransport(RedisClient client,
             CacheSerializer<Object> keySerializer) {
         this(client, keySerializer, keySerializer, 64 * 1024);
     }
 
+    /**
+     * Creates a transport with distinct key/value serializers and an explicit
+     * UPDATE payload cap. UPDATE messages whose serialized payload exceeds
+     * {@code payloadCapBytes} degrade to plain INVALIDATE messages.
+     *
+     * @param client          the Redis client to connect through
+     * @param keySerializer   serializer for message keys
+     * @param valueSerializer serializer for UPDATE payloads
+     * @param payloadCapBytes maximum serialized UPDATE payload size in bytes
+     * @since 0.1.0
+     */
     public LettucePubSubInvalidationTransport(RedisClient client,
             CacheSerializer<Object> keySerializer, CacheSerializer<Object> valueSerializer,
             long payloadCapBytes) {

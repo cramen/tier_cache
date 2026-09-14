@@ -24,6 +24,7 @@ import java.util.Objects;
  *                           L2 entries; default off
  * @param xfetchBeta         XFetch tuning factor; smaller values trigger
  *                           early refresh more aggressively
+ * @since 0.1.0
  */
 public record CacheSettings(
         long l1MaxSize,
@@ -38,6 +39,31 @@ public record CacheSettings(
         boolean xfetchEnabled,
         Duration xfetchBeta) {
 
+    /**
+     * Validates the raw field values (presence, positivity, ranges). Value
+     * validation of staleTtl/xfetchBeta (negative window, non-positive beta)
+     * is startup validation's job; see
+     * {@code io.tiercache.internal.CacheConfigValidator}.
+     *
+     * @param l1MaxSize          maximum number of entries in L1
+     * @param l1ExpireAfterWrite L1 TTL since write (before jitter)
+     * @param l1ExpireAfterAccess L1 TTL since last access, or {@code null}
+     *                            to disable
+     * @param l2Ttl              L2 entry TTL
+     * @param jitterAmplitude    TTL jitter amplitude as a fraction in [0, 1)
+     * @param nullPolicy         null-caching policy
+     * @param invalidationMode   invalidation event mode
+     * @param payloadCapBytes    max payload bytes for UPDATE events
+     * @param staleTtl           stale-while-revalidate window;
+     *                           {@code Duration.ZERO} disables stale serving
+     * @param xfetchEnabled      probabilistic early refresh of fresh L2
+     *                           entries
+     * @param xfetchBeta         XFetch tuning factor
+     * @throws NullPointerException     if a mandatory component is
+     *                                  {@code null}
+     * @throws IllegalArgumentException if a component violates its range
+     * @since 0.1.0
+     */
     public CacheSettings {
         Objects.requireNonNull(l1ExpireAfterWrite, "l1ExpireAfterWrite");
         Objects.requireNonNull(l2Ttl, "l2Ttl");
@@ -72,6 +98,17 @@ public record CacheSettings(
     /**
      * Convenience constructor with stale serving and XFetch disabled
      * (the default behavior).
+     *
+     * @param l1MaxSize          maximum number of entries in L1
+     * @param l1ExpireAfterWrite L1 TTL since write (before jitter)
+     * @param l1ExpireAfterAccess L1 TTL since last access, or {@code null}
+     *                            to disable
+     * @param l2Ttl              L2 entry TTL
+     * @param jitterAmplitude    TTL jitter amplitude as a fraction in [0, 1)
+     * @param nullPolicy         null-caching policy
+     * @param invalidationMode   invalidation event mode
+     * @param payloadCapBytes    max payload bytes for UPDATE events
+     * @since 0.1.0
      */
     public CacheSettings(long l1MaxSize, Duration l1ExpireAfterWrite,
             Duration l1ExpireAfterAccess, Duration l2Ttl, double jitterAmplitude,
@@ -85,6 +122,9 @@ public record CacheSettings(
      * Sensible global defaults: jitter on by default with 10% amplitude;
      * null caching denied unless explicitly allowed; stale serving and
      * XFetch off.
+     *
+     * @return the default settings
+     * @since 0.1.0
      */
     public static CacheSettings defaults() {
         return new CacheSettings(

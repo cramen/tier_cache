@@ -27,6 +27,12 @@ import java.util.concurrent.ConcurrentHashMap;
  * .invalidation(versions -> new InvalidationService(transport, journal,
  *         versions.instanceId(), listener))
  * }</pre>
+ *
+ * <p><b>Internal — not part of the supported API.</b> The default invalidation
+ * engine behind the {@code io.tiercache.spi} interfaces; may change in any
+ * release without notice.
+ *
+ * @since 0.1.0
  */
 public final class InvalidationService implements InvalidationHandler {
 
@@ -42,11 +48,42 @@ public final class InvalidationService implements InvalidationHandler {
     private final CacheMetricsListener metrics;
     private volatile InvalidationEventListener eventListener = InvalidationEventListener.NOOP;
 
+    /**
+     * Creates the service without metrics reporting.
+     *
+     * @param transport        the invalidation transport; its reconnect
+     *                         listener is taken over by this service
+     * @param journal          the invalidation journal used to heal missed
+     *                         events after a reconnect, or {@code null} to
+     *                         disable replay (reconnect then flushes L1
+     *                         entirely)
+     * @param originInstanceId ID of this instance; own writes are skipped on
+     *                         receipt
+     * @param listener         lifecycle listener, or {@code null} for no
+     *                         callbacks
+     * @since 0.1.0
+     */
     public InvalidationService(InvalidationTransport transport, InvalidationJournal journal,
             UUID originInstanceId, InvalidationListener listener) {
         this(transport, journal, originInstanceId, listener, CacheMetricsListener.NOOP);
     }
 
+    /**
+     * Creates the service.
+     *
+     * @param transport        the invalidation transport; its reconnect
+     *                         listener is taken over by this service
+     * @param journal          the invalidation journal used to heal missed
+     *                         events after a reconnect, or {@code null} to
+     *                         disable replay (reconnect then flushes L1
+     *                         entirely)
+     * @param originInstanceId ID of this instance; own writes are skipped on
+     *                         receipt
+     * @param listener         lifecycle listener, or {@code null} for no
+     *                         callbacks
+     * @param metrics          metrics listener for invalidation traffic
+     * @since 0.1.0
+     */
     public InvalidationService(InvalidationTransport transport, InvalidationJournal journal,
             UUID originInstanceId, InvalidationListener listener, CacheMetricsListener metrics) {
         this.transport = transport;

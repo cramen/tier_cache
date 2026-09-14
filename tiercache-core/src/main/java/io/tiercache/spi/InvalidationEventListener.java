@@ -11,16 +11,27 @@ import io.tiercache.InvalidationMessage;
  *
  * <p>The callback runs on the invalidation receive path: implementations
  * must be fast and non-blocking, and must not throw.
+ *
+ * @since 0.1.0
  */
 @FunctionalInterface
 public interface InvalidationEventListener {
 
+    /**
+     * A listener that ignores every event.
+     *
+     * @since 0.1.0
+     */
     InvalidationEventListener NOOP = (cache, event) -> {
     };
 
     /**
      * Called after the incoming {@code event} has been applied to the local
      * cache named {@code cache}.
+     *
+     * @param cache the cache the event was applied to
+     * @param event the applied invalidation event
+     * @since 0.1.0
      */
     void onEvent(String cache, InvalidationMessage event);
 }

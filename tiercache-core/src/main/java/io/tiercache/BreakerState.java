@@ -6,6 +6,8 @@ package io.tiercache;
  *
  * <p>Declaration order matches the {@code tiercache.breaker.state} gauge
  * mapping: {@code 0 = CLOSED}, {@code 1 = HALF_OPEN}, {@code 2 = OPEN}.
+ *
+ * @since 0.1.0
  */
 public enum BreakerState {
 

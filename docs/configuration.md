@@ -256,3 +256,11 @@ TierCacheFactory factory = TierCacheFactory.builder()
 ```
 
 `build()` runs the fail-fast validation for every configured cache.
+
+## Compatibility
+
+Every property and core field documented here is part of the supported
+configuration surface and follows the project's semantic-versioning
+commitment. See the "Compatibility and versioning" section of the
+[README](../README.md) for the policy itself, and
+[UPGRADING.md](../UPGRADING.md) for per-release upgrade notes.

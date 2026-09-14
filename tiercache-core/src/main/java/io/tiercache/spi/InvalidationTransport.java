@@ -8,11 +8,19 @@ import java.util.function.Consumer;
  * SPI for the invalidation event transport. Default profile: Redis Pub/Sub
  * (minimal latency); a durable Streams profile and third-party buses (e.g.
  * Kafka) plug in through this interface without core changes.
+ *
+ * <p><b>Internal — not part of the supported API.</b> Implemented by the
+ * transport module.
+ *
+ * @since 0.1.0
  */
 public interface InvalidationTransport extends AutoCloseable {
 
     /**
      * Publishes a message. Fire-and-forget from the caller's perspective.
+     *
+     * @param message the message to publish
+     * @since 0.1.0
      */
     void publish(InvalidationMessage message);
 
@@ -20,7 +28,10 @@ public interface InvalidationTransport extends AutoCloseable {
      * Subscribes to a cache's invalidation channel. The handler is invoked
      * asynchronously; per-channel ordering is preserved.
      *
+     * @param cache   the cache whose channel is subscribed
+     * @param handler receives each incoming message
      * @return handle to cancel the subscription
+     * @since 0.1.0
      */
     AutoCloseable subscribe(String cache, Consumer<InvalidationMessage> handler);
 
@@ -28,10 +39,19 @@ public interface InvalidationTransport extends AutoCloseable {
      * Registers a callback invoked after the transport recovers from a
      * disconnect. The engine uses it to replay the journal. Transports that
      * cannot disconnect may leave the listener uncalled.
+     *
+     * @param listener the recovery callback
+     * @since 0.1.0
      */
     default void setReconnectListener(Runnable listener) {
     }
 
+    /**
+     * Shuts the transport down: subscriptions are cancelled and resources
+     * released.
+     *
+     * @since 0.1.0
+     */
     @Override
     void close();
 }

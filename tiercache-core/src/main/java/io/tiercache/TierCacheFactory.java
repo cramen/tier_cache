@@ -42,6 +42,8 @@ import java.util.function.BiFunction;
  *
  * <p>Consistency model: caches built here are eventually consistent;
  * no strong-consistency guarantees are given or implied.
+ *
+ * @since 0.1.0
  */
 public final class TierCacheFactory implements AutoCloseable {
 
@@ -150,6 +152,12 @@ public final class TierCacheFactory implements AutoCloseable {
         this.lockProvider = provider;
     }
 
+    /**
+     * Starts a new factory configuration.
+     *
+     * @return a fresh builder with all protections on their safe defaults
+     * @since 0.1.0
+     */
     public static Builder builder() {
         return new Builder();
     }
@@ -158,6 +166,13 @@ public final class TierCacheFactory implements AutoCloseable {
     /**
      * Returns the named cache. The same instance is returned for repeated
      * calls with the same name: a cache's L1 is shared, not duplicated.
+     *
+     * @param <K>  key type
+     * @param <V>  value type
+     * @param name the cache name; resolved against the per-cache overrides
+     *             given to the builder, falling back to the global defaults
+     * @return the cache instance for {@code name}; never {@code null}
+     * @since 0.1.0
      */
     @SuppressWarnings("unchecked")
     public <K, V> TierCache<K, V> getCache(String name) {
@@ -185,6 +200,12 @@ public final class TierCacheFactory implements AutoCloseable {
      * Closing the factory shuts the executor down; async operations
      * submitted afterwards are rejected with
      * {@link java.util.concurrent.RejectedExecutionException}.
+     *
+     * @param <K>  key type
+     * @param <V>  value type
+     * @param name the cache name
+     * @return the async view of the cache for {@code name}; never {@code null}
+     * @since 0.3.0
      */
     @SuppressWarnings("unchecked")
     public <K, V> AsyncTierCache<K, V> asyncCache(String name) {
@@ -213,10 +234,11 @@ public final class TierCacheFactory implements AutoCloseable {
     }
 
     /**
-     * Shuts down the watchdog scheduler. Caches already obtained remain
-     * usable but lose lease extension for in-flight coordination.
+     * True while the L2 circuit breaker is open (L1-only degraded mode).
+     *
+     * @return {@code true} while the cache runs degraded on L1 only
+     * @since 0.1.0
      */
-    /** True while the L2 circuit breaker is open (L1-only degraded mode). */
     public boolean isDegraded() {
         return breaker != null && breaker.isOpen();
     }
@@ -230,11 +252,22 @@ public final class TierCacheFactory implements AutoCloseable {
      * during which {@code isDegraded()} is already {@code false}. Returns
      * {@link BreakerState#CLOSED} when the breaker is disabled (L2 calls are
      * never rejected).
+     *
+     * @return the current breaker state; never {@code null}
+     * @since 0.1.0
      */
     public BreakerState breakerState() {
         return breaker == null ? BreakerState.CLOSED : breaker.state();
     }
 
+    /**
+     * Shuts down the factory: the revalidation executor and the watchdog
+     * scheduler are stopped and the invalidation engine is closed. Caches
+     * already obtained remain usable but lose lease extension for in-flight
+     * coordination, and async operations submitted afterwards are rejected.
+     *
+     * @since 0.1.0
+     */
     @Override
     public void close() {
         revalidationExecutor.shutdownNow();
@@ -261,6 +294,14 @@ public final class TierCacheFactory implements AutoCloseable {
         }
     }
 
+    /**
+     * Configuration for a {@link TierCacheFactory}. All failure-mode
+     * protections (singleflight, distributed rebuild coordination, circuit
+     * breaker, TTL jitter) are on by default; disabling any of them is an
+     * explicit opt-in and is logged as a risk.
+     *
+     * @since 0.1.0
+     */
     public static final class Builder {
 
         private CacheSettings defaults = CacheSettings.defaults();
@@ -280,11 +321,36 @@ public final class TierCacheFactory implements AutoCloseable {
         private CacheMetricsListener metricsListener = CacheMetricsListener.NOOP;
         private TtlJitter jitter = new TtlJitter();
 
+        /**
+         * Creates a builder with all protections on their safe defaults.
+         *
+         * @since 0.1.0
+         */
+        public Builder() {
+        }
+
+        /**
+         * Sets the global default settings every named cache inherits.
+         *
+         * @param defaults the global defaults; must not be {@code null}
+         * @return this builder
+         * @since 0.1.0
+         */
         public Builder defaults(CacheSettings defaults) {
             this.defaults = Objects.requireNonNull(defaults, "defaults");
             return this;
         }
 
+        /**
+         * Registers per-cache overrides for the cache named {@code name};
+         * fields left unset in {@code override} inherit the global defaults.
+         *
+         * @param name     the cache name; must not be {@code null}
+         * @param override the overrides for that cache; must not be
+         *                 {@code null}
+         * @return this builder
+         * @since 0.1.0
+         */
         public Builder cache(String name, CacheOverride override) {
             overrides.put(Objects.requireNonNull(name, "name"), Objects.requireNonNull(override, "override"));
             return this;
@@ -302,6 +368,10 @@ public final class TierCacheFactory implements AutoCloseable {
          * in L2 (and one cache's {@code evictAll} may wipe another cache's
          * entries when the transport prefixes keys by instance). Use
          * {@link #remoteCacheFactory} for per-cache key-space isolation.
+         *
+         * @param remoteCache the shared L2; must not be {@code null}
+         * @return this builder
+         * @since 0.1.0
          */
         @SuppressWarnings("unchecked")
         public Builder remoteCache(RemoteCache<?, ?> remoteCache) {
@@ -322,6 +392,11 @@ public final class TierCacheFactory implements AutoCloseable {
          * to the single-instance form; with a factory, set
          * {@link #lockProvider} explicitly when distributed rebuild
          * coordination is needed.
+         *
+         * @param factory maps a cache name to its L2 instance; must not be
+         *                {@code null} and must not return {@code null}
+         * @return this builder
+         * @since 0.2.0
          */
         public Builder remoteCacheFactory(Function<String, ? extends RemoteCache<?, ?>> factory) {
             this.remoteCacheFactory = Objects.requireNonNull(factory, "factory");
@@ -331,6 +406,11 @@ public final class TierCacheFactory implements AutoCloseable {
         /**
          * Replaces the L1 implementation (default: shaded Caffeine); see
          * {@link LocalCache}.
+         *
+         * @param factory maps a cache name and its resolved settings to an
+         *                L1 instance; must not be {@code null}
+         * @return this builder
+         * @since 0.1.0
          */
         public Builder localCacheFactory(BiFunction<String, CacheSettings, LocalCache<?, ?>> factory) {
             this.localCacheFactory = Objects.requireNonNull(factory, "factory");
@@ -341,6 +421,11 @@ public final class TierCacheFactory implements AutoCloseable {
          * Explicit lock provider for rebuild coordination. Usually
          * omitted: derived from the L2 transport when it implements
          * {@link LockProviderSource}.
+         *
+         * @param lockProvider the lock provider to use, or {@code null} to
+         *                     rely on derivation / per-instance coalescing
+         * @return this builder
+         * @since 0.1.0
          */
         public Builder lockProvider(DistributedLockProvider lockProvider) {
             this.lockProvider = lockProvider;
@@ -354,6 +439,12 @@ public final class TierCacheFactory implements AutoCloseable {
          * are single-node: nothing is published, nothing is subscribed.
          * Typical usage:
          * {@code .invalidation(versions -> new InvalidationService(transport, journal, versions.instanceId(), listener))}
+         *
+         * @param invalidationFactory builds the invalidation engine from the
+         *                            factory's version generator, or
+         *                            {@code null} for single-node caches
+         * @return this builder
+         * @since 0.1.0
          */
         public Builder invalidation(Function<VersionGenerator, InvalidationHandler> invalidationFactory) {
             this.invalidationFactory = invalidationFactory;
@@ -365,6 +456,10 @@ public final class TierCacheFactory implements AutoCloseable {
          * invalidation engine invokes it after each incoming event has been
          * applied locally, in arrival order per cache. Default: no
          * observation. See {@link InvalidationEventListener}.
+         *
+         * @param listener the observer; must not be {@code null}
+         * @return this builder
+         * @since 0.1.0
          */
         public Builder invalidationEventListener(InvalidationEventListener listener) {
             this.invalidationEventListener = Objects.requireNonNull(listener, "listener");
@@ -375,34 +470,64 @@ public final class TierCacheFactory implements AutoCloseable {
          * Explicit opt-out of the L2 circuit breaker. Degradation protection
          * is on by default; disabling it lets infrastructure exceptions
          * escape into business code (cascade-failure risk) and is logged.
+         *
+         * @return this builder
+         * @since 0.1.0
          */
         public Builder disableCircuitBreaker() {
             this.circuitBreakerEnabled = false;
             return this;
         }
 
-        /** Breaker thresholds. Internal/testing; defaults are safe. */
+        /**
+         * Breaker thresholds.
+         *
+         * <p><b>Internal — not part of the supported API.</b> Intended for
+         * testing; the defaults are safe.
+         *
+         * @param config the breaker configuration; must not be {@code null}
+         * @return this builder
+         * @since 0.1.0
+         */
         public Builder circuitBreakerConfig(CircuitBreaker.Config config) {
             this.breakerConfig = Objects.requireNonNull(config, "config");
             return this;
         }
 
-        /** Listener for degradation transitions (metrics bind here). */
+        /**
+         * Listener for degradation transitions (metrics bind here).
+         *
+         * @param listener the degradation listener; must not be {@code null}
+         * @return this builder
+         * @since 0.1.0
+         */
         public Builder degradationListener(DegradationListener listener) {
             this.degradationListener = Objects.requireNonNull(listener, "listener");
             return this;
         }
 
-        /** Metrics events listener (bind a registry via the metrics module). */
+        /**
+         * Metrics events listener (bind a registry via the metrics module).
+         *
+         * @param listener the metrics listener; must not be {@code null}
+         * @return this builder
+         * @since 0.1.0
+         */
         public Builder metricsListener(CacheMetricsListener listener) {
             this.metricsListener = Objects.requireNonNull(listener, "listener");
             return this;
         }
 
         /**
-         * TTL jitter source. Internal/testing; the default draws from
-         * ThreadLocalRandom. Inject a seeded instance for deterministic
-         * TTL spreads in tests.
+         * TTL jitter source.
+         *
+         * <p><b>Internal — not part of the supported API.</b> The default
+         * draws from ThreadLocalRandom; inject a seeded instance for
+         * deterministic TTL spreads in tests.
+         *
+         * @param jitter the jitter source; must not be {@code null}
+         * @return this builder
+         * @since 0.1.0
          */
         public Builder jitter(TtlJitter jitter) {
             this.jitter = Objects.requireNonNull(jitter, "jitter");
@@ -412,6 +537,9 @@ public final class TierCacheFactory implements AutoCloseable {
         /**
          * Explicit opt-out of singleflight protection. Stampede
          * protection is on by default; disabling it is logged as a risk.
+         *
+         * @return this builder
+         * @since 0.1.0
          */
         public Builder disableSingleflight() {
             this.singleflightEnabled = false;
@@ -422,12 +550,28 @@ public final class TierCacheFactory implements AutoCloseable {
          * Explicit opt-out of distributed rebuild coordination.
          * Coordination is on by default when a lock provider is available;
          * disabling it is logged as a risk.
+         *
+         * @return this builder
+         * @since 0.1.0
          */
         public Builder disableDistributedCoordination() {
             this.coordinationEnabled = false;
             return this;
         }
 
+        /**
+         * Validates the configuration and creates the factory. Validation
+         * is fail-fast: an invalid configuration aborts initialization
+         * before any cache serves traffic.
+         *
+         * @return the configured factory
+         * @throws CacheConfigurationException if the resolved configuration
+         *         violates a startup invariant (e.g. TTL ordering), or if
+         *         both {@link #remoteCache} and {@link #remoteCacheFactory}
+         *         were set
+         * @throws NullPointerException if no L2 was configured at all
+         * @since 0.1.0
+         */
         public TierCacheFactory build() {
             if (remoteCache != null && remoteCacheFactory != null) {
                 throw new CacheConfigurationException(

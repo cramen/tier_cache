@@ -12,21 +12,46 @@ import java.time.Duration;
  * no allocation on the degraded path), records outcomes otherwise, and wraps
  * infrastructure exceptions so raw client exceptions never cross the SPI
  * boundary.
+ *
+ * <p><b>Internal — not part of the supported API.</b>
+ *
+ * @param <K> key type
+ * @param <V> value type
+ * @since 0.1.0
  */
 public final class CircuitBreakerRemoteCache<K, V> implements RemoteCache<K, V> {
 
     private final RemoteCache<K, V> delegate;
     private final CircuitBreaker breaker;
 
+    /**
+     * Creates a guarded L2.
+     *
+     * @param delegate the L2 to guard
+     * @param breaker  the breaker that gates L2 calls
+     * @since 0.1.0
+     */
     public CircuitBreakerRemoteCache(RemoteCache<K, V> delegate, CircuitBreaker breaker) {
         this.delegate = delegate;
         this.breaker = breaker;
     }
 
+    /**
+     * The breaker guarding this L2.
+     *
+     * @return the circuit breaker
+     * @since 0.1.0
+     */
     public CircuitBreaker breaker() {
         return breaker;
     }
 
+    /**
+     * The guarded L2.
+     *
+     * @return the delegate remote cache
+     * @since 0.1.0
+     */
     public RemoteCache<K, V> delegate() {
         return delegate;
     }

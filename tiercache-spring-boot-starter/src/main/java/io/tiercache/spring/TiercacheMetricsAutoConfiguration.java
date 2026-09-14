@@ -23,6 +23,13 @@ import org.springframework.context.annotation.Bean;
  * class-level guard names it in string form: without
  * {@code io.tiercache.micrometer} this configuration backs off before the
  * JVM ever loads (and fails to link) the bean-method signatures below.
+ *
+ * <p><strong>Internal:</strong> not part of the supported public API.
+ * Spring Boot loads this class through its auto-configuration mechanism;
+ * applications control it via {@code tiercache.metrics.enabled}. It may
+ * change in any release without notice.
+ *
+ * @since 0.1.0
  */
 @AutoConfiguration(after = TiercacheAutoConfiguration.class)
 @ConditionalOnClass(value = MeterRegistry.class,

@@ -19,12 +19,26 @@ import java.util.UUID;
  * EVICT_ALL messages carry keyLen = -1 and no key bytes. The payload tail is
  * absent in v1 messages (written before UPDATE mode existed) — decodes as
  * payload=null, plain INVALIDATE semantics.
+ *
+ * <p><b>Internal — not part of the supported API.</b> Used by the invalidation
+ * transport implementations; may change in any release without notice.
+ *
+ * @since 0.1.0
  */
 public final class MessageCodec {
 
     private MessageCodec() {
     }
 
+    /**
+     * Encodes a message into its binary wire form.
+     *
+     * @param message  the invalidation message to encode
+     * @param keyBytes the serialized key bytes, or {@code null} for
+     *                 {@code EVICT_ALL} messages (which carry no key)
+     * @return the encoded wire bytes
+     * @since 0.1.0
+     */
     public static byte[] encode(InvalidationMessage message, byte[] keyBytes) {
         byte[] cacheBytes = message.cache().getBytes(StandardCharsets.UTF_8);
         byte[] payload = (byte[]) message.payload();
@@ -50,11 +64,33 @@ public final class MessageCodec {
         return buffer.array();
     }
 
-    /** Decoded message parts; the key remains raw bytes for the transport to deserialize. */
+    /**
+     * Decoded message parts; the key remains raw bytes for the transport to
+     * deserialize.
+     *
+     * @param cache            the cache name
+     * @param keyBytes         the raw serialized key bytes, or {@code null}
+     *                         for {@code EVICT_ALL} messages
+     * @param version          the write version
+     * @param originInstanceId ID of the instance that produced the write
+     * @param type             the message type
+     * @param payload          the UPDATE payload, or {@code null} for plain
+     *                         invalidations
+     * @since 0.1.0
+     */
     public record Decoded(String cache, byte[] keyBytes, Version version, UUID originInstanceId,
             InvalidationMessage.Type type, byte[] payload) {
     }
 
+    /**
+     * Decodes wire bytes produced by {@link #encode}. Messages written before
+     * UPDATE mode existed (no payload tail) decode with a {@code null}
+     * payload.
+     *
+     * @param bytes the wire bytes
+     * @return the decoded message parts
+     * @since 0.1.0
+     */
     public static Decoded decode(byte[] bytes) {
         ByteBuffer buffer = ByteBuffer.wrap(bytes);
         InvalidationMessage.Type type = InvalidationMessage.Type.values()[buffer.get()];

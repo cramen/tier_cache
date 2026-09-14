@@ -8,6 +8,10 @@ import io.tiercache.CacheSettings;
  *
  * <p>Kept independent of the factory plumbing so that framework adapters
  * (e.g. a Spring Boot starter with relaxed binding) can reuse it verbatim.
+ *
+ * <p><b>Internal — not part of the supported API.</b>
+ *
+ * @since 0.1.0
  */
 public final class CacheConfigValidator {
 
@@ -19,8 +23,11 @@ public final class CacheConfigValidator {
      * shortens TTLs, so the effective L1 TTL equals the configured
      * expire-after-write/access values.
      *
+     * @param cacheName the cache name, used in the error message
+     * @param settings  the resolved settings to validate
      * @throws CacheConfigurationException if TTL ordering or a stale-serving
      *         invariant is violated
+     * @since 0.1.0
      */
     public static void validate(String cacheName, CacheSettings settings) {
         // Stale-serving invariants first: the TTL-ordering checks below
