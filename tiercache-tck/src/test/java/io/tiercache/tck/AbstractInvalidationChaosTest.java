@@ -156,10 +156,13 @@ abstract class AbstractInvalidationChaosTest {
     }
 
     static void waitFor(Check check) throws InterruptedException {
-        long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
+        // Generous deadline: convergence over real Redis on shared CI runners
+        // can exceed 10 s under load (observed flakes); the assertion itself
+        // (eventual convergence) is unchanged.
+        long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
         while (!check.ok()) {
             if (System.nanoTime() > deadline) {
-                throw new AssertionError("condition not met within 10s");
+                throw new AssertionError("condition not met within 30s");
             }
             Thread.sleep(20);
         }

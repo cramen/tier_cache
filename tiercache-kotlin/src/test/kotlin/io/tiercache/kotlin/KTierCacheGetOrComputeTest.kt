@@ -11,6 +11,7 @@ import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
+import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.withContext
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
@@ -117,7 +118,9 @@ class KTierCacheGetOrComputeTest {
     }
 
     @Test
-    fun `cancelling the awaiting coroutine cancels the loader coroutine`() = runTest {
+    // Generous timeout: runTest's default cancels the whole test on loaded CI
+    // runners (observed flake: JobCancellationException at the test line).
+    fun `cancelling the awaiting coroutine cancels the loader coroutine`() = runTest(timeout = 120.seconds) {
         newFactory().use { factory ->
             val cache = factory.getCache<String, String>("c")
             val loaderStarted = CompletableDeferred<Unit>()

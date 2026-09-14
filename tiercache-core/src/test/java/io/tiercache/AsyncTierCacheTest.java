@@ -427,7 +427,9 @@ class AsyncTierCacheTest {
     }
 
     private static void awaitTrue(BoolProbe probe, String description) throws InterruptedException {
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        // Generous deadline: thread-termination timing varies wildly on
+        // shared CI runners (observed flakes at 5 s there, always <1 s locally).
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
         while (System.nanoTime() < deadline) {
             if (probe.getAsBoolean()) {
                 return;
