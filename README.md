@@ -97,10 +97,20 @@ Everything else — builders, transport internals, metrics helpers, and any type
 
 **Deprecation and removal** — before any public API element is removed, it is marked `@Deprecated` with a documented replacement and stays functional for at least one minor release. Removals are recorded in [CHANGELOG.md](CHANGELOG.md) and `UPGRADING.md`, which describes the migration path per release.
 
+## When Tiercache is not the right tool
+
+- **Strong-consistency requirements.** Tiercache is eventually consistent by design: L1 copies on other instances lag writes by a bounded staleness window. If your use case needs read-your-writes across instances, use the database or a strongly consistent store directly.
+- **Single-instance deployments.** With one node there is nothing to invalidate and nothing to coordinate — L2 plus the invalidation protocol is pure overhead. Plain Caffeine is the better fit.
+- **Tiny working sets.** If your hot data fits comfortably in an in-process cache, an L2 round trip on every cold read costs more than it saves; L2 pays off when L1 misses are frequent or expensive.
+- **Write-mostly workloads.** A cache amortizes reads over writes. If writes dominate, invalidation churn and L2 write traffic add latency without the read hit rate to justify it.
+
 ## Documentation
 
 - [Configuration reference](docs/configuration.md)
 - [Migration from Spring Cache](docs/migration-from-spring-cache.md)
+- [Migration from Redisson](docs/migration-from-redisson.md)
+- [Migration from JetCache](docs/migration-from-jetcache.md)
+- [Sizing and TTL guidance](docs/sizing-and-ttl.md)
 - [Observability: metrics, tracing, dashboards](docs/observability.md)
 - [Running the TCK chaos suite](docs/tck.md)
 - [Grafana dashboard and alert rules](docs/grafana/)

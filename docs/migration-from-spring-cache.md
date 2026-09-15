@@ -122,3 +122,9 @@ loader is expensive or whose keys are hot.
    demo (`examples/demo-spring`) exposes this via `/greeting/{name}`.
 3. Optionally add the metrics module and check `tiercache.requests` — see
    [observability](observability.md).
+
+## Related guides
+
+Migrating from a different cache setup? See
+[Migration from Redisson](migration-from-redisson.md) and
+[Migration from JetCache](migration-from-jetcache.md).

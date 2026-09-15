@@ -15,12 +15,12 @@ jobs:
   build-sign-attest:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '17'
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6.3.0
 
       # Tests are covered by ci.yml; this workflow only assembles the
       # publishable artifact set. shadowJar is listed explicitly because the
@@ -62,7 +62,7 @@ jobs:
             cosign sign-blob --yes --bundle "$jar.sigstore.json" "$jar"
           done
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-candidate
           path: dist/

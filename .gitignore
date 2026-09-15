@@ -1,8 +1,10 @@
 # Research material (Russian source docs, not part of the public repo)
 research/
 openspec/
+article/
 
 # Build output
+sbom/
 target/
 build/
 out/

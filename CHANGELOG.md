@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `docs/migration-from-redisson.md`: migration guide from Redisson `RLocalCachedMap` (API mapping, reconnection semantics, feature parity and gaps).
+- `docs/migration-from-jetcache.md`: migration guide from JetCache (annotation and config mapping, before/after examples).
+- `docs/sizing-and-ttl.md`: practical guide to L1 sizing, L1:L2 TTL ratios, jitter, per-cache overrides, and the metrics to watch while iterating.
+- README section "When Tiercache is not the right tool": honest anti-adoption guidance (strong consistency, single instance, tiny working sets, write-mostly workloads).
+
+### Changed
+
+- CI workflows moved to current action majors: `actions/checkout` v7, `actions/upload-artifact` v7, `actions/setup-java` v6, `gradle/actions/setup-gradle` v6.3.0 (Node 20 deprecation cleanup).
+
 ### Removed
 
 - The soak gate is no longer part of CI: hosted runners kill long jobs before a meaningful soak completes. Run it locally or on your own hardware via `./gradlew :tiercache-tck:soakTest` (default PT10M, `-Dtiercache.soak.duration=PT24H` for the full profile).

@@ -17,13 +17,13 @@ jobs:
       matrix:
         jdk: ['17', '21', '25']
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # The main sources compile against a Java 17 toolchain, so every leg
       # needs JDK 17 installed next to the matrix JDK. The 21-leg relies on
       # its primary JDK for the vtStress toolchain; the 25-leg gets JDK 21
       # as an extra toolchain for the same purpose.
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: |
@@ -31,7 +31,7 @@ jobs:
             21
             17
 
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6.3.0
 
       - name: Build (full, including TCK and coverage gates)
         if: matrix.jdk == '17'
@@ -58,7 +58,7 @@ jobs:
           mkdir -p build/sbom
           find . -path '*/build/reports/cyclonedx/*-sbom.json' -exec cp {} build/sbom/ \;
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: matrix.jdk == '17'
         with:
           name: sbom
@@ -77,16 +77,16 @@ jobs:
   offline-build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: |
             21
             17
 
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6.3.0
 
       - name: Prime the Gradle dependency cache
         run: ./gradlew build -x :tiercache-tck:test -x :tiercache-transport-redis:test -x :examples:demo-spring:test
