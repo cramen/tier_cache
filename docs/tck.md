@@ -90,7 +90,7 @@ All of the following are excluded from `check`; run them explicitly.
 
 | Command | What it does | Budget |
 |---|---|---|
-| `./gradlew :tiercache-tck:soakTest` | Churn soak against a real L2 container. Default duration PT10M; override with `-Dtiercache.soak.duration=PT24H` for the full CI profile. | Memory growth ≤ 5%, journal size bounded |
+| `./gradlew :tiercache-tck:soakTest` | Churn soak against a real L2 container. Default duration PT10M; override with `-Dtiercache.soak.duration=PT24H` for the full profile. Not run in CI (hosted runners kill long jobs) — run it locally or on your own hardware before releases. | Memory growth ≤ 5%, journal size bounded |
 | `./gradlew :tiercache-tck:vtStressTest` | 100k virtual threads over the read path; fails on any `jdk.VirtualThreadPinned` event on library frames. Requires a JDK 21+ toolchain; skipped loudly otherwise. | Zero pinning events |
 | `./gradlew :tiercache-tck:jmhBenchmark` | Throughput benchmark against a Redis container: `mixedWorkload` (95% hot L1 hits / 5% cold cascade reads, reference profile), `cascadeRead` (pure cascade, worst-case reference), `l1Hit` (attribution control). Results in `tiercache-tck/build/results/jmh-benchmark/results.txt`. | No absolute budget — trend/regression measurement (throughput is environment-dependent) |
 | `./gradlew :tiercache-tck:propagationBenchmark` | Invalidation propagation latency harness (two Pub/Sub instances, 10k events by default; override with `-Dtiercache.propagation.events`). Results in `tiercache-tck/build/results/propagation/results.txt`. | p99 ≤ 5 ms publish-to-applied (single AZ) |

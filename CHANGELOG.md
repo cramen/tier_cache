@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- The soak gate is no longer part of CI: hosted runners kill long jobs before a meaningful soak completes. Run it locally or on your own hardware via `./gradlew :tiercache-tck:soakTest` (default PT10M, `-Dtiercache.soak.duration=PT24H` for the full profile).
+
 ## [1.0.0] - 2026-09-14
 
 GA release. No runtime behavior changes versus 0.4.0.
