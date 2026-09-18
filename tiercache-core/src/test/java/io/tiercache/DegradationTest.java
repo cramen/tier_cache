@@ -106,13 +106,30 @@ class DegradationTest {
         degrade(h);
         AtomicInteger loaderCalls = new AtomicInteger();
         int threads = 8;
+        // Deterministic coalescing: the loader blocks until every caller has
+        // entered getOrCompute, so all threads share exactly one flight. A
+        // free-running loader finishes before all pool threads are scheduled
+        // on loaded CI runners, which let late callers observe intermediate
+        // states and made the loader count nondeterministic.
+        var allCallersIn = new java.util.concurrent.CountDownLatch(threads);
         var pool = java.util.concurrent.Executors.newFixedThreadPool(threads);
         var futures = new java.util.ArrayList<java.util.concurrent.Future<String>>();
         for (int i = 0; i < threads; i++) {
-            futures.add(pool.submit(() -> h.cache().getOrCompute("hot", key -> {
-                loaderCalls.incrementAndGet();
-                return "v";
-            })));
+            futures.add(pool.submit(() -> {
+                allCallersIn.countDown();
+                return h.cache().getOrCompute("hot", key -> {
+                    loaderCalls.incrementAndGet();
+                    try {
+                        if (!allCallersIn.await(30, java.util.concurrent.TimeUnit.SECONDS)) {
+                            throw new IllegalStateException("callers never arrived");
+                        }
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        throw new IllegalStateException("interrupted while awaiting callers", e);
+                    }
+                    return "v";
+                });
+            }));
         }
         // Await every caller before asserting on the loader count.
         for (var f : futures) {

@@ -143,7 +143,22 @@ class KTierCacheGetOrComputeTest {
             job.cancelAndJoin()
             assertThat(loaderFinished.isCompleted).isTrue()
             assertThat(cache.lookup("k")).isEqualTo(LookupResult.miss<String>())
-            assertThat(cache.getOrCompute("k") { "v" }).isEqualTo("v")
+            // The engine tears the cancelled flight down asynchronously on its
+            // own executor, so an immediate re-read can still join the dying
+            // flight and surface its JobCancellationException on loaded CI
+            // runners (observed flake). Poll in real time — runTest's virtual
+            // clock cannot wait for the engine thread — until the reload
+            // succeeds; the strict postcondition (key loadable again, "v")
+            // is unchanged, only the observation window is generous.
+            val deadline = System.nanoTime() + 30_000_000_000L
+            var reloaded: String? = null
+            while (reloaded != "v" && System.nanoTime() < deadline) {
+                reloaded = runCatching { cache.getOrCompute("k") { "v" } }.getOrNull()
+                if (reloaded != "v") {
+                    withContext(Dispatchers.Default) { Thread.sleep(50) }
+                }
+            }
+            assertThat(reloaded).isEqualTo("v")
         }
     }
 }
