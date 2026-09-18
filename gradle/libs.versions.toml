@@ -5,6 +5,7 @@ lettuce = "7.7.0.RELEASE"
 micrometer = "1.14.14"
 otel = "1.49.0"
 spring-boot = "3.5.16"
+micronaut-platform = "4.10.18"
 junit = "5.11.4"
 testcontainers = "1.21.4"
 
@@ -19,6 +20,11 @@ otel-sdk = { module = "io.opentelemetry:opentelemetry-sdk", version.ref = "otel"
 spring-boot-starter = { module = "org.springframework.boot:spring-boot-starter", version.ref = "spring-boot" }
 spring-boot-starter-cache = { module = "org.springframework.boot:spring-boot-starter-cache", version.ref = "spring-boot" }
 spring-boot-starter-test = { module = "org.springframework.boot:spring-boot-starter-test", version.ref = "spring-boot" }
+micronaut-platform = { module = "io.micronaut.platform:micronaut-platform", version.ref = "micronaut-platform" }
+micronaut-inject = { module = "io.micronaut:micronaut-inject" }
+micronaut-inject-java = { module = "io.micronaut:micronaut-inject-java" }
+micronaut-cache-core = { module = "io.micronaut.cache:micronaut-cache-core" }
+micronaut-test-junit5 = { module = "io.micronaut.test:micronaut-test-junit5" }
 junit-jupiter = { module = "org.junit.jupiter:junit-jupiter", version.ref = "junit" }
 junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
 junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher" }

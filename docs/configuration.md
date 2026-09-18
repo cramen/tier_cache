@@ -264,3 +264,32 @@ configuration surface and follows the project's semantic-versioning
 commitment. See the "Compatibility and versioning" section of the
 [README](../README.md) for the policy itself, and
 [UPGRADING.md](../UPGRADING.md) for per-release upgrade notes.
+
+## Micronaut binding notes
+
+The `tiercache-micronaut` module binds the **same** `tiercache.*` keys with
+the **same** defaults documented in the tables above — nothing is renamed
+and nothing defaults differently. The differences are binding mechanics
+only:
+
+- `io.tiercache.micronaut.TiercacheProperties` is a Micronaut
+  `@ConfigurationProperties("tiercache")` bean with immutable constructor
+  binding (`@ConfigurationInject`), where the Spring starter uses setter
+  binding. Kebab-case names (`l1-max-size`, ...) bind the same way.
+- Per-cache overrides under `tiercache.caches.<name>.*` bind as one
+  `TiercacheCacheProperties` bean per cache name (Micronaut's
+  `@EachProperty` idiom) instead of a `Map` field on the root properties
+  bean. The YAML/properties layout is identical to the Spring starter's —
+  the [example above](#example) works unchanged in `application.yml` of a
+  Micronaut application.
+- `tiercache.metrics.enabled` is a conditional of the metrics factory
+  (`@Requires(property = "tiercache.metrics.enabled", notEquals = "false")`),
+  not a bound field — same semantics as the Spring starter.
+- The defaults and invalidation levels are nullable constructor parameters
+  substituted with the built-in defaults when the section is absent, and
+  every per-knob field is nullable with the usual inherit-from-the-level-below
+  semantics — matching the Spring binding's effective behavior.
+
+Fail-fast validation is core's and applies identically: an invalid
+combination (for example an L1 TTL above the L2 TTL) aborts application
+startup with an actionable error.

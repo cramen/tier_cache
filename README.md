@@ -36,6 +36,22 @@ tiercache:
 
 The starter replaces the standard cache manager: `@Cacheable` / `@CachePut` / `@CacheEvict` code works unchanged, backed by the two-level cache. Per-cache overrides live under `tiercache.caches.<name>.*`; invalid configuration (e.g. L1 TTL > L2 TTL) aborts startup with an actionable error. A runnable demo lives in [`examples/demo-spring`](examples/demo-spring/) (docker-compose included).
 
+### Micronaut
+
+```kotlin
+// build.gradle.kts
+implementation("io.github.cramen:tiercache-micronaut:1.1.0")
+```
+
+```yaml
+# application.yml
+tiercache:
+  enabled: true
+  redis-uri: redis://localhost:6379
+```
+
+The module replaces Micronaut's `DefaultCacheManager`: `@Cacheable` / `@CachePut` / `@CacheInvalidate` code works unchanged, backed by the two-level cache. The `tiercache.*` property keys and defaults are identical to the Spring Boot starter's, and per-cache overrides live under `tiercache.caches.<name>.*` — [`docs/configuration.md`](docs/configuration.md) is the single configuration reference. The Pub/Sub invalidation profile is wired by default; each named cache gets its own L2 namespace (`micronaut:<cache-name>`).
+
 ### Programmatic
 
 ```kotlin
@@ -69,6 +85,7 @@ Reads cascade L1 → L2 → loader; concurrent loads of the same key share one l
 | Module | What it gives you |
 |---|---|
 | `tiercache-spring-boot-starter` | Spring Boot 3 auto-configuration — the one dependency most Spring apps need |
+| `tiercache-micronaut` | Micronaut CacheManager/SyncCache/AsyncCache adapter — the one dependency Micronaut apps need |
 | `tiercache-core` | The framework-independent cache engine: cascade, singleflight, rebuild coordination, degradation |
 | `tiercache-transport-redis` | Lettuce-backed Redis/Valkey L2 and invalidation transport |
 | `tiercache-kotlin` | Coroutines API: suspend facade, invalidation Flow, config DSL |
@@ -90,6 +107,7 @@ All published Maven artifacts follow **semantic versioning**: patch releases for
 
 - `io.tiercache` core API: `TierCache`, `AsyncTierCache`, `TierCacheFactory`, `CacheSettings`, `CacheOverride`
 - Spring Boot starter properties (`tiercache.*`) and annotations
+- Micronaut `tiercache.*` properties (`tiercache-micronaut`)
 - Kotlin `suspend`/`Flow` extensions in `tiercache-kotlin`
 - Reactor `Mono`/`Flux` facade in `tiercache-reactor`
 

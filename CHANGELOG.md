@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `tiercache-micronaut`: Micronaut integration — a `CacheManager` replacing Micronaut's `DefaultCacheManager`, `SyncCache`/`AsyncCache` adapters over the core engine, `@ConfigurationProperties("tiercache")` with the same keys and defaults as the Spring Boot starter, default wiring parity (shared Redis client, per-cache L2 namespacing, Pub/Sub invalidation profile, conditional Micrometer metrics). Micronaut `@Cacheable`/`@CachePut`/`@CacheInvalidate` code works unchanged.
+- `docs/configuration.md`: "Micronaut binding notes" section (constructor binding, `@EachProperty` per-cache beans, metrics conditional).
 - `docs/migration-from-redisson.md`: migration guide from Redisson `RLocalCachedMap` (API mapping, reconnection semantics, feature parity and gaps).
 - `docs/migration-from-jetcache.md`: migration guide from JetCache (annotation and config mapping, before/after examples).
 - `docs/sizing-and-ttl.md`: practical guide to L1 sizing, L1:L2 TTL ratios, jitter, per-cache overrides, and the metrics to watch while iterating.
