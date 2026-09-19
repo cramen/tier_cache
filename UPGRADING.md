@@ -7,7 +7,7 @@ target versions.
 
 For the full list of additions and fixes, see [CHANGELOG.md](CHANGELOG.md).
 
-## 1.2.0 (unreleased)
+## 1.2.0
 
 - Async executor is now bounded: `AsyncTierCache` operations previously ran
   on an unbounded cached thread pool (thread-per-task growth under
