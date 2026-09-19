@@ -104,12 +104,15 @@ public final class TierCacheFactory implements AutoCloseable {
         // Fire-and-forget revalidations (stale-while-revalidate / XFetch):
         // small bounded pool of its own so background churn never starves
         // latency-sensitive async API work; overflow revalidations are
-        // dropped (safe: the entry simply expires normally).
+        // rejected loudly (AbortPolicy) so the submit site can release the
+        // in-flight claim — a silent discard would leak the claim and hang
+        // the next reader of the key. A dropped refresh is safe: the stale
+        // entry keeps serving until its window ends.
         this.revalidationExecutor = new java.util.concurrent.ThreadPoolExecutor(
                 2, 2, 0L, java.util.concurrent.TimeUnit.MILLISECONDS,
                 new java.util.concurrent.LinkedBlockingQueue<>(1_000),
                 new DaemonThreadFactory("tiercache-revalidation"),
-                new java.util.concurrent.ThreadPoolExecutor.DiscardPolicy());
+                new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
         // Async API executor: bounded by design (see the async-api spec).
         // Submissions past the queue fail their CompletionStage via
         // RejectedExecutionException rather than growing threads unbounded.

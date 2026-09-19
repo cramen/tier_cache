@@ -624,11 +624,15 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
             revalidationExecutor.execute(
                     () -> runRevalidation(key, loader, servedWriteTimestamp, claim));
         } catch (RuntimeException e) {
-            // Executor rejected (shut down): drop the claim so a later read retries.
+            // Executor rejected (saturated or shut down): complete the claim
+            // first so waiters already joined on it fail fast instead of
+            // hanging, then release the slot so a later read retries.
+            claim.completeExceptionally(e);
             inflight.remove(key, claim);
             metrics.onRevalidationFailed(cacheName);
-            log.warn("Revalidation for key '{}' in cache '{}' could not be submitted.",
-                    key, cacheName, e);
+            log.warn("Revalidation for key '{}' in cache '{}' could not be submitted "
+                    + "(executor saturated or shut down); the stale entry keeps serving "
+                    + "and a later read will retry.", key, cacheName, e);
         }
     }
 

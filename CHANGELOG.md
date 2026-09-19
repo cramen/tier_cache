@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.1] - 2026-09-20
+
+### Fixed
+
+- A revalidation rejected by the saturated background pool no longer hangs readers: the pool switched from `DiscardPolicy` to `AbortPolicy`, and the rejection path now completes the in-flight claim exceptionally before releasing it, so waiters fail fast and later reads retry instead of joining a never-completing future. Introduced in 1.2.0 with the bounded pool; reproduced and reported externally.
+
 ## [1.2.0] - 2026-09-20
 
 ### Added

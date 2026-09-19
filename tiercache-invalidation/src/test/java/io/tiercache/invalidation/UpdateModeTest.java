@@ -52,7 +52,7 @@ class UpdateModeTest {
     }
 
     @Test
-    void staleUpdateIsDropped() {
+    void staleUpdateIsDropped() throws InterruptedException {
         var hub = new InMemoryInvalidationTransport.Hub();
         var journal = new InMemoryJournal(100);
         CountingRemoteCache<String, String> sharedL2 = new CountingRemoteCache<>();
@@ -69,6 +69,10 @@ class UpdateModeTest {
         cacheB.put("k", "b-newer");
         // A stale UPDATE for an older version arrives late: L1 entry is newer.
         // (Simulated by direct engine call with an old version.)
+        // Strictly later in real time: versions order by wall clock, so A's
+        // next write must land in a later clock slot than B's — otherwise
+        // the same-slot tiebreak decides arbitrarily (observed flake).
+        Thread.sleep(5);
         cacheA.put("k", "v2");         // newer globally; B must converge
         assertEquals("v2", cacheB.get("k"));
         a.close();
