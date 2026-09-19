@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- UPDATE-mode journal replay now deserializes the payload with the value serializer before applying it to L1, matching the live Pub/Sub path; previously a replayed UPDATE stored the raw serialized bytes as the value (typed reads could hit `ClassCastException`).
+
 ### Changed
 
 - Versions moved from millisecond to microsecond resolution (`max(epochMicros, previous + 1)`), shrinking the cross-instance simultaneity window a thousandfold: two instances writing within one millisecond now order by real time. Same-microsecond writes remain ordered by the instance-ID tiebreak — the documented last-write-wins trade-off; a strict "later always wins" guarantee would require per-write coordination and stays out of scope by design. Wire format and Redis scripts are unchanged; on platforms with millisecond-granular clocks the scheme degrades to the 1.2.0 behavior.

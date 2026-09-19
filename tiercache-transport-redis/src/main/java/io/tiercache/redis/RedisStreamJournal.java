@@ -46,10 +46,12 @@ public final class RedisStreamJournal implements InvalidationJournal {
     private final RedisCommands<byte[], byte[]> commands;
     private final int capacity;
     private final CacheSerializer<Object> keySerializer;
+    private final CacheSerializer<Object> valueSerializer;
 
     /**
      * Creates a journal over an existing byte-codec connection. The caller
-     * keeps ownership of the connection.
+     * keeps ownership of the connection. The key serializer doubles as the
+     * value serializer (the common case: both are JDK serialization).
      *
      * @param connection    the connection to issue stream commands on
      * @param capacity      maximum entries kept per cache stream (approximate
@@ -59,9 +61,28 @@ public final class RedisStreamJournal implements InvalidationJournal {
      */
     public RedisStreamJournal(StatefulRedisConnection<byte[], byte[]> connection, int capacity,
             CacheSerializer<Object> keySerializer) {
+        this(connection, capacity, keySerializer, keySerializer);
+    }
+
+    /**
+     * Creates a journal over an existing byte-codec connection with separate
+     * serializers for keys and UPDATE payloads. The value serializer MUST
+     * match the one the L2 uses to write payloads, or replayed UPDATEs will
+     * not deserialize. The caller keeps ownership of the connection.
+     *
+     * @param connection      the connection to issue stream commands on
+     * @param capacity        maximum entries kept per cache stream
+     *                        (approximate MAXLEN trimming)
+     * @param keySerializer   serializer for message keys
+     * @param valueSerializer serializer for UPDATE payloads
+     * @since 1.2.1
+     */
+    public RedisStreamJournal(StatefulRedisConnection<byte[], byte[]> connection, int capacity,
+            CacheSerializer<Object> keySerializer, CacheSerializer<Object> valueSerializer) {
         this.commands = connection.sync();
         this.capacity = capacity;
         this.keySerializer = keySerializer;
+        this.valueSerializer = valueSerializer;
     }
 
     static byte[] streamKey(String cache) {
@@ -178,7 +199,9 @@ public final class RedisStreamJournal implements InvalidationJournal {
         byte[] payloadBytes = body.entrySet().stream()
                 .filter(e -> java.util.Arrays.equals(e.getKey(), FIELD_PAYLOAD))
                 .map(Map.Entry::getValue).findFirst().orElse(new byte[0]);
-        byte[] payload = payloadBytes.length > 0 ? payloadBytes : null;
+        // Replay must apply the same typed value as the live path (which
+        // deserializes in the transport): never hand raw bytes to L1.
+        Object payload = payloadBytes.length > 0 ? valueSerializer.fromBytes(payloadBytes) : null;
         InvalidationMessage.Type type = InvalidationMessage.Type.values()[typeOrd[0]];
         if (payload != null && type == InvalidationMessage.Type.INVALIDATE) {
             type = InvalidationMessage.Type.UPDATE; // payload implies update semantics
