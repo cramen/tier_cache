@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Versions moved from millisecond to microsecond resolution (`max(epochMicros, previous + 1)`), shrinking the cross-instance simultaneity window a thousandfold: two instances writing within one millisecond now order by real time. Same-microsecond writes remain ordered by the instance-ID tiebreak — the documented last-write-wins trade-off; a strict "later always wins" guarantee would require per-write coordination and stays out of scope by design. Wire format and Redis scripts are unchanged; on platforms with millisecond-granular clocks the scheme degrades to the 1.2.0 behavior.
+
 ## [1.2.1] - 2026-09-20
 
 ### Fixed

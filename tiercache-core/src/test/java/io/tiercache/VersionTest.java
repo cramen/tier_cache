@@ -68,4 +68,27 @@ class VersionTest {
         assertTrue(fromFresh.compareTo(lastFromLongRunning) > 0,
                 "a fresh instance's later write must win cross-instance");
     }
+
+    @Test
+    void subMillisecondCrossInstanceWriteWins() {
+        VersionGenerator a = new VersionGenerator();
+        // Burst inside one millisecond: A's sequence may run ahead of the
+        // clock by up to the burst size (the documented burst behavior).
+        Version lastFromA = null;
+        for (int i = 0; i < 100; i++) {
+            lastFromA = a.next();
+        }
+        // B writes later in real time — within the same wall-clock
+        // millisecond — and must win. Spin until the wall clock is
+        // verifiably past A's last sequence (self-calibrating, no fixed
+        // sleep assumptions), so B's clock-derived sequence beats the burst.
+        long target = lastFromA.sequence() + 10;
+        while (System.currentTimeMillis() * 1_000L <= target) {
+            Thread.onSpinWait();
+        }
+        Version fromB = new VersionGenerator().next();
+        assertTrue(fromB.compareTo(lastFromA) > 0,
+                "microsecond resolution must order B after A's same-millisecond burst: A="
+                        + lastFromA + " B=" + fromB);
+    }
 }

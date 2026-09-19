@@ -9,14 +9,20 @@ import java.util.concurrent.atomic.AtomicLong;
  * restarted instance is a new writer with an empty L1, so no cross-restart
  * continuity is needed.
  *
- * <p>The sequence is a hybrid of wall-clock time and a per-instance counter:
- * {@code max(epochMillis * 1000 + counterWithinMillis, previous + 1)}. This
- * orders writes by real time across instances (within normal NTP-grade clock
- * sync) while keeping per-instance sequences strictly monotonic even when one
- * instance produces more than 1000 writes in a millisecond (the sequence runs
- * ahead of the clock for the burst's duration, then real time catches up).
- * Same-millisecond writes from different instances are ordered by the
- * instance-ID tiebreak in {@link Version#compareTo}.
+ * <p>The sequence is wall-clock time at microsecond resolution with an
+ * implicit per-instance counter: {@code max(epochMicros, previous + 1)}.
+ * This orders writes by real time across instances (within normal NTP-grade
+ * clock sync) while keeping per-instance sequences strictly monotonic even
+ * when one instance outpaces the clock's resolution (the sequence runs ahead
+ * of the clock for the burst's duration, then real time catches up).
+ * Cross-instance writes within the same microsecond are ordered by the
+ * instance-ID tiebreak in {@link Version#compareTo} — the accepted
+ * last-write-wins trade-off: a strict "later always wins" guarantee would
+ * require per-write coordination, which is out of scope by design.
+ *
+ * <p>The clock derives from {@link java.time.Instant#now()}; on platforms
+ * returning millisecond-granular instants the scheme degrades to
+ * millisecond-resolution ordering (no worse than the 1.2.0 scheme).
  *
  * <p><strong>Clock-skew caveat:</strong> ordering follows wall-clock time, so
  * an instance whose clock lags behind its peers can have a later write order
@@ -26,8 +32,6 @@ import java.util.concurrent.atomic.AtomicLong;
  * @since 0.1.0
  */
 public final class VersionGenerator {
-
-    private static final long SLOTS_PER_MILLIS = 1000L;
 
     private final UUID instanceId = UUID.randomUUID();
     private final AtomicLong sequence = new AtomicLong();
@@ -43,14 +47,16 @@ public final class VersionGenerator {
     /**
      * Returns the next version: a time-ordered sequence stamped with this
      * instance's ID. Sequences are strictly monotonic per instance and order
-     * by real time across instances (see the class Javadoc for the hybrid
-     * scheme and the clock-skew caveat).
+     * by real time across instances at microsecond resolution (see the class
+     * Javadoc for the scheme, the tiebreak trade-off, and the clock-skew
+     * caveat).
      *
      * @return the next version; never {@code null}
      * @since 0.1.0
      */
     public Version next() {
-        long candidate = System.currentTimeMillis() * SLOTS_PER_MILLIS;
+        java.time.Instant now = java.time.Instant.now();
+        long candidate = now.getEpochSecond() * 1_000_000L + now.getNano() / 1_000L;
         return new Version(sequence.updateAndGet(prev -> Math.max(candidate, prev + 1)), instanceId);
     }
 
