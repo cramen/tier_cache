@@ -44,6 +44,11 @@ class AsyncTierCacheTest {
     private static TierCacheFactory factory() {
         return TierCacheFactory.builder()
                 .remoteCache(new InMemoryRemoteCache<>())
+                // Roomy enough for every caller task to start at once: the
+                // coalescing tests need all callers inside one flight before
+                // the loader completes or fails (default pool is only
+                // max(4, cores) — smaller than the caller counts on CI).
+                .asyncExecutorThreads(40)
                 .build();
     }
 
