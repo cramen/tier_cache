@@ -35,6 +35,7 @@ public class TiercacheProperties {
     private final String redisUri;
     private final DefaultCacheProps defaults;
     private final InvalidationProps invalidation;
+    private final int asyncExecutorThreads;
 
     /**
      * Creates the properties root, applying the built-in defaults for any
@@ -48,6 +49,9 @@ public class TiercacheProperties {
      * @param invalidation the invalidation settings
      *                     ({@code tiercache.invalidation.*}), or {@code null}
      *                     for the built-in defaults
+     * @param asyncExecutorThreads the async executor thread cap
+     *                     ({@code tiercache.async-executor-threads}), or
+     *                     {@code null} for the library default
      * @since 1.1.0
      */
     @ConfigurationInject
@@ -55,12 +59,14 @@ public class TiercacheProperties {
             @Bindable(defaultValue = "false") boolean enabled,
             @Nullable String redisUri,
             @Nullable DefaultCacheProps defaults,
-            @Nullable InvalidationProps invalidation) {
+            @Nullable InvalidationProps invalidation,
+            @Nullable Integer asyncExecutorThreads) {
         this.enabled = enabled;
         this.redisUri = redisUri;
         this.defaults = defaults != null ? defaults : new DefaultCacheProps(
                 null, null, null, null, null, null, null, null, null, null, null, null);
         this.invalidation = invalidation != null ? invalidation : new InvalidationProps(null, null, null);
+        this.asyncExecutorThreads = asyncExecutorThreads != null ? asyncExecutorThreads : 0;
     }
 
     /**
@@ -106,6 +112,20 @@ public class TiercacheProperties {
      */
     public InvalidationProps getInvalidation() {
         return invalidation;
+    }
+
+    /**
+     * Returns the configured maximum threads for the bounded async executor
+     * ({@code tiercache.async-executor-threads}); 0 means the library default
+     * {@code max(4, availableProcessors)}. Under saturation, submissions fail
+     * their stage with {@code RejectedExecutionException} rather than growing
+     * threads.
+     *
+     * @return the async executor thread cap, or 0 for the default
+     * @since 1.2.0
+     */
+    public int getAsyncExecutorThreads() {
+        return asyncExecutorThreads;
     }
 
     /**

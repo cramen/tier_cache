@@ -89,8 +89,8 @@ class AsyncTierCacheTest {
                     "the caller must not wait for the loader");
             assertNotEquals("probe-caller", loaderThread.get(),
                     "loader work must not run on the calling thread");
-            assertTrue(loaderThread.get().startsWith("tiercache-revalidation"),
-                    "work must run on the factory's shared daemon executor, got " + loaderThread.get());
+            assertTrue(loaderThread.get().startsWith("tiercache-async"),
+                    "work must run on the factory's bounded async executor, got " + loaderThread.get());
 
             release.countDown();
             assertEquals("v", stage.toCompletableFuture().get(5, TimeUnit.SECONDS));
@@ -117,7 +117,7 @@ class AsyncTierCacheTest {
                 assertEquals("v" + i, stages.get(i).get(10, TimeUnit.SECONDS));
             }
             assertFalse(workerThreads.isEmpty());
-            assertTrue(workerThreads.stream().allMatch(n -> n.startsWith("tiercache-revalidation")),
+            assertTrue(workerThreads.stream().allMatch(n -> n.startsWith("tiercache-async")),
                     "no caller or common-pool threads may do cache work: " + workerThreads);
             assertTrue(workerThreads.size() < calls / 2,
                     "threads are reused, not created per call: " + workerThreads.size()
@@ -141,10 +141,13 @@ class AsyncTierCacheTest {
         awaitTrue(newWorkersSince(baseline)::isEmpty,
                 "executor workers must stop with factory close");
 
-        RejectedExecutionException rejected = assertThrows(RejectedExecutionException.class,
-                () -> async.getAsync("k"),
+        // Rejection surfaces as a failed stage, never a synchronous throw
+        // on the calling thread and never a task run on it.
+        CompletableFuture<String> rejected = async.getAsync("k").toCompletableFuture();
+        ExecutionException execution = assertThrows(ExecutionException.class, rejected::get,
                 "submissions after close are rejected, never run on the calling thread");
-        assertNotNull(rejected);
+        assertTrue(execution.getCause() instanceof RejectedExecutionException,
+                "rejection cause must be RejectedExecutionException, got " + execution.getCause());
     }
 
     // --- Scenario: concurrent async misses coalesce ---
@@ -409,7 +412,7 @@ class AsyncTierCacheTest {
     private static Set<Thread> revalidationThreads() {
         Set<Thread> threads = ConcurrentHashMap.newKeySet();
         for (Thread t : Thread.getAllStackTraces().keySet()) {
-            if (t.isAlive() && t.getName().startsWith("tiercache-revalidation")) {
+            if (t.isAlive() && t.getName().startsWith("tiercache-async")) {
                 threads.add(t);
             }
         }

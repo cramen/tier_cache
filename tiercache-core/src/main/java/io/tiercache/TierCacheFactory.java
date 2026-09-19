@@ -64,6 +64,7 @@ public final class TierCacheFactory implements AutoCloseable {
     private final CacheMetricsListener metricsListener;
     private final TtlJitter jitter;
     private final java.util.concurrent.ExecutorService revalidationExecutor;
+    private final java.util.concurrent.ExecutorService asyncExecutor;
     private final Map<String, TierCache<?, ?>> liveCaches = new java.util.concurrent.ConcurrentHashMap<>();
     private final Map<String, AsyncTierCache<?, ?>> liveAsyncCaches = new java.util.concurrent.ConcurrentHashMap<>();
 
@@ -100,10 +101,26 @@ public final class TierCacheFactory implements AutoCloseable {
         this.watchdog = coordinationEnabled && provider != null
                 ? Executors.newSingleThreadScheduledExecutor(new DaemonThreadFactory("tiercache-watchdog"))
                 : null;
-        // Fire-and-forget revalidations (stale-while-revalidate / XFetch);
-        // threads appear only when a cache enables the feature.
-        this.revalidationExecutor =
-                Executors.newCachedThreadPool(new DaemonThreadFactory("tiercache-revalidation"));
+        // Fire-and-forget revalidations (stale-while-revalidate / XFetch):
+        // small bounded pool of its own so background churn never starves
+        // latency-sensitive async API work; overflow revalidations are
+        // dropped (safe: the entry simply expires normally).
+        this.revalidationExecutor = new java.util.concurrent.ThreadPoolExecutor(
+                2, 2, 0L, java.util.concurrent.TimeUnit.MILLISECONDS,
+                new java.util.concurrent.LinkedBlockingQueue<>(1_000),
+                new DaemonThreadFactory("tiercache-revalidation"),
+                new java.util.concurrent.ThreadPoolExecutor.DiscardPolicy());
+        // Async API executor: bounded by design (see the async-api spec).
+        // Submissions past the queue fail their CompletionStage via
+        // RejectedExecutionException rather than growing threads unbounded.
+        int asyncThreads = builder.asyncExecutorThreads > 0
+                ? builder.asyncExecutorThreads
+                : Math.max(4, Runtime.getRuntime().availableProcessors());
+        this.asyncExecutor = new java.util.concurrent.ThreadPoolExecutor(
+                asyncThreads, asyncThreads, 0L, java.util.concurrent.TimeUnit.MILLISECONDS,
+                new java.util.concurrent.LinkedBlockingQueue<>(10_000),
+                new DaemonThreadFactory("tiercache-async"),
+                new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
 
         this.versionGenerator = new VersionGenerator();
         this.invalidation = builder.invalidationFactory != null
@@ -193,13 +210,17 @@ public final class TierCacheFactory implements AutoCloseable {
     /**
      * Returns the async (non-blocking) view of the named cache. The
      * factory form is the accessor by design: the view's operations run
-     * on the factory's shared daemon executor, so the owner of the
+     * on the factory's bounded daemon executor (sized via
+     * {@link Builder#asyncExecutorThreads(int)}), so the owner of the
      * executor hands out the view. Memoized alongside {@link #getCache} —
      * repeated calls with the same name return the same view over the
      * same underlying cache (shared L1, singleflight state, metrics).
-     * Closing the factory shuts the executor down; async operations
-     * submitted afterwards are rejected with
-     * {@link java.util.concurrent.RejectedExecutionException}.
+     * The executor is bounded with a bounded handoff queue: under
+     * saturation, submissions fail their returned {@code CompletionStage}
+     * with {@link java.util.concurrent.RejectedExecutionException} rather
+     * than growing threads without bound. Closing the factory shuts the
+     * executor down; async operations submitted afterwards are likewise
+     * rejected.
      *
      * @param <K>  key type
      * @param <V>  value type
@@ -210,7 +231,7 @@ public final class TierCacheFactory implements AutoCloseable {
     @SuppressWarnings("unchecked")
     public <K, V> AsyncTierCache<K, V> asyncCache(String name) {
         return (AsyncTierCache<K, V>) liveAsyncCaches.computeIfAbsent(name,
-                n -> new DefaultAsyncTierCache<>(getCache(n), revalidationExecutor));
+                n -> new DefaultAsyncTierCache<>(getCache(n), asyncExecutor));
     }
 
     /**
@@ -271,6 +292,7 @@ public final class TierCacheFactory implements AutoCloseable {
     @Override
     public void close() {
         revalidationExecutor.shutdownNow();
+        asyncExecutor.shutdownNow();
         if (watchdog != null) {
             watchdog.shutdownNow();
         }
@@ -320,6 +342,7 @@ public final class TierCacheFactory implements AutoCloseable {
         private DegradationListener degradationListener = DegradationListener.NOOP;
         private CacheMetricsListener metricsListener = CacheMetricsListener.NOOP;
         private TtlJitter jitter = new TtlJitter();
+        private int asyncExecutorThreads; // 0 = default max(4, availableProcessors)
 
         /**
          * Creates a builder with all protections on their safe defaults.
@@ -531,6 +554,33 @@ public final class TierCacheFactory implements AutoCloseable {
          */
         public Builder jitter(TtlJitter jitter) {
             this.jitter = Objects.requireNonNull(jitter, "jitter");
+            return this;
+        }
+
+        /**
+         * Maximum number of threads serving {@link AsyncTierCache} operations
+         * (the bounded async executor); defaults to
+         * {@code max(4, availableProcessors)}. Async cache work is offloaded
+         * to a bounded library-managed pool with a bounded handoff queue:
+         * when the pool and queue are saturated, new submissions fail their
+         * returned {@code CompletionStage} with
+         * {@link java.util.concurrent.RejectedExecutionException} instead of
+         * growing threads without bound. Raise this when async loaders are
+         * IO-bound and the default starves throughput.
+         *
+         * @param asyncExecutorThreads the maximum async worker threads; must
+         *                             be &gt; 0
+         * @return this builder
+         * @throws IllegalArgumentException if {@code asyncExecutorThreads} is
+         *                                  not positive
+         * @since 1.2.0
+         */
+        public Builder asyncExecutorThreads(int asyncExecutorThreads) {
+            if (asyncExecutorThreads <= 0) {
+                throw new IllegalArgumentException(
+                        "asyncExecutorThreads must be > 0, got " + asyncExecutorThreads);
+            }
+            this.asyncExecutorThreads = asyncExecutorThreads;
             return this;
         }
 

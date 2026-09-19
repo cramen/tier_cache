@@ -16,6 +16,7 @@ The cache is eventually consistent by design; no strong-consistency guarantees a
 - **Stale serving** — stale-while-revalidate and XFetch early refresh keep hot keys fast while values refresh in the background.
 - **Observability as a feature** — Micrometer metrics for every failure mode, OpenTelemetry tracing, JMX inspection, and a reference Grafana dashboard with alert rules in [`docs/grafana/`](docs/grafana/).
 - **Kotlin coroutines** — `suspend` API, invalidation `Flow`, and a `tierCache { }` config DSL in `tiercache-kotlin`. A suspending loader runs on the caller's coroutine dispatcher, so a blocking loader blocks that dispatcher — offload blocking work with `withContext(Dispatchers.IO)`.
+- **Bounded async executor** — async/Reactor/coroutines operations run on a bounded, library-managed pool (size via `tiercache.async-executor-threads` or `TierCacheFactory.Builder.asyncExecutorThreads`); under saturation the returned stage fails with `RejectedExecutionException` instead of growing threads without bound.
 - **GraalVM Native Image** — reachability metadata ships inside the published jars; the demo application compiles natively in CI.
 
 ## Quick start

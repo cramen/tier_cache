@@ -61,6 +61,18 @@ class TiercacheAutoConfigurationTest {
     }
 
     @Test
+    void asyncExecutorThreadsPropertyBinds() {
+        runner.withUserConfiguration(InMemoryL2Config.class)
+                .withPropertyValues("tiercache.enabled=true",
+                        "tiercache.async-executor-threads=7")
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(context.getBean(TiercacheProperties.class)
+                            .getAsyncExecutorThreads()).isEqualTo(7);
+                });
+    }
+
+    @Test
     void disabledStaysOutOfTheWay() {
         runner.run(context -> assertThat(context)
                 .doesNotHaveBean(TierCacheManager.class)

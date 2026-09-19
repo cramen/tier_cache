@@ -37,6 +37,7 @@ Programmatic configuration mirrors this exactly: `CacheOverride` fields left
 | `tiercache.invalidation.enabled` | `true` | Wires the cross-instance invalidation engine (journal + transport) when the default Redis transport is used. `false` opts out: caches become single-node, nothing is published or subscribed. |
 | `tiercache.invalidation.profile` | `pubsub` | Invalidation transport profile: `pubsub` (default) or `streams`. See [Invalidation profiles](#invalidation-profiles). |
 | `tiercache.invalidation.journal-capacity` | `10000` | Maximum journal entries kept per cache stream. The journal backs replay of missed invalidations after reconnects. |
+| `tiercache.async-executor-threads` | `max(4, availableProcessors)` | Maximum threads serving `AsyncTierCache` operations (the bounded async executor). When the pool and its bounded queue (10,000) are saturated, submissions fail their `CompletionStage` with `RejectedExecutionException` rather than growing threads without bound. Raise when IO-bound async loaders starve throughput; background SWR/XFetch revalidation runs on its own small bounded pool and never competes for these threads. |
 
 ## Per-cache knobs
 

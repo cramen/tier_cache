@@ -205,7 +205,7 @@ class TiercacheMicronautConfigurationTest {
     @Test
     void redisClientCarriesFastTimeouts() {
         TiercacheProperties properties = new TiercacheProperties(
-                true, "redis://localhost:6379", null, null);
+                true, "redis://localhost:6379", null, null, null);
         RedisClient client =
                 new TiercacheMicronautConfiguration().tiercacheRedisClient(properties);
         try {

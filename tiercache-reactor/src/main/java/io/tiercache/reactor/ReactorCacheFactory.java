@@ -349,6 +349,23 @@ public final class ReactorCacheFactory implements AutoCloseable {
         }
 
         /**
+         * Maximum threads serving async cache operations (the bounded async
+         * executor); defaults to {@code max(4, availableProcessors)}. Under
+         * saturation, submissions fail their stage with
+         * {@link java.util.concurrent.RejectedExecutionException} rather
+         * than growing threads.
+         *
+         * @param asyncExecutorThreads the thread cap; must be &gt; 0
+         * @return this builder
+         * @see TierCacheFactory.Builder#asyncExecutorThreads(int)
+         * @since 1.2.0
+         */
+        public Builder asyncExecutorThreads(int asyncExecutorThreads) {
+            delegate.asyncExecutorThreads(asyncExecutorThreads);
+            return this;
+        }
+
+        /**
          * Builds the factory: installs the composed invalidation-event
          * listener (internal flux fan-out first, then the
          * application-facing observer) and builds the underlying

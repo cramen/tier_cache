@@ -9,6 +9,16 @@ For the full list of additions and fixes, see [CHANGELOG.md](CHANGELOG.md).
 
 ## 1.2.0 (unreleased)
 
+- Async executor is now bounded: `AsyncTierCache` operations previously ran
+  on an unbounded cached thread pool (thread-per-task growth under
+  concurrency). The pool is now fixed-size (default
+  `max(4, availableProcessors)`, knob `tiercache.async-executor-threads` /
+  `TierCacheFactory.Builder.asyncExecutorThreads`) with a bounded queue.
+  Behavior change under saturation: submissions that exceed pool + queue
+  capacity now fail their `CompletionStage` with
+  `RejectedExecutionException` instead of queueing onto fresh threads.
+  Tune the knob if you run high-concurrency IO-bound async loaders.
+  Background SWR/XFetch revalidation moved to its own small bounded pool.
 - Cross-instance write ordering fixed: versions are now time-ordered
   (wall-clock hybrid sequence) instead of per-instance counters starting at
   1. Previously, a freshly started instance's writes could lose to an older

@@ -244,6 +244,19 @@ class KTierCacheFactory internal constructor(
         fun disableCircuitBreaker() = apply { delegate.disableCircuitBreaker() }
 
         /**
+         * Maximum threads serving async cache operations (the bounded async
+         * executor); defaults to `max(4, availableProcessors)`. Under
+         * saturation, submissions fail their stage with
+         * `RejectedExecutionException` rather than growing threads.
+         *
+         * @param asyncExecutorThreads the thread cap; must be > 0
+         * @return this builder
+         * @since 1.2.0
+         */
+        fun asyncExecutorThreads(asyncExecutorThreads: Int) =
+            apply { delegate.asyncExecutorThreads(asyncExecutorThreads) }
+
+        /**
          * Builds the factory, validating the resolved configuration with
          * fail-fast semantics.
          *

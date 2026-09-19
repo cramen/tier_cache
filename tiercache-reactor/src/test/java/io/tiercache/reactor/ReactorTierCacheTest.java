@@ -89,8 +89,8 @@ class ReactorTierCacheTest {
                     .as("loader work must not run on the calling thread")
                     .isNotEqualTo("probe-caller");
             assertThat(loaderThread.get())
-                    .as("work must run on the factory's shared daemon executor")
-                    .startsWith("tiercache-revalidation");
+                    .as("work must run on the factory's bounded async executor")
+                    .startsWith("tiercache-async");
 
             release.countDown();
             awaitTrue(() -> subscriptionFailure.get() != null || cache.get("k").block() != null,

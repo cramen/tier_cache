@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `tiercache.async-executor-threads` / `TierCacheFactory.Builder.asyncExecutorThreads(int)` (also exposed on the Kotlin DSL, `KTierCacheFactory.Builder`, and `ReactorCacheFactory.Builder`): thread cap for the bounded async executor, default `max(4, availableProcessors)`.
+
+### Changed
+
+- The async executor is now bounded with a bounded queue (10,000): previously `AsyncTierCache` operations ran on an unbounded cached thread pool shared with background revalidation. Under saturation, submissions fail their `CompletionStage` with `RejectedExecutionException` instead of growing threads without bound. Background SWR/XFetch revalidation runs on its own small bounded pool and no longer competes with latency-sensitive async work. See `UPGRADING.md` for the saturation behavior change.
+
 ### Fixed
 
 - Cross-instance write ordering: versions were per-instance counters starting at 1, so a freshly started instance's writes (and evicts) could be rejected as stale against a long-running instance's earlier writes on the same key — newer changes silently lost with no concurrency involved. Versions are now time-ordered (wall-clock hybrid sequence: `max(epochMillis x 1000 + per-millis counter, previous + 1)`), so writes order by real time across instances; the wire format and Redis scripts are unchanged. See `UPGRADING.md` for the rolling-upgrade note and the clock-sync expectation.

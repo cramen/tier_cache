@@ -40,6 +40,13 @@ public class TiercacheProperties {
     private InvalidationProps invalidation = new InvalidationProps();
 
     /**
+     * Maximum threads serving {@code AsyncTierCache} operations (the bounded
+     * async executor); 0 means the library default
+     * {@code max(4, availableProcessors)}.
+     */
+    private int asyncExecutorThreads = 0;
+
+    /**
      * Returns whether the starter is active.
      *
      * @return {@code true} when {@code tiercache.enabled=true}; the starter
@@ -133,6 +140,29 @@ public class TiercacheProperties {
      */
     public void setInvalidation(InvalidationProps invalidation) {
         this.invalidation = invalidation;
+    }
+
+    /**
+     * Returns the configured maximum threads for the bounded async executor
+     * (0 = library default {@code max(4, availableProcessors)}).
+     *
+     * @return the async executor thread cap, or 0 for the default
+     * @since 1.2.0
+     */
+    public int getAsyncExecutorThreads() {
+        return asyncExecutorThreads;
+    }
+
+    /**
+     * Sets the maximum threads serving {@code AsyncTierCache} operations.
+     * Under saturation, submissions fail their stage with
+     * {@code RejectedExecutionException} rather than growing threads.
+     *
+     * @param asyncExecutorThreads the thread cap; must be &gt;= 0
+     * @since 1.2.0
+     */
+    public void setAsyncExecutorThreads(int asyncExecutorThreads) {
+        this.asyncExecutorThreads = asyncExecutorThreads;
     }
 
     /**

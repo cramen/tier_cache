@@ -32,6 +32,10 @@ class ReactorTierCacheMonoLoaderTest {
     private static ReactorCacheFactory factory() {
         return ReactorCacheFactory.builder()
                 .remoteCache(new InMemoryRemoteCache<>())
+                // Roomy enough for every subscriber task to start at once:
+                // the coalescing tests need all callers inside one flight
+                // before the loader completes or fails.
+                .asyncExecutorThreads(40)
                 .build();
     }
 

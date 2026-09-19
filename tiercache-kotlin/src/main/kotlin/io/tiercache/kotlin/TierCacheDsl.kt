@@ -200,6 +200,18 @@ class TierCacheFactoryDsl internal constructor(dispatcher: CoroutineDispatcher) 
         builder.disableCircuitBreaker()
     }
 
+    /**
+     * Maximum threads serving async cache operations (the bounded async
+     * executor); defaults to `max(4, availableProcessors)`. Under
+     * saturation, submissions fail their stage with
+     * `RejectedExecutionException` rather than growing threads.
+     *
+     * @since 1.2.0
+     */
+    fun asyncExecutorThreads(asyncExecutorThreads: Int) {
+        builder.asyncExecutorThreads(asyncExecutorThreads)
+    }
+
     internal fun resolvedDefaults(): CacheSettings? = defaultsDsl?.resolve()
 
     internal fun resolvedOverrides(): Map<String, CacheOverride> =

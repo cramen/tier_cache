@@ -44,65 +44,90 @@ public final class DefaultAsyncTierCache<K, V> implements AsyncTierCache<K, V> {
 
     @Override
     public CompletionStage<V> getAsync(K key) {
-        return CompletableFuture.supplyAsync(() -> delegate.get(key), executor);
+        return supply(() -> delegate.get(key));
     }
 
     @Override
     public CompletionStage<LookupResult<V>> lookupAsync(K key) {
-        return CompletableFuture.supplyAsync(() -> delegate.lookup(key), executor);
+        return supply(() -> delegate.lookup(key));
     }
 
     @Override
     public CompletionStage<V> getOrComputeAsync(K key, Function<? super K, ? extends V> loader) {
         Objects.requireNonNull(loader, "loader");
-        return CompletableFuture.supplyAsync(() -> delegate.getOrCompute(key, loader), executor);
+        return supply(() -> delegate.getOrCompute(key, loader));
     }
 
     @Override
     public CompletionStage<V> getOrComputeAsyncStage(K key, AsyncLoader<? super K, ? extends V> loader) {
         Objects.requireNonNull(loader, "loader");
-        return CompletableFuture.supplyAsync(
-                () -> delegate.getOrCompute(key, k -> joinLoader(loader, k)), executor);
+        return supply(() -> delegate.getOrCompute(key, k -> joinLoader(loader, k)));
     }
 
     @Override
     public CompletionStage<Void> putAsync(K key, V value) {
-        return CompletableFuture.runAsync(() -> delegate.put(key, value), executor);
+        return run(() -> delegate.put(key, value));
     }
 
     @Override
     public CompletionStage<Void> putAsync(K key, V value, String... tags) {
-        return CompletableFuture.runAsync(() -> delegate.put(key, value, tags), executor);
+        return run(() -> delegate.put(key, value, tags));
     }
 
     @Override
     public CompletionStage<Boolean> putIfAbsentAsync(K key, V value) {
-        return CompletableFuture.supplyAsync(() -> delegate.putIfAbsent(key, value), executor);
+        return supply(() -> delegate.putIfAbsent(key, value));
     }
 
     @Override
     public CompletionStage<Void> putNullAsync(K key) {
-        return CompletableFuture.runAsync(() -> delegate.putNull(key), executor);
+        return run(() -> delegate.putNull(key));
     }
 
     @Override
     public CompletionStage<Void> evictAsync(K key) {
-        return CompletableFuture.runAsync(() -> delegate.evict(key), executor);
+        return run(() -> delegate.evict(key));
     }
 
     @Override
     public CompletionStage<Void> evictAllAsync() {
-        return CompletableFuture.runAsync(delegate::evictAll, executor);
+        return run(delegate::evictAll);
     }
 
     @Override
     public CompletionStage<Void> evictAllAsync(Collection<K> keys) {
-        return CompletableFuture.runAsync(() -> delegate.evictAll(keys), executor);
+        return run(() -> delegate.evictAll(keys));
     }
 
     @Override
     public CompletionStage<Void> evictByTagAsync(String tag) {
-        return CompletableFuture.runAsync(() -> delegate.evictByTag(tag), executor);
+        return run(() -> delegate.evictByTag(tag));
+    }
+
+    /**
+     * Offloads a value-producing task to the shared executor. A saturated
+     * executor surfaces as a failed stage ({@link
+     * java.util.concurrent.RejectedExecutionException}) instead of a
+     * synchronous throw on the caller's thread.
+     */
+    private <T> CompletionStage<T> supply(java.util.function.Supplier<T> task) {
+        try {
+            return CompletableFuture.supplyAsync(task, executor);
+        } catch (java.util.concurrent.RejectedExecutionException e) {
+            return CompletableFuture.failedFuture(e);
+        }
+    }
+
+    /**
+     * Offloads a void task to the shared executor; rejection semantics
+     * match {@link #supply(java.util.function.Supplier)}.
+     */
+    private CompletionStage<Void> run(Runnable task) {
+        try {
+            return CompletableFuture.runAsync(task, executor);
+        } catch (java.util.concurrent.RejectedExecutionException e) {
+            return CompletableFuture.failedFuture(e);
+        }
     }
 
     /**

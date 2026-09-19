@@ -139,6 +139,9 @@ public class TiercacheMicronautConfiguration {
         TierCacheFactory.Builder builder = TierCacheFactory.builder()
                 .defaults(properties.getDefaults().toSettings(io.tiercache.CacheSettings.defaults()));
         overridesByName.forEach((name, props) -> builder.cache(name, props.toOverride()));
+        if (properties.getAsyncExecutorThreads() > 0) {
+            builder.asyncExecutorThreads(properties.getAsyncExecutorThreads());
+        }
         RemoteCache<Object, Object> sharedRemoteCache = remoteCache.isPresent() ? remoteCache.get() : null;
         if (sharedRemoteCache != null) {
             // Application-provided L2 takes precedence; it is shared by all

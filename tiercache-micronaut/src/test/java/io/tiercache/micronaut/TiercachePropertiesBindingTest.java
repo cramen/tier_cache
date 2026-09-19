@@ -27,6 +27,7 @@ class TiercachePropertiesBindingTest {
             assertThat(properties.getInvalidation().isEnabled()).isTrue();
             assertThat(properties.getInvalidation().getProfile()).isEqualTo("pubsub");
             assertThat(properties.getInvalidation().getJournalCapacity()).isEqualTo(10_000);
+            assertThat(properties.getAsyncExecutorThreads()).isEqualTo(0);
             // An empty defaults level resolves onto the core defaults.
             CacheSettings resolved = properties.getDefaults()
                     .toSettings(CacheSettings.defaults());
@@ -45,6 +46,17 @@ class TiercachePropertiesBindingTest {
             TiercacheProperties properties = context.getBean(TiercacheProperties.class);
             assertThat(properties.isEnabled()).isTrue();
             assertThat(properties.getRedisUri()).isEqualTo("redis://localhost:6379");
+        }
+    }
+
+    @Test
+    void bindsAsyncExecutorThreads() {
+        Map<String, Object> config = Map.of(
+                "tiercache.enabled", "true",
+                "tiercache.async-executor-threads", "7");
+        try (ApplicationContext context = ApplicationContext.run(config, "tiercache-inmemory-l2")) {
+            assertThat(context.getBean(TiercacheProperties.class).getAsyncExecutorThreads())
+                    .isEqualTo(7);
         }
     }
 
