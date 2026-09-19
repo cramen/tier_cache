@@ -183,6 +183,7 @@ public class TiercacheMicronautConfiguration {
         return LettuceRemoteCache.builder(properties.getRedisUri())
                 .client(client)
                 .cacheName("micronaut:" + name)
+                .journalName(name)
                 .journal(journal)
                 .invalidationMode(settings.invalidationMode(), settings.payloadCapBytes())
                 .build();

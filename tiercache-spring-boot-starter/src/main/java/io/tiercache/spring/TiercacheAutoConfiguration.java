@@ -152,11 +152,13 @@ public class TiercacheAutoConfiguration {
     }
 
     /**
-     * One L2 per cache name over the shared client, namespaced
+     * One L2 per cache name over the shared client, data keys namespaced
      * {@code spring:<name>} so equal keys in different caches never collide.
-     * Per-cache invalidation settings resolve the same way the factory
-     * resolves them: the named override against the global defaults (a cache
-     * without configured overrides uses the defaults).
+     * The invalidation journal stays under the logical name ({@code users},
+     * not {@code spring:users}) so the write and replay paths address the
+     * same stream. Per-cache invalidation settings resolve the same way the
+     * factory resolves them: the named override against the global defaults
+     * (a cache without configured overrides uses the defaults).
      */
     private static LettuceRemoteCache<Object, Object> perCacheRemoteCache(
             TiercacheProperties properties, RedisClient client, RedisStreamJournal journal, String name) {
@@ -167,6 +169,7 @@ public class TiercacheAutoConfiguration {
         return LettuceRemoteCache.builder(properties.getRedisUri())
                 .client(client)
                 .cacheName("spring:" + name)
+                .journalName(name)
                 .journal(journal)
                 .invalidationMode(settings.invalidationMode(), settings.payloadCapBytes())
                 .build();

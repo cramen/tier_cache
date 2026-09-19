@@ -81,6 +81,7 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
     private final StatefulRedisConnection<byte[], byte[]> connection;
     private final RedisCommands<byte[], byte[]> commands;
     private final String cacheName;
+    private final String journalName;
     private final byte[] keyPrefix;
     private final CacheSerializer<K> keySerializer;
     private final CacheSerializer<V> valueSerializer;
@@ -103,6 +104,7 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
         this.connection = client.connect(ByteArrayCodec.INSTANCE);
         this.commands = connection.sync();
         this.cacheName = builder.cacheName;
+        this.journalName = builder.journalName != null ? builder.journalName : builder.cacheName;
         this.keyPrefix = (builder.cacheName + ":").getBytes(StandardCharsets.UTF_8);
         this.keySerializer = builder.keySerializer;
         this.valueSerializer = builder.valueSerializer;
@@ -184,7 +186,7 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
             return true;
         }
         Long result = commands.eval(Lua.CONDITIONAL_WRITE, io.lettuce.core.ScriptOutputType.INTEGER,
-                new byte[][]{namespaced(key), RedisStreamJournal.streamKeyBytes(cacheName)},
+                new byte[][]{namespaced(key), RedisStreamJournal.streamKeyBytes(journalName)},
                 entry.version().toWire().getBytes(StandardCharsets.UTF_8),
                 encode(entry, staleWindowActive(staleTtl)),
                 String.valueOf(physicalTtl(ttl, staleTtl).toMillis()).getBytes(StandardCharsets.UTF_8),
@@ -215,7 +217,7 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
         byte[] namespaced = namespaced(key);
         pruneTags(namespaced);
         commands.eval(Lua.VERSIONED_EVICT, io.lettuce.core.ScriptOutputType.INTEGER,
-                new byte[][]{namespaced, RedisStreamJournal.streamKeyBytes(cacheName)},
+                new byte[][]{namespaced, RedisStreamJournal.streamKeyBytes(journalName)},
                 version.toWire().getBytes(StandardCharsets.UTF_8),
                 String.valueOf(TOMBSTONE_TTL_MILLIS).getBytes(StandardCharsets.UTF_8),
                 String.valueOf(journal.capacity()).getBytes(StandardCharsets.UTF_8),
@@ -250,7 +252,7 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
     public void clearWithJournal(Version version) {
         clear();
         if (journal != null && version != null) {
-            journal.append(cacheName, new InvalidationMessage(cacheName, null, version,
+            journal.append(journalName, new InvalidationMessage(journalName, null, version,
                     version.instanceId(), InvalidationMessage.Type.EVICT_ALL));
         }
     }
@@ -262,7 +264,7 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
             return "OK".equals(result);
         }
         Long result = commands.eval(Lua.SET_IF_ABSENT, io.lettuce.core.ScriptOutputType.INTEGER,
-                new byte[][]{namespaced(key), RedisStreamJournal.streamKeyBytes(cacheName)},
+                new byte[][]{namespaced(key), RedisStreamJournal.streamKeyBytes(journalName)},
                 encode(entry, false),
                 String.valueOf(ttl.toMillis()).getBytes(StandardCharsets.UTF_8),
                 String.valueOf(journal.capacity()).getBytes(StandardCharsets.UTF_8),
@@ -434,6 +436,7 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
         private final String redisUri;
         private RedisClient sharedClient;
         private String cacheName = "default";
+        private String journalName;
         private CacheSerializer<K> keySerializer;
         private CacheSerializer<V> valueSerializer;
         private Duration connectTimeout = DEFAULT_CONNECT_TIMEOUT;
@@ -465,12 +468,35 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
          * Namespace for keys (used as {@code <cacheName>:} prefix). Required
          * when several caches share one server.
          *
+         * <p>Identity rule: {@code cacheName} controls the L2 data-key layout
+         * only. The invalidation journal follows the logical cache name —
+         * see {@link #journalName(String)}. Framework integrations that
+         * namespace data keys (e.g. {@code spring:users}) must keep the
+         * journal name at the logical name ({@code users}) so the write and
+         * replay paths address the same journal stream.
+         *
          * @param cacheName the cache name
          * @return this builder
          * @since 0.1.0
          */
         public Builder<K, V> cacheName(String cacheName) {
             this.cacheName = Objects.requireNonNull(cacheName, "cacheName");
+            return this;
+        }
+
+        /**
+         * Name of the invalidation journal stream this transport appends to;
+         * defaults to {@link #cacheName(String)}. Set this to the logical
+         * cache name when {@code cacheName} carries a framework namespace
+         * prefix: the data keys and the journal are identified independently,
+         * and the recovery path replays the journal by logical name.
+         *
+         * @param journalName the logical cache name owning the journal stream
+         * @return this builder
+         * @since 1.2.0
+         */
+        public Builder<K, V> journalName(String journalName) {
+            this.journalName = Objects.requireNonNull(journalName, "journalName");
             return this;
         }
 

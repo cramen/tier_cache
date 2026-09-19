@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Reconnect replay for Spring/Micronaut-wired caches: the invalidation journal was written under the namespaced cache name (`spring:users` / `micronaut:users`) while the recovery path replayed the logical name (`users`), so missed invalidations were never replayed and stale L1 entries survived until TTL. The journal now follows the logical cache name in all wirings (`LettuceRemoteCache.Builder.journalName`, defaulting to `cacheName`; programmatic prefix-free wiring unchanged).
+
 ## [1.1.0] - 2026-09-18
 
 ### Added

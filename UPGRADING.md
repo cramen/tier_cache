@@ -7,6 +7,30 @@ target versions.
 
 For the full list of additions and fixes, see [CHANGELOG.md](CHANGELOG.md).
 
+## 1.2.0 (unreleased)
+
+- Journal stream identity for framework-wired caches changed: invalidation
+  journal rows are now written to the stream of the logical cache name
+  (`users`) instead of the namespaced one (`spring:users` / `micronaut:users`).
+  This fixes reconnect replay for Spring/Micronaut-wired caches, which
+  previously read a stream that was never written (missed invalidations were
+  not replayed; stale L1 entries survived until TTL). Streams written by older
+  versions under the prefixed names become inert and expire harmlessly. No
+  action needed; programmatic (prefix-free) wiring is unchanged.
+
+## 1.1.0
+
+- New module: `tiercache-micronaut` — Micronaut `CacheManager`/
+  `SyncCache`/`AsyncCache` adapter, configured via the same `tiercache.*`
+  keys as the Spring Boot starter. Micronaut `@Cacheable`/`@CachePut`/
+  `@CacheInvalidate` code works unchanged.
+- New docs: migration guides from Redisson `RLocalCachedMap` and JetCache,
+  a sizing-and-TTL guide, and the "When Tiercache is not the right tool"
+  README section.
+- The soak gate moved out of CI to local runs
+  (`./gradlew :tiercache-tck:soakTest`). No runtime change.
+- No breaking changes from 1.0.0 — a drop-in upgrade.
+
 ## 1.0.0
 
 First GA release. No breaking changes from 0.4.0 — a drop-in upgrade.
