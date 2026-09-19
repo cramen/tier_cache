@@ -1,5 +1,6 @@
 package io.tiercache;
 
+import io.tiercache.internal.DefaultTierCache;
 import io.tiercache.spi.InvalidationEventListener;
 import io.tiercache.spi.InvalidationHandler;
 import io.tiercache.spi.InvalidationTarget;
@@ -87,9 +88,12 @@ class InvalidationEventListenerTest {
                 "factory must hand the registered listener to the engine");
 
         UUID remote = UUID.randomUUID();
-        handler.deliver(new InvalidationMessage("c", "k1", new Version(1000, remote),
+        // Remote versions must beat the engine's time-ordered sequences, so
+        // derive them from the stored entry instead of absolute constants.
+        long storedSeq = ((DefaultTierCache<String, String>) cache).versionOfL1Entry("k1").sequence();
+        handler.deliver(new InvalidationMessage("c", "k1", new Version(storedSeq + 1, remote),
                 remote, InvalidationMessage.Type.INVALIDATE));
-        handler.deliver(new InvalidationMessage("c", null, new Version(1001, remote),
+        handler.deliver(new InvalidationMessage("c", null, new Version(storedSeq + 2, remote),
                 remote, InvalidationMessage.Type.EVICT_ALL));
         factory.close();
 

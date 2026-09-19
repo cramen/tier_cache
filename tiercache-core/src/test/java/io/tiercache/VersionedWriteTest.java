@@ -89,14 +89,14 @@ class VersionedWriteTest {
         DefaultTierCache<String, String> cache = new DefaultTierCache<>("c", l1, l2,
                 CacheSettings.defaults(), true, null, null, new VersionGenerator(), null);
 
-        cache.put("k", "v"); // version 1
+        cache.put("k", "v"); // engine-generated (time-ordered) version
         Version v1 = cache.versionOfL1Entry("k");
         assertNotNull(v1);
 
         // Older event: entry survives. Newer event: evicted.
         cache.evictL1IfNewer("k", new Version(0, java.util.UUID.randomUUID()));
         assertEquals("v", cache.get("k"));
-        cache.evictL1IfNewer("k", new Version(Integer.MAX_VALUE, java.util.UUID.randomUUID()));
+        cache.evictL1IfNewer("k", new Version(v1.sequence() + 1, java.util.UUID.randomUUID()));
         assertNull(cache.versionOfL1Entry("k"));
 
         // EVICT_ALL clears L1.

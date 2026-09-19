@@ -9,6 +9,15 @@ For the full list of additions and fixes, see [CHANGELOG.md](CHANGELOG.md).
 
 ## 1.2.0 (unreleased)
 
+- Cross-instance write ordering fixed: versions are now time-ordered
+  (wall-clock hybrid sequence) instead of per-instance counters starting at
+  1. Previously, a freshly started instance's writes could lose to an older
+  instance's earlier writes on the same key. The wire format and Redis
+  scripts are unchanged. Rolling upgrade note: during a mixed rollout,
+  writes from not-yet-upgraded instances lose to writes from upgraded ones
+  (their old counter sequences always compare as older); the window closes
+  once all instances run the new version. Keep instance clocks NTP-synced —
+  ordering follows wall-clock time.
 - Journal stream identity for framework-wired caches changed: invalidation
   journal rows are now written to the stream of the logical cache name
   (`users`) instead of the namespaced one (`spring:users` / `micronaut:users`).

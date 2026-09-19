@@ -155,10 +155,13 @@ class BreakerGuardCoverageTest {
         factory.getCache("upd").put("k", "v");
         assertEquals(List.of("v"), updates);
 
-        // And the receiving side applies/drops by version.
+        // And the receiving side applies/drops by version. Newer-than-stored
+        // versions are derived from the stored entry: engine sequences are
+        // time-ordered, so absolute small constants would read as stale.
         TierCache<String, String> receiver = factory.getCache("upd");
+        long storedSeq = ((DefaultTierCache<String, String>) receiver).versionOfL1Entry("k").sequence();
         ((DefaultTierCache<String, String>) receiver).applyUpdateL1("k", "newer",
-                new Version(100, UUID.randomUUID()));
+                new Version(storedSeq + 1, UUID.randomUUID()));
         assertEquals("newer", receiver.get("k"));
         ((DefaultTierCache<String, String>) receiver).applyUpdateL1("k", "stale",
                 new Version(1, UUID.randomUUID()));

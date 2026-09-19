@@ -4,13 +4,20 @@ import java.util.Objects;
 import java.util.UUID;
 
 /**
- * Version of a cache write: a per-instance monotonically increasing sequence
- * number plus the origin instance ID. Compared lexicographically (sequence
- * first, instance ID as tiebreak) — a total order per key across writers,
- * which is all last-write-wins invalidation needs.
+ * Version of a cache write: a monotonically increasing sequence number plus
+ * the origin instance ID. Compared lexicographically (sequence first,
+ * instance ID as tiebreak) — a total order per key across writers, which is
+ * all last-write-wins invalidation needs.
  *
- * @param sequence   per-instance monotonically increasing sequence number;
- *                   must be &gt;= 0
+ * <p>Sequences produced by {@link VersionGenerator} are time-ordered
+ * (wall-clock hybrid), so versions order writes by real time across
+ * instances; see {@link VersionGenerator} for the scheme and the clock-skew
+ * caveat. The comparison itself is scheme-agnostic: it works for any
+ * monotonic sequence source.
+ *
+ * @param sequence   monotonically increasing sequence number (time-ordered
+ *                   when produced by {@link VersionGenerator}); must be
+ *                   &gt;= 0
  * @param instanceId ID of the instance that produced the write
  * @since 0.1.0
  */
@@ -19,7 +26,8 @@ public record Version(long sequence, UUID instanceId) implements Comparable<Vers
     /**
      * Validates the version fields.
      *
-     * @param sequence   per-instance monotonically increasing sequence
+     * @param sequence   monotonically increasing sequence (time-ordered when
+     *                   produced by {@link VersionGenerator})
      *                   number; must be &gt;= 0
      * @param instanceId ID of the instance that produced the write
      * @throws NullPointerException     if {@code instanceId} is {@code null}

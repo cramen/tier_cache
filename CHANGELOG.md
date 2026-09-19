@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Cross-instance write ordering: versions were per-instance counters starting at 1, so a freshly started instance's writes (and evicts) could be rejected as stale against a long-running instance's earlier writes on the same key — newer changes silently lost with no concurrency involved. Versions are now time-ordered (wall-clock hybrid sequence: `max(epochMillis x 1000 + per-millis counter, previous + 1)`), so writes order by real time across instances; the wire format and Redis scripts are unchanged. See `UPGRADING.md` for the rolling-upgrade note and the clock-sync expectation.
 - Reconnect replay for Spring/Micronaut-wired caches: the invalidation journal was written under the namespaced cache name (`spring:users` / `micronaut:users`) while the recovery path replayed the logical name (`users`), so missed invalidations were never replayed and stale L1 entries survived until TTL. The journal now follows the logical cache name in all wirings (`LettuceRemoteCache.Builder.journalName`, defaulting to `cacheName`; programmatic prefix-free wiring unchanged).
 
 ## [1.1.0] - 2026-09-18

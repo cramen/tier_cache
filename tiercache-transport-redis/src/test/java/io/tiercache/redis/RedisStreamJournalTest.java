@@ -153,4 +153,37 @@ class RedisStreamJournalTest {
         assertTrue(journal.isTrimmed("trimmed", "0-0"));
     }
 
+    /**
+     * Cross-instance causality at the Lua conditional-write path: a fresh
+     * instance's later write must beat a long-running instance's earlier
+     * writes (regression: per-instance counters starting at 1 made the Lua
+     * {@code newer()} comparison reject the newer write).
+     */
+    @Test
+    void freshInstanceLaterWriteWinsConditionalLua() throws Exception {
+        RedisStreamJournal journal = new RedisStreamJournal(client.connect(ByteArrayCodec.INSTANCE), 1000,
+                new JdkCacheSerializer<>());
+        LettuceRemoteCache<String, String> cache = LettuceRemoteCache.<String, String>builder(redisUri)
+                .cacheName("fresh-wins")
+                .journal(journal)
+                .build();
+        io.tiercache.VersionGenerator longRunning = new io.tiercache.VersionGenerator();
+        for (int i = 0; i < 100; i++) {
+            assertTrue(cache.putIfNewer("k",
+                    StoredEntry.ofValue("a-" + i, longRunning.next()), Duration.ofMinutes(1)));
+        }
+        // Strictly later in real time: the clock moves past the burst.
+        Thread.sleep(5);
+        io.tiercache.VersionGenerator fresh = new io.tiercache.VersionGenerator();
+        assertTrue(cache.putIfNewer("k",
+                StoredEntry.ofValue("b", fresh.next()), Duration.ofMinutes(1)),
+                "fresh instance's later write must be accepted as newer");
+        assertEquals("b", cache.get("k").value());
+
+        // The versioned evict from the fresh instance is likewise accepted.
+        cache.evict("k", fresh.next());
+        assertNull(cache.get("k"), "tombstone hides the entry after the versioned evict");
+        cache.close();
+    }
+
 }
