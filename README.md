@@ -10,9 +10,9 @@ The cache is eventually consistent by design; no strong-consistency guarantees a
 ## Features
 
 - **Two-level read cascade** — L1 (shaded Caffeine, zero-allocation hit path) → L2 (Redis/Valkey) → your loader. An L2 hit always warms L1, so the next read of the same key is served in-process.
-- **Correct by default** — singleflight per instance plus cluster-wide rebuild coordination (distributed lock with watchdog lease extension and mandatory double-check), TTL jitter, fail-fast TTL-ordering validation, null caching with a tri-state `lookup`, atomic `putIfAbsent` — all on without configuration; disabling requires an explicit opt-in and is logged as a risk.
+- **Correct by default** — singleflight per instance plus cluster-wide rebuild coordination (distributed lock with watchdog lease extension and mandatory double-check), TTL jitter, fail-fast TTL-ordering validation, atomic `putIfAbsent` — all on without configuration; disabling requires an explicit opt-in and is logged as a risk. Null caching is opt-in (`null-policy: allow`) with a tri-state `lookup` to distinguish miss from cached-null.
 - **Cross-instance invalidation** — versioned events with last-write-wins ordering, a bounded journal with replay on reconnect, and two transport profiles: lightweight Pub/Sub or durable Redis Streams.
-- **Honest degradation** — a circuit breaker switches the cache to L1-only when Redis fails; business code never sees infrastructure exceptions. Recovery replays the missed invalidations and never flushes L1 (no healing-partition stampede).
+- **Honest degradation** — a circuit breaker switches the cache to L1-only when Redis fails; business code never sees infrastructure exceptions. Recovery replays the missed invalidations from a bounded journal and does not flush L1 within the journal window (no healing-partition stampede). If a disconnect outlives the journal window — or a hand-built engine has no journal — L1 is flushed for the affected caches, signalled via log, the `tiercache.invalidation{direction="dropped"}` metric, and a listener callback.
 - **Stale serving** — stale-while-revalidate and XFetch early refresh keep hot keys fast while values refresh in the background.
 - **Observability as a feature** — Micrometer metrics for every failure mode, OpenTelemetry tracing, JMX inspection, and a reference Grafana dashboard with alert rules in [`docs/grafana/`](docs/grafana/).
 - **Kotlin coroutines** — `suspend` API, invalidation `Flow`, and a `tierCache { }` config DSL in `tiercache-kotlin`. A suspending loader runs on the caller's coroutine dispatcher, so a blocking loader blocks that dispatcher — offload blocking work with `withContext(Dispatchers.IO)`.
@@ -35,7 +35,7 @@ tiercache:
   redis-uri: redis://localhost:6379
 ```
 
-The starter replaces the standard cache manager: `@Cacheable` / `@CachePut` / `@CacheEvict` code works unchanged, backed by the two-level cache. Per-cache overrides live under `tiercache.caches.<name>.*`; invalid configuration (e.g. L1 TTL > L2 TTL) aborts startup with an actionable error. A runnable demo lives in [`examples/demo-spring`](examples/demo-spring/) (docker-compose included).
+The starter replaces the standard cache manager: `@Cacheable` / `@CachePut` / `@CacheEvict` code works unchanged, backed by the two-level cache. Load coalescing under `@Cacheable` requires `sync = true` — Spring's abstraction only coordinates concurrent loads in sync mode (see [migration from Spring Cache](docs/migration-from-spring-cache.md)). Null caching is opt-in (`tiercache.caches.<name>.null-policy: allow`). Per-cache overrides live under `tiercache.caches.<name>.*`; invalid configuration (e.g. L1 TTL > L2 TTL) aborts startup with an actionable error. A runnable demo lives in [`examples/demo-spring`](examples/demo-spring/) (docker-compose included).
 
 ### Micronaut
 

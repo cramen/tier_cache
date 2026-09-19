@@ -10,9 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `tiercache.async-executor-threads` / `TierCacheFactory.Builder.asyncExecutorThreads(int)` (also exposed on the Kotlin DSL, `KTierCacheFactory.Builder`, and `ReactorCacheFactory.Builder`): thread cap for the bounded async executor, default `max(4, availableProcessors)`.
+- `docs/sizing-and-ttl.md`: journal-capacity sizing guidance (disconnect window x invalidation rate, and what happens on overflow).
 
 ### Changed
 
+- Docs accuracy: the recovery description no longer claims L1 is "never" flushed — it is replay-based within the journal window and flushes for affected caches on window overflow or when no journal is wired (signalled via log, the `tiercache.invalidation{direction="dropped"}` metric, and a listener callback). README now states that `@Cacheable` load coalescing requires `sync = true` and that null caching is opt-in (`null-policy: allow`).
 - The async executor is now bounded with a bounded queue (10,000): previously `AsyncTierCache` operations ran on an unbounded cached thread pool shared with background revalidation. Under saturation, submissions fail their `CompletionStage` with `RejectedExecutionException` instead of growing threads without bound. Background SWR/XFetch revalidation runs on its own small bounded pool and no longer competes with latency-sensitive async work. See `UPGRADING.md` for the saturation behavior change.
 
 ### Fixed

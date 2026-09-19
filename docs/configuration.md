@@ -209,9 +209,12 @@ seconds the breaker half-opens and admits up to 3 probe calls; it closes
 when all probes succeed and reopens on any probe failure.
 
 On recovery, missed invalidations are replayed from the journal **before**
-recovery is reported; L1 is never flushed on reconnect. (The starter always
-wires the journal; only a hand-built invalidation engine without a journal
-falls back to a full flush.)
+recovery is reported; L1 is not flushed on reconnect within the journal
+window. If the disconnect outlives the window (missed rows were trimmed), L1
+is flushed for the affected caches — signalled via log, the
+`tiercache.invalidation{direction="dropped"}` metric, and the
+`onJournalOverflow` listener callback. A hand-built invalidation engine
+without a journal always falls back to a full flush.
 
 ## Example
 

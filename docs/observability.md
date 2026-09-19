@@ -35,7 +35,7 @@ All meters are created by
 |---|---|---|---|
 | `tiercache.requests` | Counter | `cache`, `result` | Cache lookups by outcome. `result` is one of `l1_hit`, `l2_hit`, `miss`, `load`, `coalesced` (waited on another caller's in-flight load). |
 | `tiercache.latency` | Timer | `cache`, `level` | Latency of cache operations by level. The level enum defines `l1`/`l2`; core times only L2-touching operations, so `level="l2"` is what you will see in practice (L1 hits are deliberately not timed — zero clock reads on the hot path). |
-| `tiercache.invalidation` | Counter | `cache`, `direction` | Invalidation events by direction: `sent`, `received`, `replayed` (from the journal on recovery), `dropped` (journal overflow — a staleness incident). |
+| `tiercache.invalidation` | Counter | `cache`, `direction` | Invalidation events by direction: `sent`, `received`, `replayed` (from the journal on recovery), `dropped` (journal overflow — the affected instances flushed their whole L1; a staleness incident). |
 | `tiercache.degraded` | Gauge | — | `1` while the L2 circuit breaker is open (L1-only mode), else `0`. |
 | `tiercache.breaker.state` | Gauge | — | Breaker machine state: `0` = closed, `1` = half-open (recovery probing), `2` = open. During half-open `tiercache.degraded` is already back at `0`. |
 | `tiercache.journal.size` | Gauge | `cache` | Invalidation journal entries currently held for the cache. |

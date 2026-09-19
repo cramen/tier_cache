@@ -102,6 +102,25 @@ Guidance:
   fleet-wide L2 expiry cliff is mitigated by XFetch (`xfetch-enabled`),
   not by jitter. See [TTL jitter and XFetch](configuration.md#ttl-jitter).
 
+## Journal capacity
+
+The invalidation journal (`tiercache.invalidation.journal-capacity`,
+default 10000 entries per cache stream) bounds how long an instance can be
+disconnected and still heal by replay instead of a full L1 flush. Size it
+as `expected disconnect window x invalidation rate`: how many invalidation
+events one cache can see during the longest outage you want to survive
+without a flush. A Pub/Sub blip of a few seconds against hundreds of writes
+per second fits the default easily; a multi-minute network partition at
+high write churn may not.
+
+When the window is exceeded (or no journal is wired), the reconnecting
+instance flushes its whole L1 for the affected caches — a cold start that
+hammers the loader path exactly when the partition just healed. The flush
+is signalled via log, the `tiercache.invalidation{direction="dropped"}`
+metric, and the `TiercacheDroppedInvalidations` alert rule in
+[docs/grafana/](grafana/). If you see drops, raise the capacity before
+reaching for longer L1 TTLs.
+
 ## Per-cache overrides vs global defaults
 
 Keep `tiercache.defaults.*` aimed at your most common cache shape and use
