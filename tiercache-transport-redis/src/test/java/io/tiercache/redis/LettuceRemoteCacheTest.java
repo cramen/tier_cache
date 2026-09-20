@@ -280,4 +280,135 @@ conn.sync().sadd("tiercache:tags:tag-ttl:g", "tag-ttl:ghost");
         }
         cache.close();
     }
+
+    /**
+     * Boundedness under UNINTERRUPTED writes (no tag reads, so the set TTL
+     * cannot mask a missing cleanup by expiring the set): after several TTL
+     * periods the set size must sit within the stated statistical bound
+     * size &le; live + 2*live/(K-1) + 4K, K = 8. The janitor is the only
+     * mechanism that can achieve this; pre-fix the set accumulates every
+     * key ever written.
+     */
+    @Test
+    void tagSetSizeStaysBoundedUnderContinuousWrites() throws Exception {
+        LettuceRemoteCache<String, String> cache = LettuceRemoteCache.<String, String>builder(redisUri)
+                .cacheName("tag-hot").build();
+        Duration ttl = Duration.ofMillis(500);
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(1_600); // > 3 TTL periods
+        int writes = 0;
+        while (System.nanoTime() < deadline) {
+            cache.putTagged("k" + writes, io.tiercache.spi.StoredEntry.ofValue("v"), ttl,
+                    new String[]{"hot"});
+            writes++;
+            Thread.sleep(4);
+        }
+        try (io.lettuce.core.RedisClient probe = io.lettuce.core.RedisClient.create(redisUri);
+                var conn = probe.connect(io.lettuce.core.codec.ByteArrayCodec.INSTANCE)) {
+            var sync = conn.sync();
+            List<byte[]> members = new ArrayList<>(sync.smembers("tiercache:tags:tag-hot:hot".getBytes(StandardCharsets.UTF_8)));
+            long live = members.stream().filter(m -> sync.exists(m) > 0).count();
+            long bound = live + 2 * live / 7 + 32;
+            assertTrue(members.size() <= bound,
+                    "set size " + members.size() + " exceeds the janitor bound " + bound
+                            + " (live=" + live + ", writes=" + writes + ")");
+            assertTrue(writes > bound,
+                    "the test is only meaningful if total writes (" + writes
+                            + ") far exceed the bound " + bound);
+        }
+        cache.close();
+    }
+
+    /**
+     * Idle unique tags: hundreds of tags written once with short-lived data
+     * and never touched again must not leak — each set expires within the
+     * longest member TTL it has seen. Regression guard (the previous scheme
+     * also expired idle sets; this locks the behavior in).
+     */
+    @Test
+    void idleUniqueTagsExpire() throws Exception {
+        LettuceRemoteCache<String, String> cache = LettuceRemoteCache.<String, String>builder(redisUri)
+                .cacheName("tag-idle").build();
+        for (int i = 0; i < 200; i++) {
+            cache.putTagged("k" + i, io.tiercache.spi.StoredEntry.ofValue("v"),
+                    Duration.ofMillis(300), new String[]{"t" + i});
+        }
+        Thread.sleep(600);
+        try (io.lettuce.core.RedisClient probe = io.lettuce.core.RedisClient.create(redisUri);
+                var conn = probe.connect()) {
+            assertTrue(conn.sync().keys("tiercache:tags:tag-idle:*").isEmpty(),
+                    "idle tag sets must expire within the longest member TTL");
+        }
+        cache.close();
+    }
+
+    /**
+     * Mixed TTLs, extend-only set TTL: a short-lived entry must never shrink
+     * the shared index — after it expires, the long-lived entry is still
+     * found by tag lookup.
+     */
+    @Test
+    void mixedTtlsDoNotShrinkSharedIndex() throws Exception {
+        LettuceRemoteCache<String, String> cache = LettuceRemoteCache.<String, String>builder(redisUri)
+                .cacheName("tag-mix").build();
+        cache.putTagged("long", io.tiercache.spi.StoredEntry.ofValue("v"),
+                Duration.ofMillis(1_500), new String[]{"mix"});
+        cache.putTagged("short", io.tiercache.spi.StoredEntry.ofValue("v"),
+                Duration.ofMillis(200), new String[]{"mix"});
+
+        Thread.sleep(400); // the short entry is gone; the long one is not
+        List<String> found = cache.keysByTag("mix");
+        assertTrue(found.contains("long"),
+                "the long-lived member must survive the short one's expiry, got " + found);
+        assertTrue(!found.contains("short"),
+                "the expired member must not be returned, got " + found);
+        cache.close();
+    }
+
+    /**
+     * Janitor vs concurrent rewrites: a membership whose data key is being
+     * rewritten is never removed (the check-and-remove is atomic). A write
+     * storm on a small key set exercises janitor samples against live keys;
+     * afterwards every live key must still be a member.
+     */
+    @Test
+    void janitorNeverRemovesLiveMembership() throws Exception {
+        LettuceRemoteCache<String, String> cache = LettuceRemoteCache.<String, String>builder(redisUri)
+                .cacheName("tag-race").build();
+        int keys = 16;
+        int threads = 4;
+        int iterations = 60;
+        var pool = Executors.newFixedThreadPool(threads);
+        var start = new CountDownLatch(1);
+        List<Future<?>> futures = new ArrayList<>();
+        for (int t = 0; t < threads; t++) {
+            int offset = t;
+            futures.add(pool.submit(() -> {
+                start.await();
+                for (int i = 0; i < iterations; i++) {
+                    String key = "k" + ((offset + i) % keys);
+                    cache.putTagged(key, io.tiercache.spi.StoredEntry.ofValue("v"),
+                            Duration.ofSeconds(30), new String[]{"storm"});
+                    if (i % 7 == 0) {
+                        cache.keysByTag("storm"); // read-time prune races the rewrites too
+                    }
+                }
+                return null;
+            }));
+        }
+        start.countDown();
+        for (var f : futures) {
+            f.get(30, TimeUnit.SECONDS);
+        }
+        pool.shutdown();
+
+        List<String> members = cache.keysByTag("storm");
+        assertEquals(keys, members.size(),
+                "every live key must keep its membership after the storm, got " + members);
+        try (io.lettuce.core.RedisClient probe = io.lettuce.core.RedisClient.create(redisUri);
+                var conn = probe.connect(io.lettuce.core.codec.ByteArrayCodec.INSTANCE)) {
+            assertEquals(keys, conn.sync().scard("tiercache:tags:tag-race:storm".getBytes(StandardCharsets.UTF_8)),
+                    "no phantom members and no lost memberships");
+        }
+        cache.close();
+    }
 }

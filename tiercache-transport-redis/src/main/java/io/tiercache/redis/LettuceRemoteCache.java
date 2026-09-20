@@ -312,10 +312,16 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
 
     // --- Tag registry: tiercache:tags:<cache>:<tag> sets + reverse index
     // tiercache:tagkeys:<cache>:<key>. Redis sets have no per-member TTL,
-    // so both structures are written with the data entry's physical TTL —
-    // they cannot grow without bound when data expires naturally. Members
-    // whose data key is gone are filtered and pruned on tag lookups;
-    // explicit evictions prune immediately via pruneTags. ---
+    // so boundedness comes from two mechanisms (Lua.TAG_ADD/TAG_LIVE_MEMBERS):
+    // each tag set carries an extend-only TTL (a shorter-lived entry never
+    // shrinks the index, so a set outlives its longest member by a bounded
+    // margin and then expires — including tags never touched again), and
+    // dead members are reclaimed by janitor sampling on writes and by
+    // read-time pruning, each an atomic check-and-remove. The per-key
+    // reverse index keeps the data entry's exact TTL. ---
+
+    /** Janitor sample size K per tag write (see the invalidation spec's bound). */
+    private static final int TAG_JANITOR_SAMPLE = 8;
 
     private byte[] tagSetKey(String tag) {
         return ("tiercache:tags:" + cacheName + ":" + tag).getBytes(StandardCharsets.UTF_8);
@@ -341,29 +347,24 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
                     .map(t -> t.getBytes(StandardCharsets.UTF_8)).toArray(byte[][]::new));
             commands.pexpire(keyTags, ttlMillis);
             for (String tag : tags) {
-                byte[] setKey = tagSetKey(tag);
-                commands.sadd(setKey, namespaced);
-                commands.pexpire(setKey, ttlMillis);
+                commands.eval(Lua.TAG_ADD, io.lettuce.core.ScriptOutputType.INTEGER,
+                        new byte[][]{tagSetKey(tag)},
+                        namespaced,
+                        String.valueOf(ttlMillis).getBytes(StandardCharsets.UTF_8),
+                        String.valueOf(TAG_JANITOR_SAMPLE).getBytes(StandardCharsets.UTF_8));
             }
         }
     }
 
     @Override
     public java.util.List<K> keysByTag(String tag) {
-        byte[] setKey = tagSetKey(tag);
-        java.util.Set<byte[]> members = commands.smembers(setKey);
-        java.util.List<K> out = new java.util.ArrayList<>(members.size());
-        java.util.List<byte[]> dead = new java.util.ArrayList<>();
-        for (byte[] namespaced : members) {
-            if (commands.exists(namespaced) > 0) {
-                byte[] raw = java.util.Arrays.copyOfRange(namespaced, keyPrefix.length, namespaced.length);
-                out.add(keySerializer.fromBytes(raw));
-            } else {
-                dead.add(namespaced);
-            }
-        }
-        if (!dead.isEmpty()) {
-            commands.srem(setKey, dead.toArray(new byte[0][]));
+        java.util.List<byte[]> live = commands.eval(Lua.TAG_LIVE_MEMBERS,
+                io.lettuce.core.ScriptOutputType.MULTI,
+                new byte[][]{tagSetKey(tag)});
+        java.util.List<K> out = new java.util.ArrayList<>(live.size());
+        for (byte[] namespaced : live) {
+            byte[] raw = java.util.Arrays.copyOfRange(namespaced, keyPrefix.length, namespaced.length);
+            out.add(keySerializer.fromBytes(raw));
         }
         return out;
     }
@@ -459,6 +460,40 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
                 + "redis.call('xadd', KEYS[2], 'MAXLEN', '~', ARGV[3], '*',"
                 + " 't', ARGV[4], 'k', ARGV[5], 'v', ARGV[6], 'p', ARGV[7]) "
                 + "return 1";
+
+        /**
+         * Tag write: add the member, then lift the set TTL extend-only
+         * (PTTL -1/-2 both fall below any real TTL, so the comparison
+         * covers them; a shorter-lived entry never shrinks the index —
+         * the 6.2-compatible emulation of PEXPIRE GT). The janitor runs
+         * in the same call: a random member sample, each SREM conditional
+         * on the data key being absent — atomically, so a concurrently
+         * rewritten key keeps its membership.
+         */
+        static final String TAG_ADD =
+                "redis.call('sadd', KEYS[1], ARGV[1]) "
+                        + "local ttl = tonumber(ARGV[2]) "
+                        + "if redis.call('pttl', KEYS[1]) < ttl then "
+                        + "redis.call('pexpire', KEYS[1], ttl) end "
+                        + "local candidates = redis.call('srandmember', KEYS[1], tonumber(ARGV[3])) "
+                        + "for _, m in ipairs(candidates) do "
+                        + "if redis.call('exists', m) == 0 then redis.call('srem', KEYS[1], m) end "
+                        + "end "
+                        + "return 1";
+
+        /**
+         * Tag read: returns the live members only; dead members are
+         * removed inside the same atomic existence check (no
+         * EXISTS→SREM race against a concurrent rewrite).
+         */
+        static final String TAG_LIVE_MEMBERS =
+                "local members = redis.call('smembers', KEYS[1]) "
+                        + "local live = {} "
+                        + "for _, m in ipairs(members) do "
+                        + "if redis.call('exists', m) == 1 then live[#live + 1] = m "
+                        + "else redis.call('srem', KEYS[1], m) end "
+                        + "end "
+                        + "return live";
     }
 
     /**

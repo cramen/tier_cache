@@ -7,6 +7,25 @@ target versions.
 
 For the full list of additions and fixes, see [CHANGELOG.md](CHANGELOG.md).
 
+## Unreleased
+
+- Tag index boundedness scheme changed (bug fix, no API change). Each tag
+  set's TTL is now extend-only (a shorter-lived entry never shrinks the
+  index) and member cleanup is atomic. Transition: sets written by older
+  versions keep their old TTL until the next write lifts it; sets that
+  never get another write expire on the old TTL. Already-shrunken set TTLs
+  from the old scheme do not self-repair — that state must either expire
+  on its own or be corrected deliberately. Safe corrections: (a) re-`put`
+  the live tagged entries under the new version to rebuild membership —
+  deleting the `tiercache:tags:*` / `tiercache:tagkeys:*` index keys alone
+  is NOT safe (live data would lose its tag membership and `evictByTag`
+  would stop finding it); or (b) coherently clear the affected cache
+  entirely (data entries, the tag indexes, and a local-cache flush on all
+  instances). During a mixed rollout, not-yet-upgraded instances can
+  transiently shrink set TTLs or skip member cleanup; boundedness is exact
+  once all writers run the new version AND the pre-existing shrunken state
+  has expired or been corrected.
+
 ## 1.2.0
 
 - Async executor is now bounded: `AsyncTierCache` operations previously ran
