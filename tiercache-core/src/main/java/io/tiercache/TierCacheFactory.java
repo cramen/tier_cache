@@ -285,15 +285,21 @@ public final class TierCacheFactory implements AutoCloseable {
     }
 
     /**
-     * Shuts down the factory: the revalidation executor and the watchdog
-     * scheduler are stopped and the invalidation engine is closed. Caches
-     * already obtained remain usable but lose lease extension for in-flight
-     * coordination, and async operations submitted afterwards are rejected.
+    /**
+     * Shuts down the factory: outstanding async operations handed out
+     * through {@link #asyncCache(String)} are failed with
+     * {@link java.util.concurrent.CancellationException}, the revalidation
+     * executor and the watchdog scheduler are stopped and the invalidation
+     * engine is closed. Caches already obtained remain usable but lose
+     * lease extension for in-flight coordination, and async operations
+     * submitted afterwards are rejected.
      *
      * @since 0.1.0
      */
     @Override
     public void close() {
+        liveAsyncCaches.values().forEach(view ->
+                ((io.tiercache.internal.DefaultAsyncTierCache<?, ?>) view).closeOutstanding());
         revalidationExecutor.shutdownNow();
         asyncExecutor.shutdownNow();
         if (watchdog != null) {

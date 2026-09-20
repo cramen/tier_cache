@@ -28,6 +28,9 @@ public final class DefaultAsyncTierCache<K, V> implements AsyncTierCache<K, V> {
 
     private final TierCache<K, V> delegate;
     private final Executor executor;
+    /** Stages handed to callers and not yet completed; drained on factory close. */
+    private final java.util.Set<CompletableFuture<?>> outstanding =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
 
     /**
      * Creates the async view over a synchronous cache.
@@ -40,6 +43,29 @@ public final class DefaultAsyncTierCache<K, V> implements AsyncTierCache<K, V> {
     public DefaultAsyncTierCache(TierCache<K, V> delegate, Executor executor) {
         this.delegate = Objects.requireNonNull(delegate, "delegate");
         this.executor = Objects.requireNonNull(executor, "executor");
+    }
+
+    /**
+     * Fails every stage not yet completed with
+     * {@link java.util.concurrent.CancellationException}, so callers never
+     * hang on a factory close. Called by the owning factory during
+     * {@code close()}; already-completed stages are unaffected.
+     *
+     * <p>Internal lifecycle hook — not for application use.
+     */
+    public void closeOutstanding() {
+        for (CompletableFuture<?> future : outstanding) {
+            future.completeExceptionally(new java.util.concurrent.CancellationException(
+                    "TierCacheFactory closed"));
+        }
+        outstanding.clear();
+    }
+
+    /** Registers a produced stage until it completes (no retention after). */
+    private <T> CompletableFuture<T> track(CompletableFuture<T> future) {
+        outstanding.add(future);
+        future.whenComplete((value, error) -> outstanding.remove(future));
+        return future;
     }
 
     @Override
@@ -112,7 +138,7 @@ public final class DefaultAsyncTierCache<K, V> implements AsyncTierCache<K, V> {
      */
     private <T> CompletionStage<T> supply(java.util.function.Supplier<T> task) {
         try {
-            return CompletableFuture.supplyAsync(task, executor);
+            return track(CompletableFuture.supplyAsync(task, executor));
         } catch (java.util.concurrent.RejectedExecutionException e) {
             return CompletableFuture.failedFuture(e);
         }
@@ -124,7 +150,7 @@ public final class DefaultAsyncTierCache<K, V> implements AsyncTierCache<K, V> {
      */
     private CompletionStage<Void> run(Runnable task) {
         try {
-            return CompletableFuture.runAsync(task, executor);
+            return track(CompletableFuture.runAsync(task, executor));
         } catch (java.util.concurrent.RejectedExecutionException e) {
             return CompletableFuture.failedFuture(e);
         }
