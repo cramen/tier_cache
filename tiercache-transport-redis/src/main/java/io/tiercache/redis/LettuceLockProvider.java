@@ -7,9 +7,15 @@ import io.lettuce.core.api.StatefulRedisConnection;
 import io.lettuce.core.api.sync.RedisCommands;
 import io.tiercache.spi.DistributedLock;
 import io.tiercache.spi.DistributedLockProvider;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.UUID;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * {@link DistributedLockProvider} over Redis/Valkey via Lettuce, used for
@@ -21,11 +27,27 @@ import java.util.UUID;
  * Locks live in the {@code tiercache:rebuild:*} keyspace, separate from data
  * entries.
  *
+ * <p><b>Ambiguous acquire compensation.</b> A failed acquire (client-side
+ * timeout, connection error) may still have executed server-side. On a
+ * {@code RuntimeException} from the acquire, the provider schedules a
+ * best-effort compensating release with the same token-checked
+ * compare-and-delete, retried until it either deletes (terminal: one
+ * command executes at most once, and on a surviving connection no
+ * execution can follow the delete) or the compensation window
+ * ({@code max(2 x lease, 30 s)}) expires. A zero delete never stops the
+ * retry — it proves nothing about a later-executing SET. Compensations
+ * are bounded (pending cap per provider, small worker pool); overflow is
+ * dropped with a warning, and the residual case — the SET executing only
+ * after the window or over a dropped connection — leaves an orphan that
+ * self-expires within one lease.
+ *
  * <p><b>Internal — not part of the supported API.</b>
  *
  * @since 0.1.0
  */
-public final class LettuceLockProvider implements DistributedLockProvider {
+public final class LettuceLockProvider implements DistributedLockProvider, AutoCloseable {
+
+    private static final Logger log = LoggerFactory.getLogger(LettuceLockProvider.class);
 
     /**
      * Keyspace prefix for rebuild locks (never collides with data keys).
@@ -44,17 +66,35 @@ public final class LettuceLockProvider implements DistributedLockProvider {
             "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('pexpire', KEYS[1],"
                     + " ARGV[2]) else return 0 end";
 
-    private final RedisCommands<String, String> commands;
+    /** Retry interval for a pending compensation. */
+    static final long COMPENSATION_RETRY_MILLIS = 250;
+    /** Compensation window floor (the lease dominates when longer). */
+    static final Duration COMPENSATION_MIN_WINDOW = Duration.ofSeconds(30);
+    /** Pending compensations per provider; overflow is dropped with a warning. */
+    static final int COMPENSATION_PENDING_CAP = 64;
+    /** Compensation worker threads per provider. */
+    private static final int COMPENSATION_THREADS = 2;
+
+    private final RedisClient client;                // non-null ⇒ connect lazily
+    private final StatefulRedisConnection<String, String> providedConnection;
+    private volatile RedisCommands<String, String> commands;
+    private final AtomicInteger pendingCompensations = new AtomicInteger();
+    private final Object schedulerLock = new Object();
+    private volatile ScheduledExecutorService compensationScheduler;
+    private volatile boolean closed;
 
     /**
      * Creates a provider that opens its own connection from {@code client}.
-     * The caller keeps ownership of the client.
+     * The connection is opened LAZILY on first use, so wiring the provider
+     * never fails on an unreachable server at startup. The caller keeps
+     * ownership of the client.
      *
      * @param client the Redis client to connect through
      * @since 0.1.0
      */
     public LettuceLockProvider(RedisClient client) {
-        this(client.connect());
+        this.client = client;
+        this.providedConnection = null;
     }
 
     /**
@@ -65,15 +105,130 @@ public final class LettuceLockProvider implements DistributedLockProvider {
      * @since 0.1.0
      */
     public LettuceLockProvider(StatefulRedisConnection<String, String> connection) {
-        this.commands = connection.sync();
+        this.client = null;
+        this.providedConnection = connection;
+    }
+
+    private RedisCommands<String, String> commands() {
+        RedisCommands<String, String> resolved = commands;
+        if (resolved == null) {
+            synchronized (schedulerLock) {
+                resolved = commands;
+                if (resolved == null) {
+                    resolved = (providedConnection != null ? providedConnection
+                            : client.connect()).sync();
+                    commands = resolved;
+                }
+            }
+        }
+        return resolved;
     }
 
     @Override
     public DistributedLock tryLock(String name, Duration lease) {
         String token = UUID.randomUUID().toString();
-        String result = commands.set(LOCK_KEYSPACE + name, token,
-                SetArgs.Builder.px(lease).nx());
-        return "OK".equals(result) ? new LettuceLock(LOCK_KEYSPACE + name, token) : null;
+        String key = LOCK_KEYSPACE + name;
+        try {
+            String result = commands().set(key, token, SetArgs.Builder.px(lease).nx());
+            return "OK".equals(result) ? new LettuceLock(key, token) : null;
+        } catch (RuntimeException e) {
+            // Ambiguous outcome: the command may have executed server-side.
+            scheduleCompensation(key, token, lease);
+            throw e;
+        }
+    }
+
+    /**
+     * Schedules a best-effort compensating release for an ambiguous
+     * acquire: retried until DELETE=1 (terminal) or the window expires —
+     * never stopped by a zero delete. Overflow is dropped with a warning;
+     * a task that never gets an attempt within the window expires into the
+     * documented residual (an orphan self-expiring within one lease).
+     */
+    private void scheduleCompensation(String key, String token, Duration lease) {
+        long windowMillis = Math.max(2 * lease.toMillis(), COMPENSATION_MIN_WINDOW.toMillis());
+        long deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(windowMillis);
+        if (pendingCompensations.incrementAndGet() > COMPENSATION_PENDING_CAP) {
+            pendingCompensations.decrementAndGet();
+            log.warn("Too many pending lock compensations; dropping cleanup for '{}'. "
+                    + "If the acquire executed, the orphan expires within its lease.", key);
+            return;
+        }
+        scheduleCompensationAttempt(key, token, deadlineNanos);
+    }
+
+    private void scheduleCompensationAttempt(String key, String token, long deadlineNanos) {
+        compensationScheduler().schedule(() -> attemptCompensation(key, token, deadlineNanos),
+                COMPENSATION_RETRY_MILLIS, TimeUnit.MILLISECONDS);
+    }
+
+    private void attemptCompensation(String key, String token, long deadlineNanos) {
+        if (closed) {
+            pendingCompensations.decrementAndGet();
+            return;
+        }
+        Long deleted = null;
+        try {
+            deleted = commands().eval(RELEASE_SCRIPT, ScriptOutputType.INTEGER,
+                    new String[]{key}, token);
+        } catch (RuntimeException e) {
+            // Server still unreachable: retry within the window.
+        }
+        if (deleted != null && deleted == 1L) {
+            pendingCompensations.decrementAndGet();
+            return; // terminal: our lock existed and was removed
+        }
+        if (System.nanoTime() >= deadlineNanos) {
+            pendingCompensations.decrementAndGet();
+            log.warn("Lock compensation window expired for '{}'. If the acquire executed "
+                    + "afterwards, the orphan expires within its lease.", key);
+            return;
+        }
+        scheduleCompensationAttempt(key, token, deadlineNanos);
+    }
+
+    private ScheduledExecutorService compensationScheduler() {
+        ScheduledExecutorService scheduler = compensationScheduler;
+        if (scheduler == null) {
+            synchronized (schedulerLock) {
+                scheduler = compensationScheduler;
+                if (scheduler == null) {
+                    scheduler = Executors.newScheduledThreadPool(COMPENSATION_THREADS, runnable -> {
+                        Thread thread = new Thread(runnable, "tiercache-lock-compensation");
+                        thread.setDaemon(true);
+                        return thread;
+                    });
+                    compensationScheduler = scheduler;
+                }
+            }
+        }
+        return scheduler;
+    }
+
+    /**
+     * Stops the compensation machinery. Pending compensations are
+     * discarded; the scheduler is shut down. The Redis connection is NOT
+     * closed (the caller keeps its ownership).
+     *
+     * @since 1.4.0
+     */
+    @Override
+    public void close() {
+        closed = true;
+        ScheduledExecutorService scheduler = compensationScheduler;
+        if (scheduler != null) {
+            scheduler.shutdownNow();
+        }
+    }
+
+    /** Pending compensations (test/diagnostics seam). */
+    int pendingCompensations() {
+        return pendingCompensations.get();
+    }
+
+    /** True after {@link #close()} (test/diagnostics seam). */
+    boolean isClosed() {
+        return closed;
     }
 
     private final class LettuceLock implements DistributedLock {
@@ -87,14 +242,14 @@ public final class LettuceLockProvider implements DistributedLockProvider {
 
         @Override
         public boolean extend(Duration lease) {
-            Long extended = commands.eval(EXTEND_SCRIPT, ScriptOutputType.INTEGER,
+            Long extended = commands().eval(EXTEND_SCRIPT, ScriptOutputType.INTEGER,
                     new String[]{fullName}, token, String.valueOf(lease.toMillis()));
             return extended != null && extended == 1L;
         }
 
         @Override
         public void release() {
-            commands.eval(RELEASE_SCRIPT, ScriptOutputType.INTEGER,
+            commands().eval(RELEASE_SCRIPT, ScriptOutputType.INTEGER,
                     new String[]{fullName}, token);
         }
     }

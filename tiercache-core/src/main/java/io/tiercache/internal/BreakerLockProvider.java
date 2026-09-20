@@ -14,7 +14,7 @@ import java.time.Duration;
  *
  * @since 0.1.0
  */
-public final class BreakerLockProvider implements DistributedLockProvider {
+public final class BreakerLockProvider implements DistributedLockProvider, AutoCloseable {
 
     private final DistributedLockProvider delegate;
     private final CircuitBreaker breaker;
@@ -43,6 +43,19 @@ public final class BreakerLockProvider implements DistributedLockProvider {
         } catch (RuntimeException e) {
             breaker.onFailure();
             return null;
+        }
+    }
+
+    /**
+     * Forwards the close to the delegate when it is closeable (lifecycle
+     * transparency for ownership wiring).
+     *
+     * @since 1.4.0
+     */
+    @Override
+    public void close() throws Exception {
+        if (delegate instanceof AutoCloseable closeable) {
+            closeable.close();
         }
     }
 }

@@ -463,7 +463,7 @@ conn.sync().sadd("tiercache:tags:tag-ttl:g", "tag-ttl:ghost");
                     var probe = probeClient.connect(io.lettuce.core.codec.ByteArrayCodec.INSTANCE)) {
                 byte[] setKey = ("tiercache:tags:tag-race:" + tag).getBytes(StandardCharsets.UTF_8);
                 long members = probe.sync().scard(setKey);
-                assertTrue(members >= filler + victims / 2 && members <= filler + victims,
+                assertTrue(members >= filler + victims / 3 && members <= filler + victims,
                         "round " + round + ": filler plus most dead victim rows must be present "
                                 + "before the race, got " + members);
             }

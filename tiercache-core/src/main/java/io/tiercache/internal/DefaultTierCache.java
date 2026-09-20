@@ -114,14 +114,11 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
      * #l1Generation} so a racing stale commit is refused instead of letting
      * the forgotten barrier reopen the race.
      */
-    private record L1Meta(Version highestSeen) {
-    }
-
     private static final int L1_META_MAX = 100_000;
     private static final Duration L1_META_EXPIRY = Duration.ofMinutes(10);
     private static final int L1_STRIPES = 64;
 
-    private final com.github.benmanes.caffeine.cache.Cache<K, L1Meta> l1Metas;
+    private final L1BarrierMap<K> l1Metas;
     private final Object[] l1Locks;
     /** Bumped when protective L1 state is forgotten (barrier eviction, evictAll). */
     private final AtomicLong l1Generation = new AtomicLong();
@@ -286,11 +283,8 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
                     + "executor is wired; stale entries are served but never revalidated.",
                     cacheName);
         }
-        this.l1Metas = com.github.benmanes.caffeine.cache.Caffeine.newBuilder()
-                .maximumSize(L1_META_MAX)
-                .expireAfterWrite(L1_META_EXPIRY)
-                .<K, L1Meta>removalListener((key, value, cause) -> l1Generation.incrementAndGet())
-                .build();
+        this.l1Metas = new L1BarrierMap<>(L1_META_MAX, L1_META_EXPIRY,
+                l1Generation::incrementAndGet);
         this.l1Locks = new Object[L1_STRIPES];
         for (int i = 0; i < L1_STRIPES; i++) {
             l1Locks[i] = new Object();
@@ -545,26 +539,23 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
     public void applyUpdateL1(Object key, Object value, Version eventVersion) {
         K typedKey = (K) key;
         synchronized (l1LockFor(typedKey)) {
-            L1Meta meta = l1Metas.getIfPresent(typedKey);
+            Version highestSeen = l1Metas.get(typedKey);
             // First reject: an UPDATE older than the barrier is stale.
-            if (meta != null && meta.highestSeen() != null
-                    && eventVersion.compareTo(meta.highestSeen()) < 0) {
+            if (highestSeen != null && eventVersion.compareTo(highestSeen) < 0) {
                 return;
             }
             StoredEntry<V> current = l1.get(typedKey);
             if (current != null && current.version() != null
                     && eventVersion.compareTo(current.version()) <= 0) {
                 // No value change (idempotent replay), but the barrier still lifts.
-                l1Metas.put(typedKey, new L1Meta(maxVersion(eventVersion, meta != null
-                        ? meta.highestSeen() : null)));
+                l1Metas.put(typedKey, maxVersion(eventVersion, highestSeen));
                 return;
             }
             // One atomic step: lift the barrier AND install the payload (its
             // own version always passes — equality is not staleness).
             l1.put(typedKey, StoredEntry.ofValue((V) value, eventVersion),
                     jitter.apply(settings.l1ExpireAfterWrite(), settings.jitterAmplitude()));
-            l1Metas.put(typedKey, new L1Meta(maxVersion(eventVersion,
-                    meta != null ? meta.highestSeen() : null)));
+            l1Metas.put(typedKey, maxVersion(eventVersion, highestSeen));
         }
     }
 
@@ -600,15 +591,14 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
             if (generationAtStart != l1Generation.get()) {
                 return false;
             }
-            L1Meta meta = l1Metas.getIfPresent(key);
-            if (entry.version() != null && meta != null && meta.highestSeen() != null
-                    && entry.version().compareTo(meta.highestSeen()) < 0) {
+            Version highestSeen = l1Metas.get(key);
+            if (entry.version() != null && highestSeen != null
+                    && entry.version().compareTo(highestSeen) < 0) {
                 return false;
             }
             l1.put(key, entry, ttl);
             if (entry.version() != null) {
-                l1Metas.put(key, new L1Meta(maxVersion(entry.version(),
-                        meta != null ? meta.highestSeen() : null)));
+                l1Metas.put(key, maxVersion(entry.version(), highestSeen));
             }
             return true;
         }
@@ -622,15 +612,14 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
      */
     private void applyInvalidateL1(K key, Version eventVersion) {
         synchronized (l1LockFor(key)) {
-            L1Meta meta = l1Metas.getIfPresent(key);
+            Version highestSeen = l1Metas.get(key);
             StoredEntry<V> entry = l1.get(key);
             if (entry != null && (entry.version() == null
                     || eventVersion.compareTo(entry.version()) > 0)) {
                 l1.evict(key);
             }
             if (eventVersion != null) {
-                l1Metas.put(key, new L1Meta(maxVersion(eventVersion,
-                        meta != null ? meta.highestSeen() : null)));
+                l1Metas.put(key, maxVersion(eventVersion, highestSeen));
             }
         }
     }

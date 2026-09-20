@@ -93,6 +93,16 @@ public class TiercacheAutoConfiguration {
                 properties.getInvalidation().getJournalCapacity(), new JdkCacheSerializer<>());
     }
 
+    /**
+     * The rebuild-lock provider as a managed bean: its compensation
+     * scheduler is shut down by the context's destroy callback.
+     */
+    @Bean(destroyMethod = "close")
+    @ConditionalOnBean(RedisClient.class)
+    LettuceLockProvider tiercacheLockProvider(RedisClient tiercacheRedisClient) {
+        return new LettuceLockProvider(tiercacheRedisClient);
+    }
+
     @Bean
     @ConditionalOnBean(RedisClient.class)
     @ConditionalOnProperty(name = "tiercache.invalidation.enabled",
@@ -123,7 +133,8 @@ public class TiercacheAutoConfiguration {
             ObjectProvider<RedisClient> redisClient,
             ObjectProvider<RedisStreamJournal> journal,
             ObjectProvider<Function<VersionGenerator, InvalidationHandler>> invalidation,
-            ObjectProvider<io.tiercache.spi.CacheMetricsListener> metrics) {
+            ObjectProvider<io.tiercache.spi.CacheMetricsListener> metrics,
+            ObjectProvider<LettuceLockProvider> lockProvider) {
         TierCacheFactory.Builder builder = TierCacheFactory.builder()
                 .defaults(properties.getDefaults().toSettings(io.tiercache.CacheSettings.defaults()));
         properties.getCaches().forEach((name, props) -> builder.cache(name, props.toOverride()));
@@ -141,8 +152,9 @@ public class TiercacheAutoConfiguration {
             builder.remoteCacheFactory(name -> perCacheRemoteCache(properties, client, sharedJournal, name))
                     // LockProviderSource auto-derivation does not apply to the
                     // factory form: the rebuild-lock provider must be explicit
-                    // or coordination silently degrades to per-instance.
-                    .lockProvider(new LettuceLockProvider(client));
+                    // or coordination silently degrades to per-instance. The
+                    // managed bean owns its lifecycle (destroy callback).
+                    .lockProvider(lockProvider.getObject());
         }
         Function<VersionGenerator, InvalidationHandler> handlerFactory = invalidation.getIfAvailable();
         if (handlerFactory != null) {

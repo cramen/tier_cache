@@ -57,6 +57,8 @@ public final class TierCacheFactory implements AutoCloseable {
     private final boolean singleflightEnabled;
     private final boolean coordinationEnabled;
     private final DistributedLockProvider lockProvider;
+    /** True when the provider was derived from the library-managed L2 (closed on close). */
+    private final boolean ownsLockProvider;
     private final ScheduledExecutorService watchdog;
     private final VersionGenerator versionGenerator;
     private final InvalidationHandler invalidation; // null = single-node
@@ -93,9 +95,12 @@ public final class TierCacheFactory implements AutoCloseable {
         caches.forEach(CacheConfigValidator::validate);
 
         DistributedLockProvider provider = builder.lockProvider;
+        boolean ownsLockProvider = false;
         if (provider == null && coordinationEnabled
                 && rawRemoteCache instanceof LockProviderSource source) {
             provider = source.lockProvider();
+            // Derived from the library-managed L2: owned here, closed on close().
+            ownsLockProvider = true;
         }
 
         if (!coordinationEnabled) {
@@ -180,6 +185,7 @@ public final class TierCacheFactory implements AutoCloseable {
         }
         this.remoteCache = rawRemoteCache;
         this.lockProvider = provider;
+        this.ownsLockProvider = ownsLockProvider;
     }
 
     /**
@@ -338,6 +344,13 @@ public final class TierCacheFactory implements AutoCloseable {
         asyncExecutor.shutdownNow();
         if (watchdog != null) {
             watchdog.shutdownNow();
+        }
+        if (ownsLockProvider && lockProvider instanceof AutoCloseable closeable) {
+            try {
+                closeable.close();
+            } catch (Exception e) {
+                log.warn("Failed to close the derived rebuild-lock provider", e);
+            }
         }
         if (invalidation != null) {
             invalidation.close();
