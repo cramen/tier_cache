@@ -45,6 +45,10 @@ public final class InvalidationService implements InvalidationHandler {
     private final Map<String, InvalidationTarget> targets = new ConcurrentHashMap<>();
     private final Map<String, AutoCloseable> subscriptions = new ConcurrentHashMap<>();
     private final Map<String, String> cursors = new ConcurrentHashMap<>();
+    private final Map<String, Long> deliveriesSinceCursorRefresh = new ConcurrentHashMap<>();
+
+    /** Live deliveries between journal-cursor refreshes (bounded-cadence tracking). */
+    private static final long CURSOR_REFRESH_EVERY = 64L;
     private final CacheMetricsListener metrics;
     private volatile InvalidationEventListener eventListener = InvalidationEventListener.NOOP;
 
@@ -142,6 +146,31 @@ public final class InvalidationService implements InvalidationHandler {
             eventListener.onEvent(message.cache(), message);
         } finally {
             metrics.onInvalidationEnd(message.cache(), span);
+        }
+        advanceCursorCadenced(message.cache());
+    }
+
+    /**
+     * Advances the replay cursor as live events are consumed, on a bounded
+     * cadence (not per message — that would cost a Redis round trip per
+     * event). Without this the cursor goes stale in normal operation and
+     * the next reconnect misreads the journal as trimmed, forcing a full
+     * L1 flush with nothing actually lost. A refresh failure only widens a
+     * later replay; it never causes a wrong flush.
+     */
+    private void advanceCursorCadenced(String cache) {
+        if (journal == null) {
+            return;
+        }
+        long deliveries = deliveriesSinceCursorRefresh.merge(cache, 1L, Long::sum);
+        if (deliveries % CURSOR_REFRESH_EVERY != 0) {
+            return;
+        }
+        try {
+            cursors.put(cache, journal.endCursor(cache));
+        } catch (RuntimeException e) {
+            log.debug("Cursor refresh failed for cache '{}'; a later replay may widen.",
+                    cache, e);
         }
     }
 

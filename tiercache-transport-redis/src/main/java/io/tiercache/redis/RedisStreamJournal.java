@@ -172,6 +172,18 @@ public final class RedisStreamJournal implements InvalidationJournal {
 
     @Override
     public boolean isTrimmed(String cache, String cursor) {
+        if ("0-0".equals(cursor)) {
+            // From-the-beginning cursor (recorded only against an empty
+            // stream): a loss happened only if rows were trimmed since.
+            // Redis offers no exact trim counter here, so the guard is
+            // "the stream outgrew the window": a small journal after a few
+            // writes (the reviewer's case) is NOT a loss, while a stream
+            // that had to be trimmed past capacity is. Documented heuristic
+            // — the failure mode in the narrow slack edge is one bounded
+            // flush, and replay itself is always idempotent.
+            Long length = commands.xlen(streamKey(cache));
+            return length != null && length > capacity;
+        }
         List<StreamMessage<byte[], byte[]>> first = commands.xrange(streamKey(cache),
                 Range.unbounded(), Limit.from(1));
         if (first.isEmpty()) {

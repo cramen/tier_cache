@@ -143,13 +143,15 @@ class RedisStreamJournalTest {
         RedisStreamJournal journal = new RedisStreamJournal(client.connect(ByteArrayCodec.INSTANCE), 3,
                 new JdkCacheSerializer<>());
         UUID origin = UUID.randomUUID();
-        for (int i = 1; i <= 6; i++) {
+        // Approximate MAXLEN trims lazily, so drive the stream far past the
+        // window: 200 appends to a capacity-3 journal guarantee real trims.
+        for (int i = 1; i <= 200; i++) {
             journal.append("trimmed", new InvalidationMessage("trimmed", "k" + i,
                     new Version(i, origin), origin, InvalidationMessage.Type.INVALIDATE));
         }
         String firstRemaining = journal.endCursor("trimmed");
         org.junit.jupiter.api.Assertions.assertFalse(journal.isTrimmed("trimmed", firstRemaining));
-        // Cursor from before the window
+        // Cursor from before the window: rows it missed were genuinely trimmed.
         assertTrue(journal.isTrimmed("trimmed", "0-0"));
     }
 
