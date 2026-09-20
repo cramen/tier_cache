@@ -67,6 +67,16 @@ public final class TierCacheFactory implements AutoCloseable {
     private final java.util.concurrent.ExecutorService asyncExecutor;
     private final Map<String, TierCache<?, ?>> liveCaches = new java.util.concurrent.ConcurrentHashMap<>();
     private final Map<String, AsyncTierCache<?, ?>> liveAsyncCaches = new java.util.concurrent.ConcurrentHashMap<>();
+    /**
+     * Single ordering point for async-view publication and the factory's
+     * CLOSED transition: {@link #asyncCache(String)} performs its closed
+     * check, creation and memoization inside it, and {@link #close()}
+     * sets {@link #closed} and snapshots the live views under the same
+     * lock — so a view is never published after the drain snapshot.
+     */
+    private final Object factoryLifecycleLock = new Object();
+    /** Set under {@link #factoryLifecycleLock} by {@link #close()}. */
+    private boolean closed;
 
     private TierCacheFactory(Builder builder) {
         this.defaults = builder.defaults;
@@ -222,19 +232,26 @@ public final class TierCacheFactory implements AutoCloseable {
      * saturation, submissions fail their returned {@code CompletionStage}
      * with {@link java.util.concurrent.RejectedExecutionException} rather
      * than growing threads without bound. Closing the factory shuts the
-     * executor down; async operations submitted afterwards are likewise
-     * rejected.
+     * executor down; creating a view after the close began is rejected
+     * with {@link IllegalStateException}, and async operations submitted
+     * afterwards fail their stage.
      *
      * @param <K>  key type
      * @param <V>  value type
      * @param name the cache name
      * @return the async view of the cache for {@code name}; never {@code null}
+     * @throws IllegalStateException if the factory is closed
      * @since 0.3.0
      */
     @SuppressWarnings("unchecked")
     public <K, V> AsyncTierCache<K, V> asyncCache(String name) {
-        return (AsyncTierCache<K, V>) liveAsyncCaches.computeIfAbsent(name,
-                n -> new DefaultAsyncTierCache<>(getCache(n), asyncExecutor));
+        synchronized (factoryLifecycleLock) {
+            if (closed) {
+                throw new IllegalStateException("TierCacheFactory is closed");
+            }
+            return (AsyncTierCache<K, V>) liveAsyncCaches.computeIfAbsent(name,
+                    n -> new DefaultAsyncTierCache<>(getCache(n), asyncExecutor));
+        }
     }
 
     /**
@@ -298,7 +315,14 @@ public final class TierCacheFactory implements AutoCloseable {
      */
     @Override
     public void close() {
-        liveAsyncCaches.values().forEach(view ->
+        java.util.List<AsyncTierCache<?, ?>> views;
+        synchronized (factoryLifecycleLock) {
+            closed = true;
+            views = new java.util.ArrayList<>(liveAsyncCaches.values());
+        }
+        // Draining happens outside the lock: completing stages may run
+        // user callbacks.
+        views.forEach(view ->
                 ((io.tiercache.internal.DefaultAsyncTierCache<?, ?>) view).closeOutstanding());
         revalidationExecutor.shutdownNow();
         asyncExecutor.shutdownNow();

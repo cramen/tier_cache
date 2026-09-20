@@ -18,7 +18,6 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -147,12 +146,12 @@ class AsyncTierCacheTest {
                 "executor workers must stop with factory close");
 
         // Rejection surfaces as a failed stage, never a synchronous throw
-        // on the calling thread and never a task run on it.
+        // on the calling thread and never a task run on it. After the
+        // CLOSED transition the view rejects submissions as cancelled
+        // stages (the lifecycle-lock protocol), not via the executor.
         CompletableFuture<String> rejected = async.getAsync("k").toCompletableFuture();
-        ExecutionException execution = assertThrows(ExecutionException.class, rejected::get,
+        assertThrows(java.util.concurrent.CancellationException.class, rejected::get,
                 "submissions after close are rejected, never run on the calling thread");
-        assertTrue(execution.getCause() instanceof RejectedExecutionException,
-                "rejection cause must be RejectedExecutionException, got " + execution.getCause());
     }
 
     // --- Scenario: concurrent async misses coalesce ---

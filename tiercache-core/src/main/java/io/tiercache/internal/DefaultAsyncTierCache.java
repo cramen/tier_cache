@@ -28,9 +28,20 @@ public final class DefaultAsyncTierCache<K, V> implements AsyncTierCache<K, V> {
 
     private final TierCache<K, V> delegate;
     private final Executor executor;
+    /**
+     * Single ordering point for the submission path and {@link
+     * #closeOutstanding()}: the closed check, registry insertion and task
+     * submission happen inside it, so a close landing anywhere in the
+     * submit path either rejects the submission or drains the registered
+     * stage — a stage is never abandoned. Stages are completed outside
+     * this lock because their callbacks may run user code.
+     */
+    private final Object lifecycleLock = new Object();
     /** Stages handed to callers and not yet completed; drained on factory close. */
     private final java.util.Set<CompletableFuture<?>> outstanding =
             java.util.concurrent.ConcurrentHashMap.newKeySet();
+    /** Set under {@link #lifecycleLock} by {@link #closeOutstanding()}. */
+    private boolean closed;
 
     /**
      * Creates the async view over a synchronous cache.
@@ -51,21 +62,25 @@ public final class DefaultAsyncTierCache<K, V> implements AsyncTierCache<K, V> {
      * hang on a factory close. Called by the owning factory during
      * {@code close()}; already-completed stages are unaffected.
      *
+     * <p>The closed transition and the registry snapshot happen under
+     * {@link #lifecycleLock} — after it, no new stage can register, so the
+     * snapshot is complete. Stages are failed outside the lock because
+     * their callbacks may run user code.
+     *
      * <p>Internal lifecycle hook — not for application use.
      */
     public void closeOutstanding() {
-        for (CompletableFuture<?> future : outstanding) {
-            future.completeExceptionally(new java.util.concurrent.CancellationException(
-                    "TierCacheFactory closed"));
+        java.util.List<CompletableFuture<?>> drain;
+        synchronized (lifecycleLock) {
+            closed = true;
+            drain = new java.util.ArrayList<>(outstanding);
+            outstanding.clear();
         }
-        outstanding.clear();
-    }
-
-    /** Registers a produced stage until it completes (no retention after). */
-    private <T> CompletableFuture<T> track(CompletableFuture<T> future) {
-        outstanding.add(future);
-        future.whenComplete((value, error) -> outstanding.remove(future));
-        return future;
+        java.util.concurrent.CancellationException cancellation =
+                new java.util.concurrent.CancellationException("TierCacheFactory closed");
+        // A stage completed between the snapshot and this loop is
+        // unaffected: completeExceptionally is a no-op on it.
+        drain.forEach(future -> future.completeExceptionally(cancellation));
     }
 
     @Override
@@ -134,13 +149,37 @@ public final class DefaultAsyncTierCache<K, V> implements AsyncTierCache<K, V> {
      * Offloads a value-producing task to the shared executor. A saturated
      * executor surfaces as a failed stage ({@link
      * java.util.concurrent.RejectedExecutionException}) instead of a
-     * synchronous throw on the caller's thread.
+     * synchronous throw on the caller's thread; a submission after close
+     * surfaces as a stage failed with
+     * {@link java.util.concurrent.CancellationException}.
+     *
+     * <p>The closed check, registry insertion and the executor hand-off
+     * are one atomic step under {@link #lifecycleLock}, so a close landing
+     * anywhere in this path either rejects the submission here or completes
+     * the registered stage in its drain — never neither.
      */
     private <T> CompletionStage<T> supply(java.util.function.Supplier<T> task) {
-        try {
-            return track(CompletableFuture.supplyAsync(task, executor));
-        } catch (java.util.concurrent.RejectedExecutionException e) {
-            return CompletableFuture.failedFuture(e);
+        synchronized (lifecycleLock) {
+            if (closed) {
+                return CompletableFuture.failedFuture(
+                        new java.util.concurrent.CancellationException("TierCacheFactory closed"));
+            }
+            CompletableFuture<T> future = new CompletableFuture<>();
+            outstanding.add(future);
+            future.whenComplete((value, error) -> outstanding.remove(future));
+            try {
+                executor.execute(() -> {
+                    try {
+                        future.complete(task.get());
+                    } catch (Throwable t) {
+                        future.completeExceptionally(t);
+                    }
+                });
+            } catch (java.util.concurrent.RejectedExecutionException e) {
+                outstanding.remove(future);
+                return CompletableFuture.failedFuture(e);
+            }
+            return future;
         }
     }
 
@@ -149,11 +188,10 @@ public final class DefaultAsyncTierCache<K, V> implements AsyncTierCache<K, V> {
      * match {@link #supply(java.util.function.Supplier)}.
      */
     private CompletionStage<Void> run(Runnable task) {
-        try {
-            return track(CompletableFuture.runAsync(task, executor));
-        } catch (java.util.concurrent.RejectedExecutionException e) {
-            return CompletableFuture.failedFuture(e);
-        }
+        return supply(() -> {
+            task.run();
+            return null;
+        });
     }
 
     /**
