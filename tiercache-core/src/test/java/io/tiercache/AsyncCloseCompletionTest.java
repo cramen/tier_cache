@@ -124,15 +124,18 @@ class AsyncCloseCompletionTest {
         java.util.concurrent.atomic.AtomicReference<CompletableFuture<String>> stage =
                 new java.util.concurrent.atomic.AtomicReference<>();
         Thread submitter = new Thread(() -> stage.set(view.getAsync("k").toCompletableFuture()));
-        submitter.start();
-        assertTrue(executeEntered.await(5, TimeUnit.SECONDS),
-                "the submission must reach the executor hand-off");
-
         Thread closer = new Thread(view::closeOutstanding);
-        closer.start();
-        awaitThreadState(closer, Thread.State.BLOCKED,
-                "close must wait for the submission's lifecycle lock");
-        releaseExecute.countDown();
+        try {
+            submitter.start();
+            assertTrue(executeEntered.await(5, TimeUnit.SECONDS),
+                    "the submission must reach the executor hand-off");
+
+            closer.start();
+            awaitThreadState(closer, Thread.State.BLOCKED,
+                    "close must wait for the submission's lifecycle lock");
+        } finally {
+            releaseExecute.countDown(); // never leave the gated hand-off parked
+        }
         submitter.join(5_000);
         closer.join(5_000);
 
@@ -182,6 +185,7 @@ class AsyncCloseCompletionTest {
                     () -> stage.get(5, TimeUnit.SECONDS),
                     "a view published before the close snapshot must be drained by that close");
         } finally {
+            releaseCreation.countDown(); // never leave a parked creator behind
             TierCacheFactory.viewCreationProbe = () -> {
             };
             factory.close();

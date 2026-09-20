@@ -18,6 +18,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -297,23 +298,27 @@ conn.sync().sadd("tiercache:tags:tag-ttl:g", "tag-ttl:ghost");
         Duration ttl = Duration.ofMillis(500);
         java.util.concurrent.atomic.AtomicBoolean stop = new java.util.concurrent.atomic.AtomicBoolean();
         AtomicInteger writes = new AtomicInteger();
+        java.util.concurrent.atomic.AtomicReference<Throwable> writerError =
+                new java.util.concurrent.atomic.AtomicReference<>();
         Thread writer = new Thread(() -> {
-            while (!stop.get()) {
-                int i = writes.incrementAndGet();
-                cache.putTagged("k" + i, io.tiercache.spi.StoredEntry.ofValue("v"), ttl,
-                        new String[]{"hot"});
-                try {
+            try {
+                while (!stop.get()) {
+                    int i = writes.incrementAndGet();
+                    cache.putTagged("k" + i, io.tiercache.spi.StoredEntry.ofValue("v"), ttl,
+                            new String[]{"hot"});
                     Thread.sleep(4);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    return;
                 }
+            } catch (Throwable t) {
+                writerError.set(t); // a dead writer must not go unnoticed
             }
         });
         writer.start();
         try {
             // > 3 TTL periods of uninterrupted load before measuring.
             Thread.sleep(1_600);
+            if (writerError.get() != null) {
+                throw new AssertionError("writer died before the measurement", writerError.get());
+            }
             try (io.lettuce.core.RedisClient probeClient = io.lettuce.core.RedisClient.create(redisUri);
                     var probe = probeClient.connect(io.lettuce.core.codec.ByteArrayCodec.INSTANCE)) {
                 // One atomic measurement: size and live count from the same
@@ -325,9 +330,20 @@ conn.sync().sadd("tiercache:tags:tag-ttl:g", "tag-ttl:ghost");
                                 + "if redis.call('exists', m) == 1 then live = live + 1 end "
                                 + "end "
                                 + "return {#members, live}";
+                int writesBefore = writes.get();
                 java.util.List<Object> result = probe.sync().eval(measure,
                         io.lettuce.core.ScriptOutputType.MULTI,
                         new byte[][]{"tiercache:tags:tag-hot:hot".getBytes(StandardCharsets.UTF_8)});
+                // The eval itself is milliseconds — too short to guarantee a
+                // write inside it. Prove liveness instead: the counter must
+                // advance right after the measurement, within a bounded wait.
+                long livenessDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
+                while (writes.get() <= writesBefore && System.nanoTime() < livenessDeadline) {
+                    Thread.sleep(10);
+                }
+                assertTrue(writes.get() > writesBefore,
+                        "the writer must still be writing around the measurement (stuck at "
+                                + writesBefore + " for over a second)");
                 long size = (Long) result.get(0);
                 long live = (Long) result.get(1);
                 long bound = live + 2 * live / 7 + 32;
@@ -342,6 +358,9 @@ conn.sync().sadd("tiercache:tags:tag-ttl:g", "tag-ttl:ghost");
             stop.set(true);
             writer.join(10_000);
             cache.close();
+        }
+        if (writerError.get() != null) {
+            throw new AssertionError("writer died during the test", writerError.get());
         }
     }
 
@@ -429,6 +448,24 @@ conn.sync().sadd("tiercache:tags:tag-ttl:g", "tag-ttl:ghost");
                 for (int f = 0; f < filler; f++) {
                     probe.sync().sadd(setKey, ("f" + round + "-" + f).getBytes(StandardCharsets.UTF_8));
                 }
+            }
+
+            // Pin the dangerous pre-state explicitly (a setup regression
+            // must fail loudly, not turn the test vacuous): every victim's
+            // data is gone AND the dead membership rows survived. The
+            // janitor legitimately prunes some expired victims already
+            // during setup, so the victim count is a floor, not an exact.
+            for (int v = 0; v < victims; v++) {
+                assertNull(cache.get("v" + round + "-" + v),
+                        "round " + round + ": victim data must be expired before the race");
+            }
+            try (io.lettuce.core.RedisClient probeClient = io.lettuce.core.RedisClient.create(redisUri);
+                    var probe = probeClient.connect(io.lettuce.core.codec.ByteArrayCodec.INSTANCE)) {
+                byte[] setKey = ("tiercache:tags:tag-race:" + tag).getBytes(StandardCharsets.UTF_8);
+                long members = probe.sync().scard(setKey);
+                assertTrue(members >= filler + victims / 2 && members <= filler + victims,
+                        "round " + round + ": filler plus most dead victim rows must be present "
+                                + "before the race, got " + members);
             }
 
             CountDownLatch go = new CountDownLatch(1);
