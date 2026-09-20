@@ -698,4 +698,130 @@ class InvalidationServiceTest {
         assertEquals(1, metrics.count(Direction.DROPPED));
         b.close();
     }
+
+    /**
+     * Flush baseline ordering (reviewer-reported): a row journaled between
+     * the L1 clear and the baseline establishment must stay ahead of the
+     * cursor and be replayed — it is NOT covered by the clear, so it must
+     * not be auto-accounted. The interleaving target performs the
+     * concurrent activity inside the clear.
+     */
+    @Test
+    void writeBetweenClearAndBaselineIsReplayed() {
+        var hub = new InMemoryInvalidationTransport.Hub();
+        var journal = new InMemoryJournal(2); // tiny window: forces the flush path
+        UUID idA = UUID.randomUUID();
+        UUID idB = UUID.randomUUID();
+        ServiceSide a = side(idA, hub, journal, cache -> {
+        });
+        ServiceSide b = side(idB, hub, journal, cache -> {
+        });
+        FakeTarget targetB = new FakeTarget() {
+            @Override
+            public void evictAllL1() {
+                super.evictAllL1();
+                // Concurrent activity between the clear and the (former)
+                // baseline read: L1 re-warms with the old value, then a new
+                // invalidation is journaled whose live notification is lost.
+                entries.put("k", new Version(1, idA));
+                journal.append("c", new InvalidationMessage("c", "k", new Version(9, idA), idA,
+                        InvalidationMessage.Type.INVALIDATE));
+            }
+        };
+        targetB.entries.put("k", new Version(1, idA));
+        for (int i = 1; i <= 3; i++) {
+            journal.append("c", new InvalidationMessage("c", "x" + i, new Version(i, idA), idA,
+                    InvalidationMessage.Type.INVALIDATE));
+        }
+        b.service().registerTarget("c", targetB); // cursor baselines at row 3
+
+        b.transport().disconnect();
+        for (int i = 4; i <= 6; i++) { // trims the cursor row: the flush path
+            journal.append("c", new InvalidationMessage("c", "x" + i, new Version(i, idA), idA,
+                    InvalidationMessage.Type.INVALIDATE));
+        }
+        b.transport().reconnect();
+        assertEquals(1, targetB.flushCount.get(), "trimmed cursor: the flush fired");
+        assertEquals(new Version(1, idA), targetB.entries.get("k"),
+                "the stale re-warm is in place after the clear");
+
+        b.transport().disconnect();
+        b.transport().reconnect();
+        assertNull(targetB.entries.get("k"),
+                "the row journaled during the flush must be replayed, not baselined away");
+        a.service().close();
+        b.service().close();
+    }
+
+    /**
+     * A failed baseline read must not move the cursor: the previous
+     * confirmed position is kept (never advance past unread rows) while
+     * the flush still proceeds.
+     */
+    @Test
+    void failedBaselineReadKeepsTheConfirmedCursor() {
+        var hub = new InMemoryInvalidationTransport.Hub();
+        InMemoryJournal delegate = new InMemoryJournal(2);
+        java.util.concurrent.atomic.AtomicBoolean failBaseline = new java.util.concurrent.atomic.AtomicBoolean();
+        List<String> checkedReadCursors = new CopyOnWriteArrayList<>();
+        InvalidationJournal journal = new InvalidationJournal() {
+            @Override
+            public String append(String cache, InvalidationMessage message) {
+                return delegate.append(cache, message);
+            }
+
+            @Override
+            public List<io.tiercache.spi.JournalRow> readRange(String cache, String cursorExclusive) {
+                return delegate.readRange(cache, cursorExclusive);
+            }
+
+            @Override
+            public io.tiercache.spi.CheckedRange checkedRead(String cache, String cursor, int maxRows) {
+                checkedReadCursors.add(cursor);
+                return delegate.checkedRead(cache, cursor, maxRows);
+            }
+
+            @Override
+            public String endCursor(String cache) {
+                if (failBaseline.getAndSet(false)) {
+                    throw new RuntimeException("baseline read failed");
+                }
+                return delegate.endCursor(cache);
+            }
+
+            @Override
+            public boolean isTrimmed(String cache, String cursor) {
+                return delegate.isTrimmed(cache, cursor);
+            }
+        };
+        UUID idA = UUID.randomUUID();
+        UUID idB = UUID.randomUUID();
+        InMemoryInvalidationTransport transportB = new InMemoryInvalidationTransport(hub);
+        InvalidationService b = new InvalidationService(transportB, journal, idB, cache -> {
+        });
+        FakeTarget targetB = new FakeTarget();
+        targetB.entries.put("k", new Version(1, idA));
+        for (int i = 1; i <= 3; i++) {
+            journal.append("c", new InvalidationMessage("c", "x" + i, new Version(i, idA), idA,
+                    InvalidationMessage.Type.INVALIDATE));
+        }
+        b.registerTarget("c", targetB); // cursor = row 3
+
+        transportB.disconnect();
+        for (int i = 4; i <= 6; i++) { // trims the cursor row
+            journal.append("c", new InvalidationMessage("c", "x" + i, new Version(i, idA), idA,
+                    InvalidationMessage.Type.INVALIDATE));
+        }
+        failBaseline.set(true); // the flush's baseline read will fail once
+        transportB.reconnect();
+        assertEquals(1, targetB.flushCount.get());
+
+        transportB.disconnect();
+        transportB.reconnect();
+        assertEquals(2, targetB.flushCount.get(),
+                "the kept cursor is still trimmed: the flush path repeats honestly");
+        assertEquals("3", checkedReadCursors.get(checkedReadCursors.size() - 1),
+                "the cursor must keep the previous confirmed position after a failed baseline read");
+        b.close();
+    }
 }

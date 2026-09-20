@@ -227,7 +227,7 @@ public final class InvalidationService implements InvalidationHandler {
         }
         if (!range.startIntact()) {
             flushL1(cache, target,
-                    "the replay cursor row was trimmed; prefix integrity is unconfirmable");
+                    "the replay cursor row was trimmed; prefix integrity is unconfirmable", null);
             return;
         }
         Set<Version> window = appliedWindows.get(cache);
@@ -266,7 +266,7 @@ public final class InvalidationService implements InvalidationHandler {
             }
             if (!range.startIntact()) {
                 flushL1(cache, target,
-                        "the replay cursor row was trimmed; prefix integrity is unconfirmable");
+                        "the replay cursor row was trimmed; prefix integrity is unconfirmable", null);
                 return;
             }
             List<JournalRow> rows = rowsAfterCursor(range, cursor);
@@ -316,7 +316,7 @@ public final class InvalidationService implements InvalidationHandler {
                         CheckedRange range = journal.checkedRead(cache, cursor, READ_BATCH);
                         if (!range.startIntact()) {
                             flushL1(cache, target,
-                                    "the journal window was exceeded during the disconnect");
+                                    "the journal window was exceeded during the disconnect", null);
                             return;
                         }
                         List<JournalRow> rows = rowsAfterCursor(range, cursor);
@@ -353,33 +353,41 @@ public final class InvalidationService implements InvalidationHandler {
 
     /**
      * The flush path: L1 is dropped for the cache, the flush is signaled
-     * (log + listener + dropped metric), and the cursor re-baselines at the
-     * journal's current end.
+     * (log + listener + dropped metric), and the cursor re-baselines.
+     *
+     * <p>Order matters: the baseline is captured BEFORE L1 is cleared —
+     * rows journaled up to it are covered by the clear (a re-warm reads
+     * current L2, which includes them), while rows journaled after the
+     * clear stay ahead of the stored cursor and are applied by the next
+     * replay or catch-up. If the baseline read fails, the previous
+     * confirmed cursor is kept (never advance past unread rows). Observers
+     * (log, listener, metrics) fire last, after the state is settled, so an
+     * observer failure cannot cancel the clear.
      */
-    private void flushL1(String cache, InvalidationTarget target, String reason) {
-        log.warn("Invalidation journal cannot confirm contiguous history for cache '{}' "
-                + "({}); flushing L1 entirely.", cache, reason);
+    private void flushL1(String cache, InvalidationTarget target, String reason, Throwable cause) {
+        String baseline;
+        try {
+            baseline = journal.endCursor(cache);
+        } catch (RuntimeException e) {
+            baseline = cursors.get(cache);
+            log.warn("Journal baseline read failed for cache '{}'; keeping the previous "
+                    + "confirmed cursor for the flush.", cache, e);
+        }
         target.evictAllL1();
-        listener.onJournalOverflow(cache);
-        metrics.onInvalidation(cache, CacheMetricsListener.Direction.DROPPED);
-        cursors.put(cache, journal.endCursor(cache));
+        cursors.put(cache, baseline);
         Set<Version> window = appliedWindows.get(cache);
         if (window != null) {
             window.clear();
         }
-    }
-
-    private void flushL1(String cache, InvalidationTarget target, String reason, Exception e) {
-        log.warn("Invalidation journal cannot confirm contiguous history for cache '{}' "
-                + "({}); flushing L1 entirely.", cache, reason, e);
-        target.evictAllL1();
+        if (cause == null) {
+            log.warn("Invalidation journal cannot confirm contiguous history for cache '{}' "
+                    + "({}); flushing L1 entirely.", cache, reason);
+        } else {
+            log.warn("Invalidation journal cannot confirm contiguous history for cache '{}' "
+                    + "({}); flushing L1 entirely.", cache, reason, cause);
+        }
         listener.onJournalOverflow(cache);
         metrics.onInvalidation(cache, CacheMetricsListener.Direction.DROPPED);
-        cursors.put(cache, journal.endCursor(cache));
-        Set<Version> window = appliedWindows.get(cache);
-        if (window != null) {
-            window.clear();
-        }
     }
 
     /**
