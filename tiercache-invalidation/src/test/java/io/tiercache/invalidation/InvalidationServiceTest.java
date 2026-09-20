@@ -9,14 +9,17 @@ import io.tiercache.testkit.InMemoryInvalidationTransport;
 import io.tiercache.testkit.InMemoryJournal;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -61,6 +64,11 @@ class InvalidationServiceTest {
 
     private static ServiceSide side(UUID origin, InMemoryInvalidationTransport.Hub hub,
             InMemoryJournal journal, io.tiercache.spi.InvalidationListener listener) {
+        return side(origin, hub, (InvalidationJournal) journal, listener);
+    }
+
+    private static ServiceSide side(UUID origin, InMemoryInvalidationTransport.Hub hub,
+            InvalidationJournal journal, io.tiercache.spi.InvalidationListener listener) {
         InMemoryInvalidationTransport transport = new InMemoryInvalidationTransport(hub);
         return new ServiceSide(new InvalidationService(transport, journal, origin, listener),
                 transport);
@@ -823,5 +831,241 @@ class InvalidationServiceTest {
         assertEquals("3", checkedReadCursors.get(checkedReadCursors.size() - 1),
                 "the cursor must keep the previous confirmed position after a failed baseline read");
         b.close();
+    }
+
+    // --- Applied-window hard bound (reviewer-reported: unbounded retention) ---
+
+    /** Nominal window trigger in the service (mirrored for assertions). */
+    private static final int APPLIED_WINDOW_NOMINAL = 128;
+
+    /** Journal double: delegates, optionally fails checked reads, counts them. */
+    private static final class StubJournal implements InvalidationJournal {
+        final InMemoryJournal delegate;
+        final java.util.concurrent.atomic.AtomicBoolean failReads =
+                new java.util.concurrent.atomic.AtomicBoolean();
+        final AtomicInteger readCalls = new AtomicInteger();
+
+        StubJournal(InMemoryJournal delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public String append(String cache, InvalidationMessage message) {
+            return delegate.append(cache, message);
+        }
+
+        @Override
+        public List<io.tiercache.spi.JournalRow> readRange(String cache, String cursorExclusive) {
+            return delegate.readRange(cache, cursorExclusive);
+        }
+
+        @Override
+        public io.tiercache.spi.CheckedRange checkedRead(String cache, String cursor, int maxRows) {
+            readCalls.incrementAndGet();
+            if (failReads.get()) {
+                throw new RuntimeException("reads down");
+            }
+            return delegate.checkedRead(cache, cursor, maxRows);
+        }
+
+        @Override
+        public String endCursor(String cache) {
+            return delegate.endCursor(cache);
+        }
+
+        @Override
+        public boolean isTrimmed(String cache, String cursor) {
+            return delegate.isTrimmed(cache, cursor);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static int windowSize(InvalidationService service, String cache) {
+        try {
+            var field = InvalidationService.class.getDeclaredField("appliedWindows");
+            field.setAccessible(true);
+            Set<Version> window = ((Map<String, Set<Version>>) field.get(service)).get(cache);
+            return window == null ? 0 : window.size();
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError(e);
+        }
+    }
+
+    private static boolean resyncRequired(InvalidationService service, String cache) {
+        try {
+            var field = InvalidationService.class.getDeclaredField("resyncRequired");
+            field.setAccessible(true);
+            return ((Map<String, ?>) field.get(service)).containsKey(cache);
+        } catch (NoSuchFieldException e) {
+            return false; // the state does not exist before the fix
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError(e);
+        }
+    }
+
+    /**
+     * Duplicates after confirmation (reviewer scenario): replay 1,000
+     * events, then re-deliver them all live. 744 fall outside the
+     * 256-entry confirmed horizon, so the bound path is genuinely
+     * exercised — the window must stay far below 1,000, a completed
+     * catch-up clears the remainder, and catch-up traffic stays bounded.
+     */
+    @Test
+    void duplicateDeliveryAfterConfirmationStaysBounded() {
+        var hub = new InMemoryInvalidationTransport.Hub();
+        StubJournal journal = new StubJournal(new InMemoryJournal(2000));
+        UUID idA = UUID.randomUUID();
+        UUID idB = UUID.randomUUID();
+        ServiceSide a = side(idA, hub, journal, cache -> {
+        });
+        ServiceSide b = side(idB, hub, journal, cache -> {
+        });
+        FakeTarget targetB = new FakeTarget();
+        b.service().registerTarget("c", targetB);
+
+        List<InvalidationMessage> messages = new ArrayList<>();
+        b.transport().disconnect();
+        for (int i = 1; i <= 1000; i++) {
+            InvalidationMessage message = new InvalidationMessage("c", "k" + i,
+                    new Version(i, idA), idA, InvalidationMessage.Type.INVALIDATE);
+            messages.add(message);
+            journal.append("c", message);
+        }
+        b.transport().reconnect(); // replay applies all 1,000; cursor at the end
+        journal.readCalls.set(0);
+
+        int peakWindow = 0;
+        for (InvalidationMessage message : messages) { // the live queue re-dispatches everything
+            a.service().onLocalWrite("c", message.key(), message.version(),
+                    InvalidationMessage.Type.INVALIDATE);
+            peakWindow = Math.max(peakWindow, windowSize(b.service(), "c"));
+        }
+
+        assertTrue(peakWindow <= 200,
+                "duplicates must not accumulate without bound: peak window " + peakWindow);
+        assertTrue(windowSize(b.service(), "c") <= APPLIED_WINDOW_NOMINAL,
+                "re-tracked duplicates beyond the confirmed horizon stay within the nominal "
+                        + "window until the next catch-up trigger, got "
+                        + windowSize(b.service(), "c"));
+        assertEquals(0, targetB.flushCount.get(), "nothing was trimmed: no flush expected");
+        assertTrue(journal.readCalls.get() <= 24,
+                "bounded catch-up traffic (not per-event), got " + journal.readCalls.get());
+        a.service().close();
+        b.service().close();
+    }
+
+    /**
+     * Read failures under live traffic (reviewer scenario): the window
+     * must not grow unboundedly, resync retries are throttled by time,
+     * and a healed journal lets the next attempt restore normal tracking.
+     */
+    @Test
+    void readFailuresKeepTrackingBoundedAndHeal() throws Exception {
+        var hub = new InMemoryInvalidationTransport.Hub();
+        StubJournal journal = new StubJournal(new InMemoryJournal(2000));
+        UUID idA = UUID.randomUUID();
+        UUID idB = UUID.randomUUID();
+        ServiceSide a = side(idA, hub, journal, cache -> {
+        });
+        ServiceSide b = side(idB, hub, journal, cache -> {
+        });
+        FakeTarget targetB = new FakeTarget();
+        b.service().registerTarget("c", targetB);
+
+        journal.failReads.set(true);
+        for (int i = 1; i <= 1000; i++) {
+            Version v = new Version(i, idA);
+            journal.append("c", new InvalidationMessage("c", "k" + i, v, idA,
+                    InvalidationMessage.Type.INVALIDATE));
+            a.service().onLocalWrite("c", "k" + i, v, InvalidationMessage.Type.INVALIDATE);
+        }
+
+        assertTrue(resyncRequired(b.service(), "c"),
+                "failed catch-up must enter the resync-required state");
+        assertEquals(0, windowSize(b.service(), "c"),
+                "tracking memory is freed in resync-required state");
+        int callsDuringFailures = journal.readCalls.get();
+        assertTrue(callsDuringFailures <= 4,
+                "no per-event catch-up storm while reads fail (two ticks + the failed "
+                        + "catch-up, then silence), got " + callsDuringFailures);
+        assertEquals(0, targetB.flushCount.get(), "failing reads alone must not flush L1");
+
+        // Within the throttle interval, a new delivery does not retry.
+        Version v1001 = new Version(1001, idA);
+        journal.append("c", new InvalidationMessage("c", "k1001", v1001, idA,
+                InvalidationMessage.Type.INVALIDATE));
+        a.service().onLocalWrite("c", "k1001", v1001, InvalidationMessage.Type.INVALIDATE);
+        assertEquals(callsDuringFailures, journal.readCalls.get(),
+                "resync retries are throttled by time");
+
+        // Reads heal; the next delivery after the interval resyncs fully.
+        Thread.sleep(1_100);
+        journal.failReads.set(false);
+        Version v1002 = new Version(1002, idA);
+        journal.append("c", new InvalidationMessage("c", "k1002", v1002, idA,
+                InvalidationMessage.Type.INVALIDATE));
+        a.service().onLocalWrite("c", "k1002", v1002, InvalidationMessage.Type.INVALIDATE);
+
+        assertFalse(resyncRequired(b.service(), "c"),
+                "a successful resync to the journal end clears the state");
+        assertEquals(0, windowSize(b.service(), "c"));
+        assertEquals(0, targetB.flushCount.get());
+        a.service().close();
+        b.service().close();
+    }
+
+    /**
+     * The lazy-recovery contract: an invalidation missed before the
+     * failures stays unapplied while no delivery or reconnect occurs —
+     * L1 may serve stale data — and is applied at the next recovery
+     * trigger, never silently dropped.
+     */
+    @Test
+    void lazyRecoveryStaysIncompleteUntilTheNextTrigger() throws Exception {
+        var hub = new InMemoryInvalidationTransport.Hub();
+        StubJournal journal = new StubJournal(new InMemoryJournal(2000));
+        UUID idA = UUID.randomUUID();
+        UUID idB = UUID.randomUUID();
+        ServiceSide a = side(idA, hub, journal, cache -> {
+        });
+        ServiceSide b = side(idB, hub, journal, cache -> {
+        });
+        FakeTarget targetB = new FakeTarget();
+        targetB.entries.put("k", new Version(1, idA));
+        b.service().registerTarget("c", targetB);
+
+        // The missed invalidation: journaled, never delivered live.
+        journal.append("c", new InvalidationMessage("c", "k", new Version(2, idA), idA,
+                InvalidationMessage.Type.INVALIDATE));
+        // Overflow with failing reads: catch-up cannot apply it.
+        journal.failReads.set(true);
+        for (int i = 3; i <= 131; i++) {
+            Version v = new Version(i, idA);
+            journal.append("c", new InvalidationMessage("c", "x" + i, v, idA,
+                    InvalidationMessage.Type.INVALIDATE));
+            a.service().onLocalWrite("c", "x" + i, v, InvalidationMessage.Type.INVALIDATE);
+        }
+        assertTrue(resyncRequired(b.service(), "c"));
+        assertEquals(new Version(1, idA), targetB.entries.get("k"),
+                "the missed invalidation is not yet applied");
+
+        // Reads heal, but no delivery or reconnect occurs: recovery stays
+        // incomplete — the stale entry is still served.
+        journal.failReads.set(false);
+        assertEquals(new Version(1, idA), targetB.entries.get("k"),
+                "lazy recovery: L1 may serve stale data until the next trigger");
+
+        // The next delivery (throttle interval elapsed) triggers the resync.
+        Thread.sleep(1_100);
+        Version trigger = new Version(1_000, idA);
+        journal.append("c", new InvalidationMessage("c", "xT", trigger, idA,
+                InvalidationMessage.Type.INVALIDATE));
+        a.service().onLocalWrite("c", "xT", trigger, InvalidationMessage.Type.INVALIDATE);
+
+        assertNull(targetB.entries.get("k"),
+                "the missed invalidation is applied at the next recovery trigger");
+        assertFalse(resyncRequired(b.service(), "c"));
+        a.service().close();
+        b.service().close();
     }
 }

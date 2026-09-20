@@ -15,6 +15,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -55,8 +56,14 @@ public final class InvalidationService implements InvalidationHandler {
 
     /** Live deliveries between cursor ticks (bounded-cadence tracking). */
     private static final long CURSOR_TICK_EVERY = 64L;
-    /** Versions tracked per cache since the confirmed cursor. */
+    /** Versions tracked per cache since the confirmed cursor (nominal trigger). */
     private static final int APPLIED_WINDOW_CAPACITY = 128;
+    /** Hard cap for the applied window; a breach after an unfinished catch-up forces resync-required. */
+    private static final int APPLIED_WINDOW_HARD_CAP = 512;
+    /** Recently confirmed versions per cache (duplicates of them are not re-tracked). */
+    private static final int CONFIRMED_SET_CAPACITY = 256;
+    /** Minimum interval between resync attempts for one cache in resync-required state. */
+    private static final long RESYNC_MIN_INTERVAL_NANOS = 1_000_000_000L;
     /** Rows read per checked read on the tick and catch-up paths. */
     private static final int READ_BATCH = 256;
     /** Catch-up batches per trigger (progress is guaranteed; the rest continues on the next trigger). */
@@ -70,6 +77,11 @@ public final class InvalidationService implements InvalidationHandler {
     private final Map<String, AutoCloseable> subscriptions = new ConcurrentHashMap<>();
     private final Map<String, String> cursors = new ConcurrentHashMap<>();
     private final Map<String, Set<Version>> appliedWindows = new ConcurrentHashMap<>();
+    /** Recently confirmed versions per cache (bounded; duplicates are not re-tracked). */
+    private final Map<String, LinkedHashSet<Version>> confirmedVersions = new ConcurrentHashMap<>();
+    /** Caches whose version tracking is unconfirmable; resync retries are throttled and lazy. */
+    private final Map<String, Boolean> resyncRequired = new ConcurrentHashMap<>();
+    private final Map<String, Long> lastResyncAttemptNanos = new ConcurrentHashMap<>();
     private final Map<String, Long> deliveriesSinceCursorTick = new ConcurrentHashMap<>();
     private final Map<String, Object> cacheLocks = new ConcurrentHashMap<>();
 
@@ -180,10 +192,14 @@ public final class InvalidationService implements InvalidationHandler {
     }
 
     /**
-     * Tracks a live-applied event for cursor advancement: the version joins
-     * the bounded applied window, an overflow falls back to journal-driven
-     * catch-up, and every {@link #CURSOR_TICK_EVERY}th delivery advances the
-     * cursor over the contiguous applied prefix.
+     * Tracks a live-applied event for cursor advancement. A version the
+     * cursor has already passed (bounded confirmed-set) is a late duplicate:
+     * applied to L1 but NOT re-tracked. Window overflow falls back to
+     * journal-driven catch-up; a catch-up that reached the journal end
+     * accounts for everything left in the window (a live event's row is
+     * journaled before its publish, so unseen versions sit at or before the
+     * cursor). In resync-required state tracking is skipped entirely and
+     * resync retries on a bounded time throttle.
      */
     private void recordDelivery(String cache, InvalidationTarget target, Version version) {
         if (journal == null) {
@@ -191,16 +207,77 @@ public final class InvalidationService implements InvalidationHandler {
         }
         Object lock = cacheLocks.computeIfAbsent(cache, c -> new Object());
         synchronized (lock) {
+            if (resyncRequired.containsKey(cache)) {
+                long now = System.nanoTime();
+                Long last = lastResyncAttemptNanos.get(cache);
+                if (last == null || now - last >= RESYNC_MIN_INTERVAL_NANOS) {
+                    lastResyncAttemptNanos.put(cache, now);
+                    if (catchUpFromJournal(cache, target) == CatchUpOutcome.CAUGHT_UP) {
+                        resyncRequired.remove(cache);
+                    }
+                }
+                return; // degraded: no tracking until the resync completes
+            }
+            LinkedHashSet<Version> confirmed = confirmedVersions.get(cache);
+            if (confirmed != null && confirmed.contains(version)) {
+                return; // late duplicate of an already-accounted row
+            }
             Set<Version> window = appliedWindows.computeIfAbsent(cache, c -> new HashSet<>());
             window.add(version);
             if (window.size() > APPLIED_WINDOW_CAPACITY) {
-                catchUpFromJournal(cache, target);
+                CatchUpOutcome outcome = catchUpFromJournal(cache, target);
+                if (outcome == CatchUpOutcome.CAUGHT_UP) {
+                    window.clear();
+                } else if (outcome == CatchUpOutcome.FAILED
+                        || window.size() > APPLIED_WINDOW_HARD_CAP) {
+                    enterResync(cache);
+                }
             }
             long deliveries = deliveriesSinceCursorTick.merge(cache, 1L, Long::sum);
             if (deliveries % CURSOR_TICK_EVERY == 0) {
                 advanceCursor(cache, target);
             }
         }
+    }
+
+    /** Marks a version as cursor-confirmed (bounded per cache; insertion-ordered eviction). */
+    private void confirm(String cache, Version version) {
+        LinkedHashSet<Version> confirmed =
+                confirmedVersions.computeIfAbsent(cache, c -> new LinkedHashSet<>());
+        confirmed.add(version);
+        while (confirmed.size() > CONFIRMED_SET_CAPACITY) {
+            confirmed.remove(confirmed.iterator().next());
+        }
+    }
+
+    /**
+     * Enters the resync-required state: tracking memory is freed and the
+     * cursor stays where it is. While set, recovery is lazy and throttled;
+     * missed rows are applied at the next recovery trigger (a delivery
+     * after reads heal, or a reconnect replay) — until then L1 may serve
+     * stale data.
+     */
+    private void enterResync(String cache) {
+        Set<Version> window = appliedWindows.get(cache);
+        if (window != null) {
+            window.clear();
+        }
+        resyncRequired.put(cache, Boolean.TRUE);
+        lastResyncAttemptNanos.put(cache, System.nanoTime());
+        log.warn("Version tracking for cache '{}' is unconfirmable (catch-up failed or the "
+                + "hard cap was exceeded); entering resync-required state. Missed rows are "
+                + "applied at the next recovery trigger; L1 may serve stale data until then.",
+                cache);
+    }
+
+    /** The outcome of one catch-up pass. */
+    private enum CatchUpOutcome {
+        /** The read reached the current journal end: everything left in the window is accounted. */
+        CAUGHT_UP,
+        /** The batch budget was exhausted before the journal end; progress is kept. */
+        MORE_WORK,
+        /** A read failed before the journal end. */
+        FAILED
     }
 
     /**
@@ -235,6 +312,7 @@ public final class InvalidationService implements InvalidationHandler {
         for (JournalRow row : rowsAfterCursor(range, cursor)) {
             if (row.message().originInstanceId().equals(originInstanceId)
                     || (window != null && window.remove(row.message().version()))) {
+                confirm(cache, row.message().version());
                 confirmed = row.cursor();
             } else {
                 break; // the first unconsumed row: never advance past it
@@ -247,12 +325,13 @@ public final class InvalidationService implements InvalidationHandler {
      * Window overflow behind a delayed row: catches up directly from the
      * journal (the source of truth), applying rows in order and advancing
      * the cursor over every row read — applied or stale-dropped, both are
-     * accounted. Bounded work per trigger; progress is guaranteed.
+     * accounted. Returns the tri-state outcome; only {@link
+     * CatchUpOutcome#CAUGHT_UP} proves the window fully accounted.
      */
-    private void catchUpFromJournal(String cache, InvalidationTarget target) {
+    private CatchUpOutcome catchUpFromJournal(String cache, InvalidationTarget target) {
         String cursor = cursors.get(cache);
         if (cursor == null) {
-            return;
+            return CatchUpOutcome.CAUGHT_UP; // no cursor: nothing to account against
         }
         Set<Version> window = appliedWindows.get(cache);
         for (int batch = 0; batch < MAX_CATCHUP_BATCHES; batch++) {
@@ -262,16 +341,16 @@ public final class InvalidationService implements InvalidationHandler {
             } catch (RuntimeException e) {
                 log.debug("Catch-up read failed for cache '{}'; will retry on the next trigger.",
                         cache, e);
-                return;
+                return CatchUpOutcome.FAILED;
             }
             if (!range.startIntact()) {
                 flushL1(cache, target,
                         "the replay cursor row was trimmed; prefix integrity is unconfirmable", null);
-                return;
+                return CatchUpOutcome.CAUGHT_UP; // the flush settles the state completely
             }
             List<JournalRow> rows = rowsAfterCursor(range, cursor);
             if (rows.isEmpty()) {
-                return; // caught up to the journal end
+                return CatchUpOutcome.CAUGHT_UP;
             }
             for (JournalRow row : rows) {
                 if (!row.message().originInstanceId().equals(originInstanceId)) {
@@ -280,10 +359,12 @@ public final class InvalidationService implements InvalidationHandler {
                 if (window != null) {
                     window.remove(row.message().version());
                 }
+                confirm(cache, row.message().version());
                 cursor = row.cursor();
             }
             cursors.put(cache, cursor);
         }
+        return CatchUpOutcome.MORE_WORK;
     }
 
     @Override
@@ -321,6 +402,9 @@ public final class InvalidationService implements InvalidationHandler {
                         }
                         List<JournalRow> rows = rowsAfterCursor(range, cursor);
                         if (rows.isEmpty()) {
+                            // Replay reached the journal end: this is a full
+                            // journal-driven recovery — normal tracking resumes.
+                            resyncRequired.remove(cache);
                             return; // nothing missed
                         }
                         Set<Version> window = appliedWindows.get(cache);
@@ -333,6 +417,7 @@ public final class InvalidationService implements InvalidationHandler {
                             if (window != null) {
                                 window.remove(row.message().version());
                             }
+                            confirm(cache, row.message().version());
                             // The cursor records the ID of the last row
                             // actually read — never the stream end: a row
                             // written after this read sits past the cursor
@@ -375,6 +460,8 @@ public final class InvalidationService implements InvalidationHandler {
         }
         target.evictAllL1();
         cursors.put(cache, baseline);
+        resyncRequired.remove(cache); // the flush settles the state completely
+        lastResyncAttemptNanos.remove(cache);
         Set<Version> window = appliedWindows.get(cache);
         if (window != null) {
             window.clear();
