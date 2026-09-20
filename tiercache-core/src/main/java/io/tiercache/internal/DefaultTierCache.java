@@ -108,6 +108,25 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
     private final Map<K, CompletableFuture<StoredEntry<V>>> inflight = new ConcurrentHashMap<>();
 
     /**
+     * Per-key invalidation barrier: the highest version this instance has
+     * seen invalidated (including for keys absent from L1). Lives in a
+     * bounded engine-side map; eviction of a barrier bumps {@link
+     * #l1Generation} so a racing stale commit is refused instead of letting
+     * the forgotten barrier reopen the race.
+     */
+    private record L1Meta(Version highestSeen) {
+    }
+
+    private static final int L1_META_MAX = 100_000;
+    private static final Duration L1_META_EXPIRY = Duration.ofMinutes(10);
+    private static final int L1_STRIPES = 64;
+
+    private final com.github.benmanes.caffeine.cache.Cache<K, L1Meta> l1Metas;
+    private final Object[] l1Locks;
+    /** Bumped when protective L1 state is forgotten (barrier eviction, evictAll). */
+    private final AtomicLong l1Generation = new AtomicLong();
+
+    /**
      * Legacy constructor: no coordination, no invalidation (used by tests).
      *
      * @param l1                  the L1 cache
@@ -267,6 +286,15 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
                     + "executor is wired; stale entries are served but never revalidated.",
                     cacheName);
         }
+        this.l1Metas = com.github.benmanes.caffeine.cache.Caffeine.newBuilder()
+                .maximumSize(L1_META_MAX)
+                .expireAfterWrite(L1_META_EXPIRY)
+                .<K, L1Meta>removalListener((key, value, cause) -> l1Generation.incrementAndGet())
+                .build();
+        this.l1Locks = new Object[L1_STRIPES];
+        for (int i = 0; i < L1_STRIPES; i++) {
+            l1Locks[i] = new Object();
+        }
     }
 
     @Override
@@ -367,31 +395,33 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
     @Override
     public void put(K key, V value) {
         // Write order: L2 first, then L1, then publish. Overwrites any marker.
+        long g0 = l1Generation.get();
         Version version = nextVersion();
         StoredEntry<V> entry = StoredEntry.ofValue(value, version);
         Boolean stored = l2ConditionalPut(key, entry, settings.l2Ttl(), version != null);
         if (stored == null) {
             // Degraded: L1 only, no publish (the journal has no row either).
-            warmL1(key, entry);
+            warmL1(key, entry, g0);
             return;
         }
         if (!stored) {
             // Lost version race: converge L1 to the current L2 entry.
             StoredEntry<V> current = l2Get(key);
             if (current != null) {
-                warmL1(key, current);
+                warmL1(key, current, g0);
             } else {
-                l1.evict(key);
+                evictLocal(key);
             }
             return;
         }
-        warmL1(key, entry);
+        warmL1(key, entry, g0);
         publishStore(key, entry, version);
     }
 
     @Override
     public boolean putIfAbsent(K key, V value) {
         // Atomic at L2; L1 warm-up and publish only for the winner.
+        long g0 = l1Generation.get();
         Version version = nextVersion();
         Boolean won = l2SetIfAbsent(key, StoredEntry.ofValue(value, version), settings.l2Ttl());
         if (won == null) {
@@ -401,7 +431,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         }
         if (won) {
             StoredEntry<V> stored = StoredEntry.ofValue(value, version);
-            warmL1(key, stored);
+            warmL1(key, stored, g0);
             publishStore(key, stored, version);
         }
         return won;
@@ -413,7 +443,11 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         if (l2Evict(key, version)) {
             publish(key, version, InvalidationMessage.Type.INVALIDATE);
         }
-        l1.evict(key);
+        if (version != null) {
+            applyInvalidateL1(key, version);
+        } else {
+            evictLocal(key);
+        }
     }
 
     @Override
@@ -422,7 +456,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         if (l2Clear(version)) {
             publish(null, version, InvalidationMessage.Type.EVICT_ALL);
         }
-        l1.clear();
+        clearL1();
     }
 
     @Override
@@ -431,11 +465,12 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         if (markerTtl == null) {
             return; // deny policy: nothing to store
         }
+        long g0 = l1Generation.get();
         Version version = nextVersion();
         StoredEntry<V> marker = StoredEntry.nullMarker(version);
         metrics.onNullEntry(cacheName);
         storeVersioned(key, marker, markerTtl, version,
-                jitter.apply(markerTtl, settings.jitterAmplitude()));
+                jitter.apply(markerTtl, settings.jitterAmplitude()), g0);
     }
 
     @Override
@@ -497,36 +532,122 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
     public void evictL1IfNewer(Object key, Version eventVersion) {
         @SuppressWarnings("unchecked")
         K typedKey = (K) key;
-        StoredEntry<V> entry = l1.get(typedKey);
-        if (entry == null) {
-            return;
-        }
-        // Entries without a version (legacy/unversioned) lose to any event.
-        if (entry.version() == null || eventVersion.compareTo(entry.version()) > 0) {
-            l1.evict(typedKey);
-        }
+        applyInvalidateL1(typedKey, eventVersion);
     }
 
     @Override
     public void evictAllL1() {
-        l1.clear();
+        clearL1();
     }
 
     @Override
     @SuppressWarnings("unchecked")
     public void applyUpdateL1(Object key, Object value, Version eventVersion) {
         K typedKey = (K) key;
-        StoredEntry<V> current = l1.get(typedKey);
-        if (current != null && current.version() != null
-                && eventVersion.compareTo(current.version()) <= 0) {
-            return; // stale update
+        synchronized (l1LockFor(typedKey)) {
+            L1Meta meta = l1Metas.getIfPresent(typedKey);
+            // First reject: an UPDATE older than the barrier is stale.
+            if (meta != null && meta.highestSeen() != null
+                    && eventVersion.compareTo(meta.highestSeen()) < 0) {
+                return;
+            }
+            StoredEntry<V> current = l1.get(typedKey);
+            if (current != null && current.version() != null
+                    && eventVersion.compareTo(current.version()) <= 0) {
+                // No value change (idempotent replay), but the barrier still lifts.
+                l1Metas.put(typedKey, new L1Meta(maxVersion(eventVersion, meta != null
+                        ? meta.highestSeen() : null)));
+                return;
+            }
+            // One atomic step: lift the barrier AND install the payload (its
+            // own version always passes — equality is not staleness).
+            l1.put(typedKey, StoredEntry.ofValue((V) value, eventVersion),
+                    jitter.apply(settings.l1ExpireAfterWrite(), settings.jitterAmplitude()));
+            l1Metas.put(typedKey, new L1Meta(maxVersion(eventVersion,
+                    meta != null ? meta.highestSeen() : null)));
         }
-        l1.put(typedKey, StoredEntry.ofValue((V) value, eventVersion),
-                jitter.apply(settings.l1ExpireAfterWrite(), settings.jitterAmplitude()));
     }
 
     private Version nextVersion() {
         return versionGenerator != null ? versionGenerator.next() : null;
+    }
+
+    private Object l1LockFor(K key) {
+        int hash = key == null ? 0 : key.hashCode() & 0x7FFF_FFFF;
+        return l1Locks[hash % L1_STRIPES];
+    }
+
+    private static Version maxVersion(Version a, Version b) {
+        if (a == null) {
+            return b;
+        }
+        if (b == null) {
+            return a;
+        }
+        return a.compareTo(b) >= 0 ? a : b;
+    }
+
+    /**
+     * One atomic L1 commit — generation check, barrier check, value write
+     * and barrier lift under the per-key stripe lock (no I/O inside).
+     * Returns {@code false} when the write was refused: the generation
+     * changed (protective state was forgotten mid-flight) or the barrier
+     * already knows a strictly newer version. A refusal skips ONLY the L1
+     * fill; the caller still returns the value it actually obtained.
+     */
+    private boolean commitL1(K key, StoredEntry<V> entry, Duration ttl, long generationAtStart) {
+        synchronized (l1LockFor(key)) {
+            if (generationAtStart != l1Generation.get()) {
+                return false;
+            }
+            L1Meta meta = l1Metas.getIfPresent(key);
+            if (entry.version() != null && meta != null && meta.highestSeen() != null
+                    && entry.version().compareTo(meta.highestSeen()) < 0) {
+                return false;
+            }
+            l1.put(key, entry, ttl);
+            if (entry.version() != null) {
+                l1Metas.put(key, new L1Meta(maxVersion(entry.version(),
+                        meta != null ? meta.highestSeen() : null)));
+            }
+            return true;
+        }
+    }
+
+    /**
+     * Atomic invalidation: lifts the barrier (even for absent keys) and
+     * removes the value when the event supersedes it. Local versioned
+     * evictions go through the same path, so a racing local write also
+     * blocks a stale warm.
+     */
+    private void applyInvalidateL1(K key, Version eventVersion) {
+        synchronized (l1LockFor(key)) {
+            L1Meta meta = l1Metas.getIfPresent(key);
+            StoredEntry<V> entry = l1.get(key);
+            if (entry != null && (entry.version() == null
+                    || eventVersion.compareTo(entry.version()) > 0)) {
+                l1.evict(key);
+            }
+            if (eventVersion != null) {
+                l1Metas.put(key, new L1Meta(maxVersion(eventVersion,
+                        meta != null ? meta.highestSeen() : null)));
+            }
+        }
+    }
+
+    /** Local unversioned evict: drops value and barrier together. */
+    private void evictLocal(K key) {
+        synchronized (l1LockFor(key)) {
+            l1.evict(key);
+            l1Metas.invalidate(key);
+        }
+    }
+
+    /** Full local clear: value, barriers, and a generation bump. */
+    private void clearL1() {
+        l1.clear();
+        l1Metas.invalidateAll();
+        l1Generation.incrementAndGet();
     }
 
     private void publish(Object key, Version version, InvalidationMessage.Type type) {
@@ -810,12 +931,24 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
     }
 
     /**
-     * Loads and stores the result.
+     * Loads and stores the result. The store version is minted BEFORE the
+     * loader runs (claim time): a write or versioned eviction landing
+     * during the load carries a newer version and wins the conditional
+     * store. A loss to a newer L2 entry converges to that entry; a loss to
+     * a tombstone triggers at most one bounded reload (never a false
+     * "not found", never a recursive claim wait).
      *
      * @return the entry now logically present (a null-marker under
      *         {@code allow}), or {@code null} if nothing was stored
      */
     private StoredEntry<V> loadAndStore(K key, Function<? super K, ? extends V> loader) {
+        return loadAndStore(key, loader, 0);
+    }
+
+    private StoredEntry<V> loadAndStore(K key, Function<? super K, ? extends V> loader,
+            int attempt) {
+        long g0 = l1Generation.get();
+        Version version = nextVersion(); // claim time: before the loader runs
         long loadStart = System.nanoTime();
         V loaded;
         try {
@@ -826,53 +959,84 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         if (loaded == null) {
             Duration markerTtl = settings.nullPolicy().markerTtl();
             if (markerTtl == null) {
-                // deny policy: a miss stays uncached
+                // deny policy: a miss stays uncached — nothing stored,
+                // nothing to fence
                 return null;
             }
             // Null-marker stored in both levels, jittered like any TTL.
-            Version version = nextVersion();
             StoredEntry<V> marker = StoredEntry.nullMarker(version);
             metrics.onNullEntry(cacheName);
-            storeVersioned(key, marker, markerTtl, version,
-                    jitter.apply(markerTtl, settings.jitterAmplitude()));
-            return marker;
+            StoredEntry<V> effective = storeVersioned(key, marker, markerTtl, version,
+                    jitter.apply(markerTtl, settings.jitterAmplitude()), g0);
+            return effective != null ? effective : maybeReload(key, loader, attempt, marker);
         }
-        Version version = nextVersion();
         StoredEntry<V> entry = StoredEntry.ofValue(loaded, version);
-        storeVersioned(key, entry, settings.l2Ttl(), version, null);
-        return entry;
+        StoredEntry<V> effective = storeVersioned(key, entry, settings.l2Ttl(), version,
+                null, g0);
+        return effective != null ? effective : maybeReload(key, loader, attempt, entry);
     }
 
-    /** L2 store + L1 warm + publish, version-conditional when versioning is on. */
-    private void storeVersioned(K key, StoredEntry<V> entry, Duration l2Ttl, Version version,
-            Duration l1TtlOverride) {
+    /**
+     * The load lost to an eviction (no newer value is visible). The loaded
+     * value is not garbage — {@code cache.evict} does not delete from the
+     * source — so attempt ONE bounded reload with a fresh claim version;
+     * a second loss returns the reload's own result without re-caching it.
+     */
+    private StoredEntry<V> maybeReload(K key, Function<? super K, ? extends V> loader,
+            int attempt, StoredEntry<V> loadedEntry) {
+        if (attempt > 0) {
+            return loadedEntry;
+        }
+        return loadAndStore(key, loader, 1);
+    }
+
+    /**
+     * L2 store + L1 warm + publish, version-conditional when versioning is
+     * on. Returns the EFFECTIVE entry: the stored one on success, the
+     * converged current entry on a lost race, or {@code null} when the
+     * store lost to a tombstone/absence (the caller then decides on a
+     * bounded reload).
+     */
+    private StoredEntry<V> storeVersioned(K key, StoredEntry<V> entry, Duration l2Ttl,
+            Version version, Duration l1TtlOverride, long generationAtStart) {
         Boolean stored = l2ConditionalPut(key, entry, l2Ttl, version != null);
         if (stored == null) {
-            l1.put(key, entry, l1TtlOverride != null ? l1TtlOverride
-                    : jitter.apply(settings.l1ExpireAfterWrite(), settings.jitterAmplitude()));
-            return; // degraded: L1 only
+            commitL1(key, entry, l1TtlOverride != null ? l1TtlOverride
+                    : jitter.apply(settings.l1ExpireAfterWrite(), settings.jitterAmplitude()),
+                    generationAtStart);
+            return entry; // degraded: L1 only
         }
         if (!stored) {
             StoredEntry<V> current = l2Get(key);
             if (current != null) {
-                warmL1(key, current);
-            } else {
-                l1.evict(key);
+                warmL1(key, current, generationAtStart);
+                return current;
             }
-            return;
+            evictLocal(key);
+            return null; // lost to a tombstone/absence
         }
         if (l1TtlOverride != null) {
-            l1.put(key, entry, l1TtlOverride);
+            commitL1(key, entry, l1TtlOverride, generationAtStart);
         } else {
-            warmL1(key, entry);
+            warmL1(key, entry, generationAtStart);
         }
         publishStore(key, entry, version);
+        return entry;
     }
 
-    /** Writes into L1 with a jittered TTL that never exceeds the L2 TTL. */
+    /** Writes into L1 with a jittered TTL through the atomic commit. */
     private void warmL1(K key, StoredEntry<V> entry) {
-        Duration ttl = jitter.apply(settings.l1ExpireAfterWrite(), settings.jitterAmplitude());
-        l1.put(key, entry, ttl);
+        warmL1(key, entry, l1Generation.get());
+    }
+
+    /**
+     * Commit-warms with the generation captured at the operation's start:
+     * a generation change or a newer barrier skips ONLY the L1 fill.
+     */
+    private void warmL1(K key, StoredEntry<V> entry, long generationAtStart) {
+        commitL1(key, entry,
+                jitter.apply(settings.l1ExpireAfterWrite(), settings.jitterAmplitude()),
+                generationAtStart);
     }
 
     /**

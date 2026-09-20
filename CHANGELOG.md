@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - The Spring Boot starter and the Micronaut integration now build the invalidation engine with the application's configured `CacheMetricsListener` instead of silently selecting the no-op listener, so invalidation traffic (sent, received, replayed, dropped) is observable like every other metric family; without a listener the wiring falls back to NOOP explicitly.
+- An in-flight load can no longer overwrite a concurrent write or invalidation: the store version is minted at claim time (before the loader runs), so a write or versioned eviction landing during the load wins the conditional store — previously a slow loader's stale snapshot won last-write-wins and every node served stale data until TTL. A load losing to an eviction performs at most one bounded reload instead of returning a false "not found" (at most two loader executions per request). Every L1 state change now goes through one atomic per-key commit over a unified holder (entry + version + invalidation barrier): invalidations are barriered even for absent keys, equal versions are admitted (an UPDATE lifts the barrier and installs its payload in one step), local puts/evicts participate in the same commit, and a per-cache generation guard refuses stale L1 writes when protective state is evicted mid-flight — the L1 fill alone is refused, never converted into an artificial miss.
 
 ## [1.3.0] - 2026-09-20
 
