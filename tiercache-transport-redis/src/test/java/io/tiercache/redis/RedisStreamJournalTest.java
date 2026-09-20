@@ -156,6 +156,72 @@ class RedisStreamJournalTest {
     }
 
     /**
+     * Regression: direct {@code append(UPDATE)} serialized the payload with
+     * the key serializer while replay deserializes it with the value
+     * serializer, so a row written with distinct serializers failed to
+     * replay. Write and read must be symmetric on the value serializer.
+     */
+    @Test
+    void directAppendSerializesPayloadWithValueSerializer() {
+        CacheSerializer<Object> prefixedStringKeys = new CacheSerializer<>() {
+            @Override
+            public byte[] toBytes(Object value) {
+                return ("K:" + (String) value).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            }
+
+            @Override
+            public Object fromBytes(byte[] bytes) {
+                return new String(bytes, java.nio.charset.StandardCharsets.UTF_8).substring(2);
+            }
+        };
+        RedisStreamJournal journal = new RedisStreamJournal(client.connect(ByteArrayCodec.INSTANCE), 1000,
+                prefixedStringKeys, new JdkCacheSerializer<>());
+        UUID origin = UUID.randomUUID();
+        java.util.ArrayList<String> payload = new java.util.ArrayList<>(List.of("x", "y", "z"));
+        journal.append("mixed-ser", new InvalidationMessage("mixed-ser", "k",
+                new Version(1, origin), origin, InvalidationMessage.Type.UPDATE, payload));
+
+        List<InvalidationMessage> rows = journal.readRange("mixed-ser", "0-0");
+        assertEquals(1, rows.size());
+        assertEquals("k", rows.get(0).key(), "key still round-trips through the key serializer");
+        assertEquals(InvalidationMessage.Type.UPDATE, rows.get(0).type());
+        assertEquals(payload, rows.get(0).payload(),
+                "payload must round-trip through the value serializer, not the key serializer");
+    }
+
+    @Test
+    void singleSerializerConstructorRoundTripsPayload() {
+        RedisStreamJournal journal = new RedisStreamJournal(client.connect(ByteArrayCodec.INSTANCE), 1000,
+                new JdkCacheSerializer<>());
+        UUID origin = UUID.randomUUID();
+        journal.append("single-ser", new InvalidationMessage("single-ser", "k",
+                new Version(1, origin), origin, InvalidationMessage.Type.UPDATE, "v"));
+
+        List<InvalidationMessage> rows = journal.readRange("single-ser", "0-0");
+        assertEquals(1, rows.size());
+        assertEquals("v", rows.get(0).payload());
+    }
+
+    @Test
+    void payloadlessMessagesAreUnaffected() {
+        RedisStreamJournal journal = new RedisStreamJournal(client.connect(ByteArrayCodec.INSTANCE), 1000,
+                new JdkCacheSerializer<>(), new JdkCacheSerializer<>());
+        UUID origin = UUID.randomUUID();
+        journal.append("no-payload", new InvalidationMessage("no-payload", "k",
+                new Version(1, origin), origin, InvalidationMessage.Type.INVALIDATE));
+        journal.append("no-payload", new InvalidationMessage("no-payload", null,
+                new Version(2, origin), origin, InvalidationMessage.Type.EVICT_ALL));
+
+        List<InvalidationMessage> rows = journal.readRange("no-payload", "0-0");
+        assertEquals(2, rows.size());
+        assertEquals(InvalidationMessage.Type.INVALIDATE, rows.get(0).type());
+        assertNull(rows.get(0).payload());
+        assertEquals(InvalidationMessage.Type.EVICT_ALL, rows.get(1).type());
+        assertNull(rows.get(1).key());
+        assertNull(rows.get(1).payload());
+    }
+
+    /**
      * Cross-instance causality at the Lua conditional-write path: a fresh
      * instance's later write must beat a long-running instance's earlier
      * writes (regression: per-instance counters starting at 1 made the Lua

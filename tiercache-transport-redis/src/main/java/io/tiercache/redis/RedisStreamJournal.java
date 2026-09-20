@@ -130,7 +130,7 @@ public final class RedisStreamJournal implements InvalidationJournal {
         byte[] keyBytes = message.key() != null ? keySerializer.toBytes(message.key()) : null;
         return commands.xadd(streamKey(cache),
                 XAddArgs.Builder.maxlen(capacity).approximateTrimming(),
-                fields(keyBytes, message.version(), message.type(), message.payload() != null ? keySerializer.toBytes(message.payload()) : null));
+                fields(keyBytes, message.version(), message.type(), message.payload() != null ? valueSerializer.toBytes(message.payload()) : null));
     }
 
     @Override
