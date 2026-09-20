@@ -7,7 +7,7 @@ target versions.
 
 For the full list of additions and fixes, see [CHANGELOG.md](CHANGELOG.md).
 
-## Unreleased
+## 1.3.0
 
 - Replay cursor protocol replaced (bug fix, no API change): the replay
   position now advances only over confirmed-applied contiguous journal
