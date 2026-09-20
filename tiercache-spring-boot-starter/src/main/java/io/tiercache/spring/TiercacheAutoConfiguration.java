@@ -99,7 +99,8 @@ public class TiercacheAutoConfiguration {
             havingValue = "true", matchIfMissing = true)
     Function<VersionGenerator, InvalidationHandler> tiercacheInvalidationHandlerFactory(
             RedisClient tiercacheRedisClient, RedisStreamJournal journal,
-            TiercacheProperties properties) {
+            TiercacheProperties properties,
+            ObjectProvider<io.tiercache.spi.CacheMetricsListener> metrics) {
         io.tiercache.spi.InvalidationTransport transport;
         if ("streams".equalsIgnoreCase(properties.getInvalidation().getProfile())) {
             transport = new io.tiercache.redis.LettuceStreamsInvalidationTransport(
@@ -109,8 +110,10 @@ public class TiercacheAutoConfiguration {
                     new JdkCacheSerializer<>());
         }
         io.tiercache.spi.InvalidationTransport selected = transport;
+        io.tiercache.spi.CacheMetricsListener selectedMetrics =
+                metrics.getIfAvailable(() -> io.tiercache.spi.CacheMetricsListener.NOOP);
         return versions -> new InvalidationService(selected, journal,
-                versions.instanceId(), io.tiercache.spi.InvalidationListener.NOOP);
+                versions.instanceId(), io.tiercache.spi.InvalidationListener.NOOP, selectedMetrics);
     }
 
     @Bean

@@ -106,7 +106,7 @@ public class TiercacheMicronautConfiguration {
     @Requires(property = "tiercache.invalidation.enabled", notEquals = "false")
     Function<VersionGenerator, InvalidationHandler> tiercacheInvalidationHandlerFactory(
             RedisClient tiercacheRedisClient, RedisStreamJournal journal,
-            TiercacheProperties properties) {
+            TiercacheProperties properties, BeanProvider<CacheMetricsListener> metrics) {
         io.tiercache.spi.InvalidationTransport transport;
         if ("streams".equalsIgnoreCase(properties.getInvalidation().getProfile())) {
             transport = new io.tiercache.redis.LettuceStreamsInvalidationTransport(
@@ -116,8 +116,10 @@ public class TiercacheMicronautConfiguration {
                     new JdkCacheSerializer<>());
         }
         io.tiercache.spi.InvalidationTransport selected = transport;
+        CacheMetricsListener selectedMetrics = metrics.isPresent()
+                ? metrics.get() : CacheMetricsListener.NOOP;
         return versions -> new InvalidationService(selected, journal,
-                versions.instanceId(), io.tiercache.spi.InvalidationListener.NOOP);
+                versions.instanceId(), io.tiercache.spi.InvalidationListener.NOOP, selectedMetrics);
     }
 
     // build() runs core's fail-fast startup validation: invalid
