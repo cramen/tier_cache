@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `evictAll` is now journaled and covered by reconnect replay: the `RemoteCache` SPI gained a versioned `clear(Version)` (defaulting to `clear()`, so custom transports keep their current behavior), the engine routes `evictAll` through it, and the Redis transport appends the EVICT_ALL journal row atomically with the namespace clear. Previously a receiver that missed the live EVICT_ALL notification kept serving stale L1 entries until TTL.
 - UPDATE-mode journal replay now deserializes the payload with the value serializer before applying it to L1, matching the live Pub/Sub path; previously a replayed UPDATE stored the raw serialized bytes as the value (typed reads could hit `ClassCastException`).
 
 ### Changed

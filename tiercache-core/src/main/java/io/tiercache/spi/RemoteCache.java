@@ -131,6 +131,23 @@ public interface RemoteCache<K, V> {
     void clear();
 
     /**
+     * Versioned clear: removes all entries of this cache's namespace AND
+     * records the eviction with the given version so the recovery journal
+     * can replay it to receivers that missed the live notification (see the
+     * invalidation journal requirement). The default delegates to
+     * {@link #clear()} — implementations without a journal keep their
+     * previous behavior, but then {@code evictAll} is not covered by
+     * reconnect replay.
+     *
+     * @param version the version stamped on the journal row, or {@code null}
+     *                for an unversioned clear
+     * @since 1.2.1
+     */
+    default void clear(io.tiercache.Version version) {
+        clear();
+    }
+
+    /**
      * Atomically stores {@code entry} under {@code key} only if the key is
      * absent (or expired), with the given TTL. This is the foundation for
      * distributed rebuild coordination and {@code putIfAbsent}.

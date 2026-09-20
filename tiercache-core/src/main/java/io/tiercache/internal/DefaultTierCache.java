@@ -419,7 +419,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
     @Override
     public void evictAll() {
         Version version = nextVersion();
-        if (l2Clear()) {
+        if (l2Clear(version)) {
             publish(null, version, InvalidationMessage.Type.EVICT_ALL);
         }
         l1.clear();
@@ -961,12 +961,12 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         }
     }
 
-    private boolean l2Clear() {
+    private boolean l2Clear(Version version) {
         if (breaker != null && breaker.isOpen()) {
             return false;
         }
         try {
-            l2.clear();
+            l2.clear(version);
             return true;
         } catch (L2UnavailableException e) {
             return false;

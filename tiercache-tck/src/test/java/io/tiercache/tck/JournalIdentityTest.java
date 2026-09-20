@@ -104,8 +104,7 @@ class JournalIdentityTest extends AbstractInvalidationChaosTest {
         }
     }
 
-    /** Journal name defaults to the cache name: prefix-free programmatic wiring is unchanged. */
-    @Test
+    /** Journal name defaults to the cache name: prefix-free programmatic wiring is unchanged. */    @Test
     void journalNameDefaultsToCacheName() throws Exception {
         try (var server = startServer(DockerImageName.parse("redis:6.2-alpine"))) {
             String uri = uri(server);
@@ -121,6 +120,38 @@ class JournalIdentityTest extends AbstractInvalidationChaosTest {
 
                 b.transport.reconnect();
                 waitFor(() -> "new".equals(b.cache.get("k")));
+            } finally {
+                a.close();
+                b.close();
+            }
+        }
+    }
+
+    /**
+     * evictAll must be journaled (through the L2 interface) so replay covers
+     * receivers that missed the live EVICT_ALL notification. Before the fix
+     * the engine called the unversioned clear and no journal row appeared.
+     */
+    @Test
+    void evictAllIsJournaledAndReplayed() throws Exception {
+        try (var server = startServer(DockerImageName.parse("redis:6.2-alpine"))) {
+            String uri = uri(server);
+            Side a = new Side(RedisClient.create(uri), uri, 1000);
+            Side b = new Side(RedisClient.create(uri), uri, 1000);
+            try {
+                a.cache.put("k", "v");
+                assertEquals("v", b.cache.get("k")); // warm B's L1
+
+                b.transport.disconnect();
+                a.cache.evictAll();
+
+                boolean journaled = a.journal.readRange(CACHE, "0-0").stream()
+                        .anyMatch(m -> m.type() == io.tiercache.InvalidationMessage.Type.EVICT_ALL);
+                org.junit.jupiter.api.Assertions.assertTrue(journaled,
+                        "evictAll must append an EVICT_ALL journal row");
+
+                b.transport.reconnect();
+                waitFor(() -> b.cache.get("k") == null);
             } finally {
                 a.close();
                 b.close();

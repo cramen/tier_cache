@@ -107,6 +107,14 @@ public final class CircuitBreakerRemoteCache<K, V> implements RemoteCache<K, V> 
     }
 
     @Override
+    public void clear(io.tiercache.Version version) {
+        guard(() -> {
+            delegate.clear(version);
+            return null;
+        });
+    }
+
+    @Override
     public boolean setIfAbsent(K key, StoredEntry<V> entry, Duration ttl) {
         return guard(() -> delegate.setIfAbsent(key, entry, ttl));
     }

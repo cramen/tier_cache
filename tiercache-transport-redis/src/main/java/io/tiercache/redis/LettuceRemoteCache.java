@@ -249,12 +249,34 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
      *                for an unversioned clear
      * @since 0.1.0
      */
-    public void clearWithJournal(Version version) {
+    /**
+     * Versioned clear: the namespace-scoped clear plus an EVICT_ALL journal
+     * row, so reconnect replay heals receivers that missed the live
+     * notification.
+     *
+     * @param version the version stamped on the journal row, or {@code null}
+     *                for an unversioned clear
+     * @since 1.2.1
+     */
+    @Override
+    public void clear(Version version) {
         clear();
         if (journal != null && version != null) {
             journal.append(journalName, new InvalidationMessage(journalName, null, version,
                     version.instanceId(), InvalidationMessage.Type.EVICT_ALL));
         }
+    }
+
+    /**
+     * Alias kept for source compatibility; delegates to
+     * {@link #clear(Version)}.
+     *
+     * @param version the version stamped on the journal row, or {@code null}
+     *                for an unversioned clear
+     * @since 0.1.0
+     */
+    public void clearWithJournal(Version version) {
+        clear(version);
     }
 
     @Override
