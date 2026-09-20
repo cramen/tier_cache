@@ -3,12 +3,13 @@ package io.tiercache.redis;
 import io.lettuce.core.Limit;
 import io.lettuce.core.Range;
 import io.lettuce.core.StreamMessage;
-import io.lettuce.core.XAddArgs;
 import io.lettuce.core.api.StatefulRedisConnection;
 import io.lettuce.core.api.sync.RedisCommands;
 import io.tiercache.InvalidationMessage;
 import io.tiercache.Version;
+import io.tiercache.spi.CheckedRange;
 import io.tiercache.spi.InvalidationJournal;
+import io.tiercache.spi.JournalRow;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -18,9 +19,11 @@ import java.util.Map;
 /**
  * Bounded invalidation journal on Redis Streams: one stream per cache
  * ({@code tiercache:journal:<cache>}), capacity-capped by approximate
- * MAXLEN trimming. Writers append inside the same MULTI as the data write
- * (see {@link LettuceRemoteCache}), so there is no "wrote but didn't
- * journal" window.
+ * MAXLEN trimming. Writers append inside the same atomic Lua unit as the
+ * data write (see {@link LettuceRemoteCache}), so there is no "wrote but
+ * didn't journal" window; every append path also keeps the exact trim
+ * counter ({@code tiercache:journal-trims:<cache>}) for the
+ * beginning-cursor trim check.
  *
  * <p>Cursors are stream entry IDs ({@code millis-seq}); replay reads
  * {@code XRANGE (cursor, +]}.
@@ -37,6 +40,18 @@ public final class RedisStreamJournal implements InvalidationJournal {
      * @since 0.1.0
      */
     public static final String JOURNAL_KEYSPACE = "tiercache:journal:";
+
+    /**
+     * Keyspace prefix of the atomic trim counter (one per cache stream):
+     * incremented inside every journal-appending script when the capped
+     * XADD actually removed rows, so a beginning cursor ({@code 0-0}) can
+     * tell "journal still small" from "history trimmed".
+     *
+     * @since 1.3.0
+     */
+    public static final String TRIMS_KEYSPACE = "tiercache:journal-trims:";
+
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(RedisStreamJournal.class);
 
     private static final byte[] FIELD_TYPE = "t".getBytes();
     private static final byte[] FIELD_KEY = "k".getBytes();
@@ -100,6 +115,22 @@ public final class RedisStreamJournal implements InvalidationJournal {
         return streamKey(cache);
     }
 
+    static byte[] trimCounterKey(String cache) {
+        return (TRIMS_KEYSPACE + cache).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Trim-counter key bytes for a cache (public for the transport's Lua
+     * scripts, which increment it on every capped XADD that removed rows).
+     *
+     * @param cache the cache name
+     * @return the counter key bytes ({@code tiercache:journal-trims:<cache>})
+     * @since 1.3.0
+     */
+    public static byte[] trimCounterKeyBytes(String cache) {
+        return trimCounterKey(cache);
+    }
+
     /**
      * Configured journal capacity (entries per cache stream).
      *
@@ -111,37 +142,88 @@ public final class RedisStreamJournal implements InvalidationJournal {
     }
 
     /**
-     * Appends the journal row inside an open MULTI transaction (called by the
-     * transport between {@code multi()} and {@code exec()}).
+     * Append-with-cap, shared by every journal-appending path: the XADD
+     * plus exact trim accounting in one atomic unit — when the capped
+     * stream did not grow by one, rows were removed and the trim counter
+     * is incremented. This is what makes the beginning-cursor ({@code 0-0})
+     * trim check exact even when the stream length equals the capacity.
      */
-    void appendQueued(RedisCommands<byte[], byte[]> tx, String cache, byte[] keyBytes,
-            Version version, InvalidationMessage.Type type) {
-        appendQueued(tx, cache, keyBytes, version, type, null);
-    }
+    static final String APPEND_WITH_CAP =
+            "local before = redis.call('xlen', KEYS[1]) "
+                    + "local id = redis.call('xadd', KEYS[1], 'MAXLEN', '~', ARGV[1], '*', unpack(ARGV, 2)) "
+                    + "if redis.call('xlen', KEYS[1]) < before + 1 then "
+                    + "redis.call('incr', KEYS[2]) end "
+                    + "return id";
 
-    void appendQueued(RedisCommands<byte[], byte[]> tx, String cache, byte[] keyBytes,
-            Version version, InvalidationMessage.Type type, byte[] payload) {
-        tx.xadd(streamKey(cache), XAddArgs.Builder.maxlen(capacity).approximateTrimming(),
-                fields(keyBytes, version, type, payload));
-    }
+    /**
+     * Beginning-cursor checked read: the trim counter and the range come
+     * from ONE Lua call, so a trim can never slip between the check and
+     * the read. Returns {@code {counter-or-nil, xrange-result}}.
+     */
+    private static final String CHECKED_READ_FROM_BEGINNING =
+            "local trims = redis.call('get', KEYS[2]) "
+                    + "local rows = redis.call('xrange', KEYS[1], '-', '+', 'COUNT', tonumber(ARGV[1])) "
+                    + "return {trims, rows}";
 
     @Override
     public String append(String cache, InvalidationMessage message) {
         byte[] keyBytes = message.key() != null ? keySerializer.toBytes(message.key()) : null;
-        return commands.xadd(streamKey(cache),
-                XAddArgs.Builder.maxlen(capacity).approximateTrimming(),
-                fields(keyBytes, message.version(), message.type(), message.payload() != null ? valueSerializer.toBytes(message.payload()) : null));
+        Map<byte[], byte[]> fields = fields(keyBytes, message.version(), message.type(),
+                message.payload() != null ? valueSerializer.toBytes(message.payload()) : null);
+        byte[][] argv = new byte[1 + fields.size() * 2][];
+        argv[0] = String.valueOf(capacity).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        int i = 1;
+        for (Map.Entry<byte[], byte[]> field : fields.entrySet()) {
+            argv[i++] = field.getKey();
+            argv[i++] = field.getValue();
+        }
+        Object id = commands.eval(APPEND_WITH_CAP, io.lettuce.core.ScriptOutputType.VALUE,
+                new byte[][]{streamKey(cache), trimCounterKey(cache)}, argv);
+        return new String((byte[]) id, java.nio.charset.StandardCharsets.UTF_8);
     }
 
     @Override
-    public List<InvalidationMessage> readRange(String cache, String cursorExclusive) {
+    public List<JournalRow> readRange(String cache, String cursorExclusive) {
         List<StreamMessage<byte[], byte[]>> entries = commands.xrange(streamKey(cache),
                 Range.from(Range.Boundary.excluding(cursorExclusive), Range.Boundary.unbounded()));
-        List<InvalidationMessage> out = new ArrayList<>(entries.size());
-        for (StreamMessage<byte[], byte[]> entry : entries) {
-            out.add(toMessage(cache, entry.getBody()));
+        return toRows(cache, entries);
+    }
+
+    @Override
+    public CheckedRange checkedRead(String cache, String cursor, int maxRows) {
+        if ("0-0".equals(cursor)) {
+            return checkedReadFromBeginning(cache, maxRows);
         }
-        return out;
+        // One inclusive read: the integrity proof (first row IS the cursor
+        // row) and the range come from the same response.
+        List<StreamMessage<byte[], byte[]>> entries = commands.xrange(streamKey(cache),
+                Range.from(Range.Boundary.including(cursor), Range.Boundary.unbounded()),
+                Limit.from(maxRows));
+        List<JournalRow> rows = toRows(cache, entries);
+        boolean intact = !rows.isEmpty() && rows.get(0).cursor().equals(cursor);
+        return new CheckedRange(intact, rows);
+    }
+
+    private CheckedRange checkedReadFromBeginning(String cache, int maxRows) {
+        List<Object> reply = commands.eval(CHECKED_READ_FROM_BEGINNING,
+                io.lettuce.core.ScriptOutputType.MULTI,
+                new byte[][]{streamKey(cache), trimCounterKey(cache)},
+                String.valueOf(maxRows).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        Object trims = reply.get(0);
+        boolean intact = trims == null
+                || Long.parseLong(new String((byte[]) trims, java.nio.charset.StandardCharsets.UTF_8)) == 0;
+        List<JournalRow> rows = new ArrayList<>();
+        for (Object entry : (List<?>) reply.get(1)) {
+            List<?> pair = (List<?>) entry;
+            String id = new String((byte[]) pair.get(0), java.nio.charset.StandardCharsets.UTF_8);
+            List<?> flatFields = (List<?>) pair.get(1);
+            Map<byte[], byte[]> body = new LinkedHashMap<>();
+            for (int f = 0; f + 1 < flatFields.size(); f += 2) {
+                body.put((byte[]) flatFields.get(f), (byte[]) flatFields.get(f + 1));
+            }
+            rows.add(new JournalRow(id, toMessage(cache, body)));
+        }
+        return new CheckedRange(intact, rows);
     }
 
     /**
@@ -174,15 +256,20 @@ public final class RedisStreamJournal implements InvalidationJournal {
     public boolean isTrimmed(String cache, String cursor) {
         if ("0-0".equals(cursor)) {
             // From-the-beginning cursor (recorded only against an empty
-            // stream): a loss happened only if rows were trimmed since.
-            // Redis offers no exact trim counter here, so the guard is
-            // "the stream outgrew the window": a small journal after a few
-            // writes (the reviewer's case) is NOT a loss, while a stream
-            // that had to be trimmed past capacity is. Documented heuristic
-            // — the failure mode in the narrow slack edge is one bounded
-            // flush, and replay itself is always idempotent.
-            Long length = commands.xlen(streamKey(cache));
-            return length != null && length > capacity;
+            // stream): a loss happened only if rows were trimmed since,
+            // counted atomically at write time on every append path — exact
+            // even when the stream length equals the capacity exactly.
+            try {
+                byte[] trims = commands.get(trimCounterKey(cache));
+                return trims != null
+                        && Long.parseLong(new String(trims, java.nio.charset.StandardCharsets.UTF_8)) > 0;
+            } catch (RuntimeException e) {
+                // Counter unreadable: treat as a possible loss (flush path),
+                // never as "no loss".
+                log.warn("Trim counter read failed for cache '{}'; treating as a possible loss.",
+                        cache, e);
+                return true;
+            }
         }
         List<StreamMessage<byte[], byte[]>> first = commands.xrange(streamKey(cache),
                 Range.unbounded(), Limit.from(1));
@@ -190,6 +277,14 @@ public final class RedisStreamJournal implements InvalidationJournal {
             return false;
         }
         return compareIds(cursor, first.get(0).getId()) < 0;
+    }
+
+    private List<JournalRow> toRows(String cache, List<StreamMessage<byte[], byte[]>> entries) {
+        List<JournalRow> out = new ArrayList<>(entries.size());
+        for (StreamMessage<byte[], byte[]> entry : entries) {
+            out.add(new JournalRow(entry.getId(), toMessage(cache, entry.getBody())));
+        }
+        return out;
     }
 
     private Map<byte[], byte[]> fields(byte[] keyBytes, Version version,

@@ -146,7 +146,7 @@ class JournalIdentityTest extends AbstractInvalidationChaosTest {
                 a.cache.evictAll();
 
                 boolean journaled = a.journal.readRange(CACHE, "0-0").stream()
-                        .anyMatch(m -> m.type() == io.tiercache.InvalidationMessage.Type.EVICT_ALL);
+                        .anyMatch(m -> m.message().type() == io.tiercache.InvalidationMessage.Type.EVICT_ALL);
                 org.junit.jupiter.api.Assertions.assertTrue(journaled,
                         "evictAll must append an EVICT_ALL journal row");
 

@@ -29,14 +29,31 @@ public interface InvalidationJournal {
     String append(String cache, InvalidationMessage message);
 
     /**
-     * Returns messages after {@code cursorExclusive}, oldest first.
+     * Returns rows after {@code cursorExclusive}, oldest first, with their
+     * row cursors.
      *
      * @param cache           the cache whose journal is read
      * @param cursorExclusive the cursor to start after
-     * @return the missed messages in append order
+     * @return the missed rows in append order
      * @since 0.1.0
      */
-    List<InvalidationMessage> readRange(String cache, String cursorExclusive);
+    List<JournalRow> readRange(String cache, String cursorExclusive);
+
+    /**
+     * One atomic checked read: the integrity proof for the read's start and
+     * up to {@code maxRows} rows, both derived from the same response (see
+     * {@link CheckedRange} for the per-cursor-kind semantics). All replay
+     * paths (cadence tick, overflow catch-up, reconnect) use this method —
+     * never a separate survival check followed by a range read, which a
+     * concurrent trim could tear apart.
+     *
+     * @param cache   the cache whose journal is read
+     * @param cursor  the confirmed cursor to read from
+     * @param maxRows maximum rows to return
+     * @return the checked range
+     * @since 1.3.0
+     */
+    CheckedRange checkedRead(String cache, String cursor, int maxRows);
 
     /**
      * The cursor at the journal's current end (for first-subscribe: do not

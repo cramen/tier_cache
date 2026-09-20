@@ -9,6 +9,21 @@ For the full list of additions and fixes, see [CHANGELOG.md](CHANGELOG.md).
 
 ## Unreleased
 
+- Replay cursor protocol replaced (bug fix, no API change): the replay
+  position now advances only over confirmed-applied contiguous journal
+  rows, every cursor read carries an atomic integrity proof, and trim
+  detection for beginning cursors uses a write-time counter. Operational
+  constraint to check: the journal capacity must comfortably exceed the
+  cursor cadence (64 events) — with a smaller journal, prefix integrity is
+  unconfirmable on every cadence tick and the service takes the L1 flush
+  path BY DESIGN (previously such journals silently worked most of the
+  time but could skip events). Size journals per docs/sizing-and-ttl.md.
+  Mixed rollout: not-yet-upgraded writers trim the journal without
+  incrementing the trim counter, so the exact beginning-cursor guarantee
+  holds once ALL writers run the new version; until then the pre-existing
+  uncertainty applies (failure direction never invents a loss for
+  non-zero cursors). No state migration needed: the counter key appears
+  on the first trim.
 - Tag index boundedness scheme changed (bug fix, no API change). Each tag
   set's TTL is now extend-only (a shorter-lived entry never shrinks the
   index) and member cleanup is atomic. Transition: sets written by older

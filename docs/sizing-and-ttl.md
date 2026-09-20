@@ -121,6 +121,14 @@ metric, and the `TiercacheDroppedInvalidations` alert rule in
 [docs/grafana/](grafana/). If you see drops, raise the capacity before
 reaching for longer L1 TTLs.
 
+Hard floor: the capacity must comfortably exceed the live cursor cadence
+(64 events). The replay cursor advances over confirmed-applied contiguous
+rows, and each cadence tick needs the cursor's own row to still be in the
+stream; with a journal smaller than the cadence, that row is always
+trimmed by tick time, prefix integrity is unconfirmable, and the service
+takes the flush path BY DESIGN — even with nothing actually lost. A few
+hundred entries is the practical minimum; the default is far above it.
+
 ## Per-cache overrides vs global defaults
 
 Keep `tiercache.defaults.*` aimed at your most common cache shape and use

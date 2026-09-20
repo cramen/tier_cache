@@ -186,7 +186,8 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
             return true;
         }
         Long result = commands.eval(Lua.CONDITIONAL_WRITE, io.lettuce.core.ScriptOutputType.INTEGER,
-                new byte[][]{namespaced(key), RedisStreamJournal.streamKeyBytes(journalName)},
+                new byte[][]{namespaced(key), RedisStreamJournal.streamKeyBytes(journalName),
+                        RedisStreamJournal.trimCounterKeyBytes(journalName)},
                 entry.version().toWire().getBytes(StandardCharsets.UTF_8),
                 encode(entry, staleWindowActive(staleTtl)),
                 String.valueOf(physicalTtl(ttl, staleTtl).toMillis()).getBytes(StandardCharsets.UTF_8),
@@ -217,7 +218,8 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
         byte[] namespaced = namespaced(key);
         pruneTags(namespaced);
         commands.eval(Lua.VERSIONED_EVICT, io.lettuce.core.ScriptOutputType.INTEGER,
-                new byte[][]{namespaced, RedisStreamJournal.streamKeyBytes(journalName)},
+                new byte[][]{namespaced, RedisStreamJournal.streamKeyBytes(journalName),
+                        RedisStreamJournal.trimCounterKeyBytes(journalName)},
                 version.toWire().getBytes(StandardCharsets.UTF_8),
                 String.valueOf(TOMBSTONE_TTL_MILLIS).getBytes(StandardCharsets.UTF_8),
                 String.valueOf(journal.capacity()).getBytes(StandardCharsets.UTF_8),
@@ -286,7 +288,8 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
             return "OK".equals(result);
         }
         Long result = commands.eval(Lua.SET_IF_ABSENT, io.lettuce.core.ScriptOutputType.INTEGER,
-                new byte[][]{namespaced(key), RedisStreamJournal.streamKeyBytes(journalName)},
+                new byte[][]{namespaced(key), RedisStreamJournal.streamKeyBytes(journalName),
+                        RedisStreamJournal.trimCounterKeyBytes(journalName)},
                 encode(entry, false),
                 String.valueOf(ttl.toMillis()).getBytes(StandardCharsets.UTF_8),
                 String.valueOf(journal.capacity()).getBytes(StandardCharsets.UTF_8),
@@ -431,14 +434,27 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
                         + "if l == 0 then return nil end "
                         + "return string.sub(bytes, 6, 6 + l - 1) end ";
 
+        /**
+         * Append-with-cap inside the write scripts (KEYS[2] = stream,
+         * KEYS[3] = trim counter): the XADD plus exact trim accounting in
+         * the same atomic unit — when the capped stream did not grow by
+         * one, rows were removed and the counter is incremented.
+         * Placeholders are filled per script.
+         */
+        private static final String TRIM_COUNTED_XADD =
+                "local before = redis.call('xlen', KEYS[2]) "
+                        + "redis.call('xadd', KEYS[2], 'MAXLEN', '~', @CAP, '*', @FIELDS) "
+                        + "if redis.call('xlen', KEYS[2]) < before + 1 then "
+                        + "redis.call('incr', KEYS[3]) end ";
+
         /** Conditional value/marker write + journal row (payload in 'p' when present). */
         static final String CONDITIONAL_WRITE = VERSION_COMPARE
                 + "local cur = redis.call('get', KEYS[1]) "
                 + "local curVer = curVersion(cur) "
                 + "if curVer and newer(curVer, ARGV[1]) then return 0 end "
                 + "redis.call('set', KEYS[1], ARGV[2], 'PX', ARGV[3]) "
-                + "redis.call('xadd', KEYS[2], 'MAXLEN', '~', ARGV[4], '*',"
-                + " 't', ARGV[5], 'k', ARGV[6], 'v', ARGV[1], 'p', ARGV[7]) "
+                + TRIM_COUNTED_XADD.replace("@CAP", "ARGV[4]")
+                        .replace("@FIELDS", "'t', ARGV[5], 'k', ARGV[6], 'v', ARGV[1], 'p', ARGV[7]")
                 + "return 1";
 
         /** Evict = versioned tombstone write + journal row. */
@@ -448,8 +464,8 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
                 + "if curVer and newer(curVer, ARGV[1]) then return 0 end "
                 + "local tombstone = string.char(4, 0, 0, 0, string.len(ARGV[1])) .. ARGV[1] "
                 + "redis.call('set', KEYS[1], tombstone, 'PX', ARGV[2]) "
-                + "redis.call('xadd', KEYS[2], 'MAXLEN', '~', ARGV[3], '*',"
-                + " 't', ARGV[4], 'k', ARGV[5], 'v', ARGV[1]) "
+                + TRIM_COUNTED_XADD.replace("@CAP", "ARGV[3]")
+                        .replace("@FIELDS", "'t', ARGV[4], 'k', ARGV[5], 'v', ARGV[1]")
                 + "return 1";
 
         /** set-if-absent; a tombstone counts as absent. Payload in 'p' when present. */
@@ -457,8 +473,8 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
                 + "local cur = redis.call('get', KEYS[1]) "
                 + "if cur and string.byte(cur, 1) ~= 4 then return 0 end "
                 + "redis.call('set', KEYS[1], ARGV[1], 'PX', ARGV[2]) "
-                + "redis.call('xadd', KEYS[2], 'MAXLEN', '~', ARGV[3], '*',"
-                + " 't', ARGV[4], 'k', ARGV[5], 'v', ARGV[6], 'p', ARGV[7]) "
+                + TRIM_COUNTED_XADD.replace("@CAP", "ARGV[3]")
+                        .replace("@FIELDS", "'t', ARGV[4], 'k', ARGV[5], 'v', ARGV[6], 'p', ARGV[7]")
                 + "return 1";
 
         /**

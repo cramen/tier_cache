@@ -57,15 +57,18 @@ class CursorTrackingTest extends AbstractInvalidationChaosTest {
             String uri = uri(server);
             SimpleMeterRegistry registry = new SimpleMeterRegistry();
             MicrometerCacheMetrics metrics = new MicrometerCacheMetrics(registry);
-            // Tiny journal (4 rows): normal operation trims it constantly.
-            Side a = new Side(RedisClient.create(uri), uri, 4);
-            Side b = new Side(RedisClient.create(uri), uri, 4, metrics, metrics);
+            // Journal sized above the cursor cadence (64): a capacity below
+            // it makes prefix integrity unconfirmable on every tick and the
+            // service takes the flush path BY DESIGN (see sizing-and-ttl).
+            // 256 rows still trims constantly under the 600-event run.
+            Side a = new Side(RedisClient.create(uri), uri, 256);
+            Side b = new Side(RedisClient.create(uri), uri, 256, metrics, metrics);
             try {
-                // B consumes 70 events live — far past the journal window.
-                for (int i = 0; i < 70; i++) {
+                // B consumes 600 events live — far past the journal window.
+                for (int i = 0; i < 600; i++) {
                     a.cache.put("k" + i, "v" + i);
                 }
-                waitFor(() -> "v69".equals(b.cache.get("k69")));
+                waitFor(() -> "v599".equals(b.cache.get("k599")));
 
                 b.transport.disconnect();
                 a.cache.put("fresh", "x");

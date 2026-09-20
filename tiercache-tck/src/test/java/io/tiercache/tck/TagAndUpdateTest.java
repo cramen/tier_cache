@@ -84,7 +84,7 @@ abstract class AbstractTagAndUpdateTest extends AbstractInvalidationChaosTest {
 
                 // The journal row carried the payload (UPDATE semantics).
                 var rows = a.journal.readRange(CACHE, "0-0");
-                assertTrue(rows.stream().anyMatch(m -> m.payload() != null),
+                assertTrue(rows.stream().anyMatch(m -> m.message().payload() != null),
                         "UPDATE events must carry the payload in the journal");
             } finally {
                 a.close();
@@ -111,7 +111,7 @@ abstract class AbstractTagAndUpdateTest extends AbstractInvalidationChaosTest {
                 a.cache.put("k", big);
                 waitFor(() -> big.equals(b.cache.get("k")));
                 var rows = a.journal.readRange(CACHE, "0-0");
-                assertTrue(rows.stream().allMatch(m -> m.payload() == null),
+                assertTrue(rows.stream().allMatch(m -> m.message().payload() == null),
                         "oversized payloads fall back to INVALIDATE (no payload)");
             } finally {
                 a.close();

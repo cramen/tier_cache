@@ -87,11 +87,11 @@ class RedisStreamJournalTest {
         cache.put("a", StoredEntry.ofValue("1", new Version(1, origin)), Duration.ofMinutes(1));
         cache.evict("b", new Version(2, origin));
 
-        List<InvalidationMessage> rows = journal.readRange("jatomic", "0-0");
+        List<io.tiercache.spi.JournalRow> rows = journal.readRange("jatomic", "0-0");
         assertEquals(2, rows.size());
-        assertEquals("a", rows.get(0).key());
-        assertEquals(new Version(1, origin), rows.get(0).version());
-        assertEquals("b", rows.get(1).key());
+        assertEquals("a", rows.get(0).message().key());
+        assertEquals(new Version(1, origin), rows.get(0).message().version());
+        assertEquals("b", rows.get(1).message().key());
         cache.close();
     }
 
@@ -156,6 +156,120 @@ class RedisStreamJournalTest {
     }
 
     /**
+     * Exact trim accounting (reviewer-reported): the beginning-cursor check
+     * must fire even when the stream length equals the capacity exactly —
+     * the old "XLEN > capacity" heuristic missed that boundary. Trims are
+     * counted atomically at write time instead.
+     */
+    @Test
+    void trimIsDetectedEvenAtExactCapacityLength() {
+        RedisStreamJournal journal = new RedisStreamJournal(client.connect(ByteArrayCodec.INSTANCE), 1000,
+                new JdkCacheSerializer<>());
+        UUID origin = UUID.randomUUID();
+        for (int i = 1; i <= 1200; i++) { // 200 rows past the cap: trims fire
+            journal.append("boundary", new InvalidationMessage("boundary", "k" + i,
+                    new Version(i, origin), origin, InvalidationMessage.Type.INVALIDATE));
+        }
+        var probe = client.connect(ByteArrayCodec.INSTANCE);
+        try {
+            var sync = probe.sync();
+            byte[] streamKey = "tiercache:journal:boundary".getBytes();
+            byte[] counter = sync.get("tiercache:journal-trims:boundary".getBytes());
+            assertTrue(counter != null && Long.parseLong(new String(counter)) > 0,
+                    "the drive must have counted real trims");
+            // Land exactly on the boundary the length heuristic missed.
+            sync.xtrim(streamKey, io.lettuce.core.XTrimArgs.Builder.maxlen(1000));
+            assertEquals(1000L, sync.xlen(streamKey),
+                    "setup: the stream must sit at exactly the capacity");
+            assertTrue(journal.isTrimmed("boundary", "0-0"),
+                    "a beginning cursor must see the trim even when XLEN == capacity");
+        } finally {
+            probe.close();
+        }
+    }
+
+    /**
+     * The trim counter is incremented by the L2 Lua write paths too (not
+     * only by direct journal appends): every journal-appending path routes
+     * through the same trim-counted append.
+     */
+    @Test
+    void trimCounterIncrementsOnTheLuaWritePaths() {
+        RedisStreamJournal journal = new RedisStreamJournal(client.connect(ByteArrayCodec.INSTANCE), 3,
+                new JdkCacheSerializer<>());
+        LettuceRemoteCache<String, String> cache = LettuceRemoteCache.<String, String>builder(redisUri)
+                .cacheName("jctr")
+                .journal(journal)
+                .build();
+        io.tiercache.VersionGenerator versions = new io.tiercache.VersionGenerator();
+        for (int i = 0; i < 200; i++) { // capacity 3: trims are guaranteed
+            cache.put("k" + i, StoredEntry.ofValue("v", versions.next()), Duration.ofMinutes(1));
+        }
+        var probe = client.connect(ByteArrayCodec.INSTANCE);
+        try {
+            byte[] counter = probe.sync().get("tiercache:journal-trims:jctr".getBytes());
+            assertTrue(counter != null && Long.parseLong(new String(counter)) > 0,
+                    "the conditional-write Lua path must count its trims");
+        } finally {
+            probe.close();
+        }
+        cache.close();
+    }
+
+    /**
+     * Concurrent trims during checked reads: the integrity proof and the
+     * range always come from one response — an intact read's head IS the
+     * cursor row, a non-intact read never masquerades as a contiguous
+     * prefix (its head, if any, lies strictly after the cursor).
+     */
+    @Test
+    void checkedReadNeverReturnsATornPrefix() throws Exception {
+        RedisStreamJournal journal = new RedisStreamJournal(client.connect(ByteArrayCodec.INSTANCE), 10,
+                new JdkCacheSerializer<>());
+        UUID origin = UUID.randomUUID();
+        String cursor = null;
+        java.util.concurrent.atomic.AtomicInteger appended = new java.util.concurrent.atomic.AtomicInteger();
+        for (int i = 0; i < 50; i++) {
+            String id = journal.append("torn", new InvalidationMessage("torn", "k" + i,
+                    new Version(i + 1, origin), origin, InvalidationMessage.Type.INVALIDATE));
+            appended.incrementAndGet();
+            if (i == 40) {
+                cursor = id; // will be trimmed as the writer keeps appending
+            }
+        }
+        final String fixedCursor = cursor;
+        java.util.concurrent.atomic.AtomicBoolean stop = new java.util.concurrent.atomic.AtomicBoolean();
+        Thread writer = new Thread(() -> {
+            while (!stop.get()) {
+                int i = appended.incrementAndGet();
+                journal.append("torn", new InvalidationMessage("torn", "k" + i,
+                        new Version(i + 1, origin), origin, InvalidationMessage.Type.INVALIDATE));
+            }
+        });
+        writer.start();
+        boolean sawTrimmedCursor = false;
+        try {
+            for (int i = 0; i < 2000 && !sawTrimmedCursor; i++) {
+                io.tiercache.spi.CheckedRange range = journal.checkedRead("torn", fixedCursor, 50);
+                if (range.startIntact()) {
+                    assertEquals(fixedCursor, range.rows().get(0).cursor(),
+                            "an intact read's head must be the cursor row itself");
+                } else if (!range.rows().isEmpty()) {
+                    assertTrue(RedisStreamJournal.compareIds(fixedCursor, range.rows().get(0).cursor()) < 0,
+                            "a non-intact read must not pose as a contiguous prefix");
+                    sawTrimmedCursor = true;
+                } else {
+                    sawTrimmedCursor = true; // empty journal: integrity equally unconfirmable
+                }
+            }
+        } finally {
+            stop.set(true);
+            writer.join(10_000);
+        }
+        assertTrue(sawTrimmedCursor, "the drive must eventually trim the cursor row");
+    }
+
+    /**
      * Regression: direct {@code append(UPDATE)} serialized the payload with
      * the key serializer while replay deserializes it with the value
      * serializer, so a row written with distinct serializers failed to
@@ -181,11 +295,11 @@ class RedisStreamJournalTest {
         journal.append("mixed-ser", new InvalidationMessage("mixed-ser", "k",
                 new Version(1, origin), origin, InvalidationMessage.Type.UPDATE, payload));
 
-        List<InvalidationMessage> rows = journal.readRange("mixed-ser", "0-0");
+        List<io.tiercache.spi.JournalRow> rows = journal.readRange("mixed-ser", "0-0");
         assertEquals(1, rows.size());
-        assertEquals("k", rows.get(0).key(), "key still round-trips through the key serializer");
-        assertEquals(InvalidationMessage.Type.UPDATE, rows.get(0).type());
-        assertEquals(payload, rows.get(0).payload(),
+        assertEquals("k", rows.get(0).message().key(), "key still round-trips through the key serializer");
+        assertEquals(InvalidationMessage.Type.UPDATE, rows.get(0).message().type());
+        assertEquals(payload, rows.get(0).message().payload(),
                 "payload must round-trip through the value serializer, not the key serializer");
     }
 
@@ -197,9 +311,9 @@ class RedisStreamJournalTest {
         journal.append("single-ser", new InvalidationMessage("single-ser", "k",
                 new Version(1, origin), origin, InvalidationMessage.Type.UPDATE, "v"));
 
-        List<InvalidationMessage> rows = journal.readRange("single-ser", "0-0");
+        List<io.tiercache.spi.JournalRow> rows = journal.readRange("single-ser", "0-0");
         assertEquals(1, rows.size());
-        assertEquals("v", rows.get(0).payload());
+        assertEquals("v", rows.get(0).message().payload());
     }
 
     @Test
@@ -212,13 +326,13 @@ class RedisStreamJournalTest {
         journal.append("no-payload", new InvalidationMessage("no-payload", null,
                 new Version(2, origin), origin, InvalidationMessage.Type.EVICT_ALL));
 
-        List<InvalidationMessage> rows = journal.readRange("no-payload", "0-0");
+        List<io.tiercache.spi.JournalRow> rows = journal.readRange("no-payload", "0-0");
         assertEquals(2, rows.size());
-        assertEquals(InvalidationMessage.Type.INVALIDATE, rows.get(0).type());
-        assertNull(rows.get(0).payload());
-        assertEquals(InvalidationMessage.Type.EVICT_ALL, rows.get(1).type());
-        assertNull(rows.get(1).key());
-        assertNull(rows.get(1).payload());
+        assertEquals(InvalidationMessage.Type.INVALIDATE, rows.get(0).message().type());
+        assertNull(rows.get(0).message().payload());
+        assertEquals(InvalidationMessage.Type.EVICT_ALL, rows.get(1).message().type());
+        assertNull(rows.get(1).message().key());
+        assertNull(rows.get(1).message().payload());
     }
 
     /**

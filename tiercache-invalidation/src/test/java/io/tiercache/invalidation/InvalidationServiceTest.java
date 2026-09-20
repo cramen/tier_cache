@@ -2,6 +2,7 @@ package io.tiercache.invalidation;
 
 import io.tiercache.InvalidationMessage;
 import io.tiercache.Version;
+import io.tiercache.spi.InvalidationJournal;
 import io.tiercache.spi.InvalidationTarget;
 import io.tiercache.spi.CacheMetricsListener.Direction;
 import io.tiercache.testkit.InMemoryInvalidationTransport;
@@ -26,7 +27,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class InvalidationServiceTest {
 
     /** Fake L1 side: key -> version currently held. */
-    private static final class FakeTarget implements InvalidationTarget {
+    private static class FakeTarget implements InvalidationTarget {
         final Map<Object, Version> entries = new ConcurrentHashMap<>();
         final AtomicInteger flushCount = new AtomicInteger();
 
@@ -425,5 +426,276 @@ class InvalidationServiceTest {
         assertEquals(1, targetA.flushCount.get(), "no journal: the honest fallback is a full flush");
         assertTrue(targetA.entries.isEmpty());
         a.close();
+    }
+
+    /**
+     * Two writers, delayed publish (reviewer-reported): writer A journals a
+     * row but its publish is delayed while the next rows are journaled AND
+     * delivered. The cursor must never advance past A's unconsumed row —
+     * otherwise the next reconnect skips it and stale L1 survives.
+     */
+    @Test
+    void cursorNeverAdvancesPastAnUnconsumedRow() {
+        var hub = new InMemoryInvalidationTransport.Hub();
+        var journal = new InMemoryJournal(1000);
+        UUID idA = UUID.randomUUID();
+        UUID idW = UUID.randomUUID();
+        UUID idB = UUID.randomUUID();
+        ServiceSide a = side(idA, hub, journal, cache -> {
+        });
+        ServiceSide b = side(idB, hub, journal, cache -> {
+        });
+        FakeTarget targetB = new FakeTarget();
+        targetB.entries.put("k", new Version(1, idA));
+        b.service().registerTarget("c", targetB); // cursor: beginning
+
+        // Row 1 is journaled but its live publish is delayed (never arrives).
+        journal.append("c", new InvalidationMessage("c", "k", new Version(2, idA), idA,
+                InvalidationMessage.Type.INVALIDATE));
+        // The next 64 rows are journaled AND delivered — the 64th delivery
+        // fires the cursor tick.
+        for (int i = 3; i <= 66; i++) {
+            Version v = new Version(i, idW);
+            journal.append("c", new InvalidationMessage("c", "x" + i, v, idW,
+                    InvalidationMessage.Type.INVALIDATE));
+            a.service().onLocalWrite("c", "x" + i, v, InvalidationMessage.Type.INVALIDATE);
+        }
+        assertEquals(new Version(1, idA), targetB.entries.get("k"),
+                "the delayed row must not be applied from thin air");
+
+        b.transport().disconnect();
+        b.transport().reconnect();
+        assertNull(targetB.entries.get("k"),
+                "the cursor must not have advanced past the unconsumed row: replay applies it");
+        assertEquals(0, targetB.flushCount.get(), "nothing was trimmed: no flush expected");
+        a.service().close();
+        b.service().close();
+    }
+
+    /**
+     * Write during replay (reviewer-reported): a row journaled between the
+     * replay's last read and the cursor store must be picked up — the
+     * cursor records the last row actually read, never the stream end.
+     */
+    @Test
+    void writeDuringReplayIsNotSkipped() {
+        var hub = new InMemoryInvalidationTransport.Hub();
+        var journal = new InMemoryJournal(1000);
+        UUID idA = UUID.randomUUID();
+        UUID idB = UUID.randomUUID();
+        ServiceSide b = side(idB, hub, journal, cache -> {
+        });
+        FakeTarget targetB = new FakeTarget() {
+            @Override
+            public void evictL1IfNewer(Object key, Version eventVersion) {
+                super.evictL1IfNewer(key, eventVersion);
+                if ("k3".equals(key)) {
+                    // A new row lands mid-replay: after the replay's read,
+                    // before its cursor store.
+                    journal.append("c", new InvalidationMessage("c", "k4",
+                            new Version(4, idA), idA, InvalidationMessage.Type.INVALIDATE));
+                }
+            }
+        };
+        targetB.entries.put("k2", new Version(1, idA));
+        targetB.entries.put("k3", new Version(1, idA));
+        targetB.entries.put("k4", new Version(1, idA));
+        b.service().registerTarget("c", targetB);
+
+        b.transport().disconnect();
+        journal.append("c", new InvalidationMessage("c", "k2", new Version(2, idA), idA,
+                InvalidationMessage.Type.INVALIDATE));
+        journal.append("c", new InvalidationMessage("c", "k3", new Version(3, idA), idA,
+                InvalidationMessage.Type.INVALIDATE));
+        b.transport().reconnect();
+
+        assertNull(targetB.entries.get("k2"));
+        assertNull(targetB.entries.get("k3"));
+        assertNull(targetB.entries.get("k4"),
+                "a row journaled mid-replay is picked up, not skipped past the stored cursor");
+        b.service().close();
+    }
+
+    /**
+     * The cursor's own row trimmed since the last confirmation: prefix
+     * integrity is unconfirmable — the flush path fires (with the signal)
+     * instead of mistaking surviving rows for a contiguous prefix.
+     */
+    @Test
+    void trimmedCursorRowForcesTheFlushPath() {
+        var hub = new InMemoryInvalidationTransport.Hub();
+        var journal = new InMemoryJournal(2); // tiny window
+        UUID idA = UUID.randomUUID();
+        UUID idB = UUID.randomUUID();
+        ServiceSide a = side(idA, hub, journal, cache -> {
+        });
+        AtomicInteger overflows = new AtomicInteger();
+        InMemoryInvalidationTransport transportB = new InMemoryInvalidationTransport(hub);
+        RecordingMetrics metrics = new RecordingMetrics();
+        InvalidationService b = new InvalidationService(transportB, journal, idB,
+                cache -> overflows.incrementAndGet(), metrics);
+        FakeTarget targetB = new FakeTarget();
+        targetB.entries.put("k", new Version(1, idA));
+        // Rows 1..3 (row 1 already trimmed); the cursor baselines at row 3.
+        for (int i = 1; i <= 3; i++) {
+            journal.append("c", new InvalidationMessage("c", "x" + i, new Version(i, idA), idA,
+                    InvalidationMessage.Type.INVALIDATE));
+        }
+        b.registerTarget("c", targetB);
+        // One live event past the baseline, then the receiver falls behind.
+        Version v4 = new Version(4, idA);
+        journal.append("c", new InvalidationMessage("c", "x4", v4, idA,
+                InvalidationMessage.Type.INVALIDATE));
+        a.service().onLocalWrite("c", "x4", v4, InvalidationMessage.Type.INVALIDATE);
+
+        transportB.disconnect();
+        for (int i = 5; i <= 8; i++) { // rows 5..8 trim the cursor row 3
+            journal.append("c", new InvalidationMessage("c", "x" + i, new Version(i, idA), idA,
+                    InvalidationMessage.Type.INVALIDATE));
+        }
+        transportB.reconnect();
+
+        assertEquals(1, targetB.flushCount.get(),
+                "unconfirmable cursor integrity must take the flush path");
+        assertEquals(1, overflows.get(), "the flush is signaled to the listener");
+        assertEquals(1, metrics.count(Direction.DROPPED), "the flush is signaled in metrics");
+        a.service().close();
+        b.close();
+    }
+
+    /**
+     * Window overflow behind a delayed row: the service catches up directly
+     * from the journal (the source of truth) — the delayed row is applied
+     * without any reconnect, memory stays bounded, nothing is skipped.
+     */
+    @Test
+    void windowOverflowFallsBackToJournalCatchUp() {
+        var hub = new InMemoryInvalidationTransport.Hub();
+        var journal = new InMemoryJournal(1000);
+        UUID idA = UUID.randomUUID();
+        UUID idW = UUID.randomUUID();
+        UUID idB = UUID.randomUUID();
+        ServiceSide a = side(idA, hub, journal, cache -> {
+        });
+        ServiceSide b = side(idB, hub, journal, cache -> {
+        });
+        FakeTarget targetB = new FakeTarget();
+        targetB.entries.put("kd", new Version(1, idA));
+        b.service().registerTarget("c", targetB);
+
+        // The delayed row: journaled, never delivered.
+        journal.append("c", new InvalidationMessage("c", "kd", new Version(2, idA), idA,
+                InvalidationMessage.Type.INVALIDATE));
+        // 129 subsequent events overflow the 128-entry applied window.
+        for (int i = 3; i <= 131; i++) {
+            Version v = new Version(i, idW);
+            journal.append("c", new InvalidationMessage("c", "x" + i, v, idW,
+                    InvalidationMessage.Type.INVALIDATE));
+            a.service().onLocalWrite("c", "x" + i, v, InvalidationMessage.Type.INVALIDATE);
+        }
+
+        assertNull(targetB.entries.get("kd"),
+                "the delayed row must be applied by journal catch-up, without a reconnect");
+        assertEquals(0, targetB.flushCount.get(), "catch-up is not a flush: nothing was trimmed");
+        a.service().close();
+        b.service().close();
+    }
+
+    /**
+     * First tick with a beginning cursor (registered against an empty
+     * journal): there is no cursor row, so a literal row-existence check
+     * would report a false loss. The counter-checked variant must advance
+     * the cursor without any flush.
+     */
+    @Test
+    void firstTickWithBeginningCursorIsNotAFalseLoss() {
+        var hub = new InMemoryInvalidationTransport.Hub();
+        var journal = new InMemoryJournal(1000);
+        UUID idA = UUID.randomUUID();
+        UUID idB = UUID.randomUUID();
+        ServiceSide a = side(idA, hub, journal, cache -> {
+        });
+        InMemoryInvalidationTransport transportB = new InMemoryInvalidationTransport(hub);
+        RecordingMetrics metrics = new RecordingMetrics();
+        InvalidationService b = new InvalidationService(transportB, journal, idB, cache -> {
+        }, metrics);
+        FakeTarget targetB = new FakeTarget();
+        targetB.entries.put("k", new Version(1, idA));
+        b.registerTarget("c", targetB); // beginning cursor: empty journal
+
+        for (int i = 2; i <= 65; i++) { // 64 deliveries: the tick fires
+            Version v = new Version(i, idA);
+            journal.append("c", new InvalidationMessage("c", "x" + i, v, idA,
+                    InvalidationMessage.Type.INVALIDATE));
+            a.service().onLocalWrite("c", "x" + i, v, InvalidationMessage.Type.INVALIDATE);
+        }
+        assertEquals(0, targetB.flushCount.get(), "a beginning cursor is not a loss");
+        assertEquals(0, metrics.count(Direction.DROPPED));
+
+        // And the advanced cursor replays only what is genuinely missed.
+        transportB.disconnect();
+        Version v66 = new Version(66, idA);
+        journal.append("c", new InvalidationMessage("c", "k", v66, idA,
+                InvalidationMessage.Type.INVALIDATE));
+        transportB.reconnect();
+        assertNull(targetB.entries.get("k"), "the missed row is replayed");
+        assertEquals(0, targetB.flushCount.get(), "still no flush");
+        a.service().close();
+        b.close();
+    }
+
+    /**
+     * A journal read failure during the reconnect check (e.g. the trim
+     * counter is unreadable) is a possible loss: the flush path fires with
+     * a warning — never "no loss".
+     */
+    @Test
+    void journalReadFailureOnReconnectTakesTheFlushPath() {
+        var hub = new InMemoryInvalidationTransport.Hub();
+        InMemoryJournal delegate = new InMemoryJournal(100);
+        InvalidationJournal failing = new InvalidationJournal() {
+            @Override
+            public String append(String cache, InvalidationMessage message) {
+                return delegate.append(cache, message);
+            }
+
+            @Override
+            public List<io.tiercache.spi.JournalRow> readRange(String cache, String cursorExclusive) {
+                return delegate.readRange(cache, cursorExclusive);
+            }
+
+            @Override
+            public io.tiercache.spi.CheckedRange checkedRead(String cache, String cursor, int maxRows) {
+                throw new RuntimeException("trim counter unreadable");
+            }
+
+            @Override
+            public String endCursor(String cache) {
+                return delegate.endCursor(cache);
+            }
+
+            @Override
+            public boolean isTrimmed(String cache, String cursor) {
+                return delegate.isTrimmed(cache, cursor);
+            }
+        };
+        UUID idB = UUID.randomUUID();
+        AtomicInteger overflows = new AtomicInteger();
+        InMemoryInvalidationTransport transportB = new InMemoryInvalidationTransport(hub);
+        RecordingMetrics metrics = new RecordingMetrics();
+        InvalidationService b = new InvalidationService(transportB, failing, idB,
+                cache -> overflows.incrementAndGet(), metrics);
+        FakeTarget targetB = new FakeTarget();
+        targetB.entries.put("k", new Version(1, UUID.randomUUID()));
+        b.registerTarget("c", targetB);
+
+        transportB.disconnect();
+        transportB.reconnect();
+
+        assertEquals(1, targetB.flushCount.get(),
+                "a failed read is unconfirmable integrity: flush, never \"no loss\"");
+        assertEquals(1, overflows.get());
+        assertEquals(1, metrics.count(Direction.DROPPED));
+        b.close();
     }
 }
