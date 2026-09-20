@@ -249,10 +249,20 @@ public final class TierCacheFactory implements AutoCloseable {
             if (closed) {
                 throw new IllegalStateException("TierCacheFactory is closed");
             }
+            viewCreationProbe.run();
             return (AsyncTierCache<K, V>) liveAsyncCaches.computeIfAbsent(name,
                     n -> new DefaultAsyncTierCache<>(getCache(n), asyncExecutor));
         }
     }
+
+    /**
+     * Test hook: invoked inside the factory lifecycle lock during every
+     * {@link #asyncCache(String)} call, letting tests park view creation at
+     * the exact publication boundary. No-op in production; not for
+     * application use.
+     */
+    static volatile Runnable viewCreationProbe = () -> {
+    };
 
     /**
      * Resolves the L2 for a cache name: the single shared instance, or a

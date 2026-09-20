@@ -96,84 +96,119 @@ class AsyncCloseCompletionTest {
     }
 
     /**
-     * Lock-order race, submit side: whichever side takes the lifecycle
-     * lock first, every handed-out stage completes — success, drain
-     * cancellation or post-close rejection — and none is abandoned.
+     * Submit crossing, deterministic and discriminating: a gated executor
+     * parks the submission at the executor hand-off — inside the view's
+     * lifecycle lock, after registration. Close must then BLOCK on the
+     * monitor, and once the hand-off completes, the close's drain must fail
+     * the queued stage with CancellationException. Against a
+     * registration-after-execute defect the stage is abandoned instead, so
+     * this test catches broken synchronization (verified on such a variant).
      */
     @Test
-    void closeRacingSubmissionNeverAbandonsAStage() throws Exception {
-        for (int round = 0; round < 30; round++) {
-            TierCacheFactory factory = TierCacheFactory.builder()
-                    .remoteCache(new InMemoryRemoteCache<>())
-                    .asyncExecutorThreads(1)
-                    .build();
-            AsyncTierCache<String, String> cache = factory.asyncCache("c");
+    void closeLandingMidSubmissionDrainsTheRegisteredStage() throws Exception {
+        TierCacheFactory factory = TierCacheFactory.builder()
+                .remoteCache(new InMemoryRemoteCache<>())
+                .build();
+        TierCache<String, String> cache = factory.getCache("c");
 
-            CountDownLatch gate = new CountDownLatch(1);
-            CountDownLatch loaderEntered = new CountDownLatch(1);
-            cache.getOrComputeAsync("gate", k -> {
-                loaderEntered.countDown();
-                try {
-                    gate.await(30, TimeUnit.SECONDS);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                }
-                return "g";
-            });
-            assertTrue(loaderEntered.await(5, TimeUnit.SECONDS));
+        CountDownLatch executeEntered = new CountDownLatch(1);
+        CountDownLatch releaseExecute = new CountDownLatch(1);
+        java.util.concurrent.Executor gated = command -> {
+            executeEntered.countDown();
+            awaitQuietly(releaseExecute);
+            // The command is never run: the stage stays queued.
+        };
+        io.tiercache.internal.DefaultAsyncTierCache<String, String> view =
+                new io.tiercache.internal.DefaultAsyncTierCache<>(cache, gated);
 
-            java.util.List<CompletableFuture<String>> stages = new java.util.ArrayList<>();
+        java.util.concurrent.atomic.AtomicReference<CompletableFuture<String>> stage =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        Thread submitter = new Thread(() -> stage.set(view.getAsync("k").toCompletableFuture()));
+        submitter.start();
+        assertTrue(executeEntered.await(5, TimeUnit.SECONDS),
+                "the submission must reach the executor hand-off");
+
+        Thread closer = new Thread(view::closeOutstanding);
+        closer.start();
+        awaitThreadState(closer, Thread.State.BLOCKED,
+                "close must wait for the submission's lifecycle lock");
+        releaseExecute.countDown();
+        submitter.join(5_000);
+        closer.join(5_000);
+
+        assertThrows(CancellationException.class,
+                () -> stage.get().get(5, TimeUnit.SECONDS),
+                "a submission registered before the close snapshot must be drained");
+        factory.close();
+    }
+
+    /**
+     * View-creation crossing, deterministic: a probe parks view creation
+     * inside the factory lifecycle lock, close is observed BLOCKED on the
+     * factory monitor, and the view published after the snapshot point must
+     * still be included in that close's drain (a subsequent op fails as a
+     * cancelled stage). Negative control (a snapshot taken outside the
+     * lock) lets the view escape — verified on such a variant.
+     */
+    @Test
+    void viewCreatedDuringCloseIsDrainedByThatClose() throws Exception {
+        TierCacheFactory factory = TierCacheFactory.builder()
+                .remoteCache(new InMemoryRemoteCache<>())
+                .build();
+        CountDownLatch creationEntered = new CountDownLatch(1);
+        CountDownLatch releaseCreation = new CountDownLatch(1);
+        TierCacheFactory.viewCreationProbe = () -> {
+            creationEntered.countDown();
+            awaitQuietly(releaseCreation);
+        };
+        try {
+            java.util.concurrent.atomic.AtomicReference<AsyncTierCache<String, String>> view =
+                    new java.util.concurrent.atomic.AtomicReference<>();
+            Thread creator = new Thread(() -> view.set(factory.asyncCache("late")));
+            creator.start();
+            assertTrue(creationEntered.await(5, TimeUnit.SECONDS),
+                    "view creation must reach the publication boundary");
+
             Thread closer = new Thread(factory::close);
             closer.start();
-            for (int s = 0; s < 8; s++) {
-                stages.add(cache.getAsync("k" + s).toCompletableFuture());
-            }
+            awaitThreadState(closer, Thread.State.BLOCKED,
+                    "close must wait for the factory lifecycle lock");
+            releaseCreation.countDown();
+            creator.join(5_000);
             closer.join(5_000);
-            gate.countDown();
 
-            for (CompletableFuture<String> stage : stages) {
-                try {
-                    stage.get(30, TimeUnit.SECONDS);
-                } catch (CancellationException | ExecutionException expected) {
-                    // Drained by close or rejected after it — both are
-                    // visible completions. A timeout would mean the stage
-                    // was abandoned and fails the test.
-                }
-            }
+            CompletableFuture<String> stage = view.get().getAsync("k").toCompletableFuture();
+            assertThrows(CancellationException.class,
+                    () -> stage.get(5, TimeUnit.SECONDS),
+                    "a view published before the close snapshot must be drained by that close");
+        } finally {
+            TierCacheFactory.viewCreationProbe = () -> {
+            };
             factory.close();
         }
     }
 
-    /**
-     * Lock-order race, view side: a view created concurrently with close
-     * is either rejected with IllegalStateException or published before
-     * the snapshot and therefore drained with the other views.
-     */
-    @Test
-    void viewCreationRacingCloseIsDrainedOrRejected() throws Exception {
-        for (int round = 0; round < 30; round++) {
-            TierCacheFactory factory = TierCacheFactory.builder()
-                    .remoteCache(new InMemoryRemoteCache<>())
-                    .build();
+    private static void awaitQuietly(CountDownLatch latch) {
+        try {
+            latch.await();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
 
-            Thread closer = new Thread(factory::close);
-            closer.start();
-            AsyncTierCache<String, String> view = null;
-            boolean rejected = false;
-            try {
-                view = factory.asyncCache("race");
-            } catch (IllegalStateException e) {
-                rejected = true;
+    private static void awaitThreadState(Thread thread, Thread.State state, String description)
+            throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (thread.getState() != state) {
+            if (System.nanoTime() > deadline) {
+                throw new AssertionError(description + " (never reached " + state + ", got "
+                        + thread.getState() + ")");
             }
-            closer.join(5_000);
-
-            if (!rejected) {
-                CompletableFuture<String> stage = view.getAsync("k").toCompletableFuture();
-                assertThrows(CancellationException.class,
-                        () -> stage.get(5, TimeUnit.SECONDS),
-                        "a view published before the snapshot must be drained by close");
+            if (!thread.isAlive()) {
+                throw new AssertionError(description + " (thread finished first: " + thread.getState()
+                        + " — the crossing did not serialize)");
             }
-            factory.close();
+            Thread.sleep(5);
         }
     }
 }

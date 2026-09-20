@@ -283,39 +283,66 @@ conn.sync().sadd("tiercache:tags:tag-ttl:g", "tag-ttl:ghost");
 
     /**
      * Boundedness under UNINTERRUPTED writes (no tag reads, so the set TTL
-     * cannot mask a missing cleanup by expiring the set): after several TTL
-     * periods the set size must sit within the stated statistical bound
+     * cannot mask a missing cleanup by expiring the set): the writer keeps
+     * writing while the measurement runs, and the size plus the live count
+     * come from ONE atomic Lua probe (a consistent snapshot). Bound:
      * size &le; live + 2*live/(K-1) + 4K, K = 8. The janitor is the only
      * mechanism that can achieve this; pre-fix the set accumulates every
-     * key ever written.
+     * key ever written (verified on that variant).
      */
     @Test
     void tagSetSizeStaysBoundedUnderContinuousWrites() throws Exception {
         LettuceRemoteCache<String, String> cache = LettuceRemoteCache.<String, String>builder(redisUri)
                 .cacheName("tag-hot").build();
         Duration ttl = Duration.ofMillis(500);
-        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(1_600); // > 3 TTL periods
-        int writes = 0;
-        while (System.nanoTime() < deadline) {
-            cache.putTagged("k" + writes, io.tiercache.spi.StoredEntry.ofValue("v"), ttl,
-                    new String[]{"hot"});
-            writes++;
-            Thread.sleep(4);
+        java.util.concurrent.atomic.AtomicBoolean stop = new java.util.concurrent.atomic.AtomicBoolean();
+        AtomicInteger writes = new AtomicInteger();
+        Thread writer = new Thread(() -> {
+            while (!stop.get()) {
+                int i = writes.incrementAndGet();
+                cache.putTagged("k" + i, io.tiercache.spi.StoredEntry.ofValue("v"), ttl,
+                        new String[]{"hot"});
+                try {
+                    Thread.sleep(4);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+            }
+        });
+        writer.start();
+        try {
+            // > 3 TTL periods of uninterrupted load before measuring.
+            Thread.sleep(1_600);
+            try (io.lettuce.core.RedisClient probeClient = io.lettuce.core.RedisClient.create(redisUri);
+                    var probe = probeClient.connect(io.lettuce.core.codec.ByteArrayCodec.INSTANCE)) {
+                // One atomic measurement: size and live count from the same
+                // consistent snapshot (no SMEMBERS-then-EXISTS window).
+                String measure =
+                        "local members = redis.call('smembers', KEYS[1]) "
+                                + "local live = 0 "
+                                + "for _, m in ipairs(members) do "
+                                + "if redis.call('exists', m) == 1 then live = live + 1 end "
+                                + "end "
+                                + "return {#members, live}";
+                java.util.List<Object> result = probe.sync().eval(measure,
+                        io.lettuce.core.ScriptOutputType.MULTI,
+                        new byte[][]{"tiercache:tags:tag-hot:hot".getBytes(StandardCharsets.UTF_8)});
+                long size = (Long) result.get(0);
+                long live = (Long) result.get(1);
+                long bound = live + 2 * live / 7 + 32;
+                assertTrue(size <= bound,
+                        "set size " + size + " exceeds the janitor bound " + bound
+                                + " (live=" + live + ", writes=" + writes.get() + ")");
+                assertTrue(writes.get() > bound,
+                        "the test is only meaningful if total writes (" + writes.get()
+                                + ") far exceed the bound " + bound);
+            }
+        } finally {
+            stop.set(true);
+            writer.join(10_000);
+            cache.close();
         }
-        try (io.lettuce.core.RedisClient probe = io.lettuce.core.RedisClient.create(redisUri);
-                var conn = probe.connect(io.lettuce.core.codec.ByteArrayCodec.INSTANCE)) {
-            var sync = conn.sync();
-            List<byte[]> members = new ArrayList<>(sync.smembers("tiercache:tags:tag-hot:hot".getBytes(StandardCharsets.UTF_8)));
-            long live = members.stream().filter(m -> sync.exists(m) > 0).count();
-            long bound = live + 2 * live / 7 + 32;
-            assertTrue(members.size() <= bound,
-                    "set size " + members.size() + " exceeds the janitor bound " + bound
-                            + " (live=" + live + ", writes=" + writes + ")");
-            assertTrue(writes > bound,
-                    "the test is only meaningful if total writes (" + writes
-                            + ") far exceed the bound " + bound);
-        }
-        cache.close();
     }
 
     /**
@@ -365,50 +392,102 @@ conn.sync().sadd("tiercache:tags:tag-ttl:g", "tag-ttl:ghost");
     }
 
     /**
-     * Janitor vs concurrent rewrites: a membership whose data key is being
-     * rewritten is never removed (the check-and-remove is atomic). A write
-     * storm on a small key set exercises janitor samples against live keys;
-     * afterwards every live key must still be a member.
+     * Janitor vs concurrent rewrites, orchestrated per round: a batch of
+     * victim members whose data keys have EXPIRED (the dangerous absent-key
+     * state) inside a LARGE set — one prune scan spans the entire rewrite
+     * burst, so the position of a victim in the SMEMBERS iteration cannot
+     * hide the race — then each victim rewritten EXACTLY ONCE, then a
+     * rewrite FREEZE until verification (a later rewrite could re-add a
+     * wrongly removed membership and mask the defect). The atomic
+     * check-and-remove must preserve every rewritten membership, every
+     * round. (Negative control on the non-atomic check-and-remove variant
+     * loses memberships within the rounds.)
      */
     @Test
     void janitorNeverRemovesLiveMembership() throws Exception {
         LettuceRemoteCache<String, String> cache = LettuceRemoteCache.<String, String>builder(redisUri)
                 .cacheName("tag-race").build();
-        int keys = 16;
-        int threads = 4;
-        int iterations = 60;
-        var pool = Executors.newFixedThreadPool(threads);
-        var start = new CountDownLatch(1);
-        List<Future<?>> futures = new ArrayList<>();
-        for (int t = 0; t < threads; t++) {
-            int offset = t;
-            futures.add(pool.submit(() -> {
-                start.await();
-                for (int i = 0; i < iterations; i++) {
-                    String key = "k" + ((offset + i) % keys);
-                    cache.putTagged(key, io.tiercache.spi.StoredEntry.ofValue("v"),
-                            Duration.ofSeconds(30), new String[]{"storm"});
-                    if (i % 7 == 0) {
-                        cache.keysByTag("storm"); // read-time prune races the rewrites too
+        int victims = 30;
+        int filler = 800; // one scan spans the whole rewrite burst
+        for (int round = 0; round < 3; round++) {
+            String tag = "jr" + round;
+            // The dangerous state: victims' data keys are GONE, their
+            // membership rows are dead in the set.
+            for (int v = 0; v < victims; v++) {
+                cache.putTagged("v" + round + "-" + v, io.tiercache.spi.StoredEntry.ofValue("v"),
+                        Duration.ofMillis(100), new String[]{tag});
+            }
+            try (io.lettuce.core.RedisClient probeClient = io.lettuce.core.RedisClient.create(redisUri);
+                    var probe = probeClient.connect(io.lettuce.core.codec.ByteArrayCodec.INSTANCE)) {
+                byte[] setKey = ("tiercache:tags:tag-race:" + tag).getBytes(StandardCharsets.UTF_8);
+                // A long-lived tag (mixed-TTL reality): the SET outlives the
+                // short-lived members, so the dead membership rows persist.
+                probe.sync().pexpire(setKey, 30_000);
+                Thread.sleep(150); // the victims' data expires; the set lives on
+                // Filler members (no data keys needed) make the prune scan long
+                // enough to cover the burst deterministically.
+                for (int f = 0; f < filler; f++) {
+                    probe.sync().sadd(setKey, ("f" + round + "-" + f).getBytes(StandardCharsets.UTF_8));
+                }
+            }
+
+            CountDownLatch go = new CountDownLatch(1);
+            String scanTag = tag;
+            java.util.concurrent.atomic.AtomicBoolean stopScan =
+                    new java.util.concurrent.atomic.AtomicBoolean();
+            Thread scan = new Thread(() -> {
+                awaitLatch(go);
+                while (!stopScan.get()) {
+                    cache.keysByTag(scanTag); // read-time prune scans race the rewrites
+                }
+            });
+            int rewriteRound = round;
+            Thread rewrite = new Thread(() -> {
+                awaitLatch(go);
+                // Let the first (slow, on a broken implementation) prune scan
+                // settle into its member loop, then pace the burst so it
+                // lands INSIDE that scan's check-and-remove window.
+                try {
+                    Thread.sleep(150);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+                for (int v = 0; v < victims; v++) {
+                    cache.putTagged("v" + rewriteRound + "-" + v,
+                            io.tiercache.spi.StoredEntry.ofValue("v"),
+                            Duration.ofSeconds(30), new String[]{scanTag});
+                    try {
+                        Thread.sleep(8);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        return;
                     }
                 }
-                return null;
-            }));
-        }
-        start.countDown();
-        for (var f : futures) {
-            f.get(30, TimeUnit.SECONDS);
-        }
-        pool.shutdown();
+            });
+            scan.start();
+            rewrite.start();
+            go.countDown();
+            rewrite.join(30_000); // each victim rewritten EXACTLY ONCE
+            stopScan.set(true);
+            scan.join(30_000);
 
-        List<String> members = cache.keysByTag("storm");
-        assertEquals(keys, members.size(),
-                "every live key must keep its membership after the storm, got " + members);
-        try (io.lettuce.core.RedisClient probe = io.lettuce.core.RedisClient.create(redisUri);
-                var conn = probe.connect(io.lettuce.core.codec.ByteArrayCodec.INSTANCE)) {
-            assertEquals(keys, conn.sync().scard("tiercache:tags:tag-race:storm".getBytes(StandardCharsets.UTF_8)),
-                    "no phantom members and no lost memberships");
+            // FREEZE: no further victim writes before the check.
+            List<String> members = cache.keysByTag(tag);
+            for (int v = 0; v < victims; v++) {
+                assertTrue(members.contains("v" + round + "-" + v),
+                        "round " + round + ": the rewritten membership of victim " + v
+                                + " must survive the racing prune");
+            }
         }
         cache.close();
+    }
+
+    private static void awaitLatch(CountDownLatch latch) {
+        try {
+            latch.await();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 }
