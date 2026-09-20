@@ -246,4 +246,38 @@ class LettuceRemoteCacheTest {
                 .cacheName("xinst") // shared namespace on purpose
                 .build();
     }
+
+    /** Tag indexes are TTL-bounded and dead members are never returned (reviewer: PTTL=-1 growth). */
+    @Test
+    void tagIndexesExpireWithTheData() throws Exception {
+        LettuceRemoteCache<String, String> cache = LettuceRemoteCache.<String, String>builder(redisUri)
+                .cacheName("tag-ttl").build();
+        io.tiercache.Version v = new io.tiercache.Version(1, java.util.UUID.randomUUID());
+        cache.putTagged("k", io.tiercache.spi.StoredEntry.ofValue("v", v),
+                Duration.ofMillis(400), new String[]{"g"});
+        try (io.lettuce.core.RedisClient probe = io.lettuce.core.RedisClient.create(redisUri);
+                var conn = probe.connect()) {
+            Long pttl = conn.sync().pttl("tiercache:tags:tag-ttl:g");
+            assertTrue(pttl != null && pttl > 0 && pttl <= 400,
+                    "tag set must be TTL-bounded from write time, got PTTL=" + pttl);
+        }
+
+        // A dead member with a long-lived index row is filtered and pruned on lookup.
+        try (io.lettuce.core.RedisClient probe = io.lettuce.core.RedisClient.create(redisUri);
+                var conn = probe.connect()) {
+conn.sync().sadd("tiercache:tags:tag-ttl:g", "tag-ttl:ghost");
+        }
+        assertTrue(cache.keysByTag("g").stream().noneMatch("ghost"::equals),
+                "phantom members must not be returned");
+
+        // After the data TTL, the index structures are gone with the data.
+        Thread.sleep(600);
+        assertTrue(cache.keysByTag("g").isEmpty());
+        try (io.lettuce.core.RedisClient probe = io.lettuce.core.RedisClient.create(redisUri);
+                var conn = probe.connect()) {
+            assertTrue(conn.sync().keys("tiercache:tags:tag-ttl:*").isEmpty(),
+                    "tag set must expire with the data");
+        }
+        cache.close();
+    }
 }

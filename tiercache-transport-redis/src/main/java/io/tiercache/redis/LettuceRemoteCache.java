@@ -311,8 +311,11 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
     }
 
     // --- Tag registry: tiercache:tags:<cache>:<tag> sets + reverse index
-    // tiercache:tagkeys:<cache>:<key> (Redis sets have no per-member TTL;
-    // stale members are pruned on eviction and are harmless otherwise). ---
+    // tiercache:tagkeys:<cache>:<key>. Redis sets have no per-member TTL,
+    // so both structures are written with the data entry's physical TTL —
+    // they cannot grow without bound when data expires naturally. Members
+    // whose data key is gone are filtered and pruned on tag lookups;
+    // explicit evictions prune immediately via pruneTags. ---
 
     private byte[] tagSetKey(String tag) {
         return ("tiercache:tags:" + cacheName + ":" + tag).getBytes(StandardCharsets.UTF_8);
@@ -332,22 +335,35 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
         byte[] namespaced = namespaced(key);
         byte[] keyTags = keyTagsKey(namespaced);
         if (tags.length > 0) {
+            long ttlMillis = Math.max(1, ttl.toMillis());
             commands.del(keyTags);
             commands.sadd(keyTags, java.util.Arrays.stream(tags)
                     .map(t -> t.getBytes(StandardCharsets.UTF_8)).toArray(byte[][]::new));
+            commands.pexpire(keyTags, ttlMillis);
             for (String tag : tags) {
-                commands.sadd(tagSetKey(tag), namespaced);
+                byte[] setKey = tagSetKey(tag);
+                commands.sadd(setKey, namespaced);
+                commands.pexpire(setKey, ttlMillis);
             }
         }
     }
 
     @Override
     public java.util.List<K> keysByTag(String tag) {
-        java.util.Set<byte[]> members = commands.smembers(tagSetKey(tag));
+        byte[] setKey = tagSetKey(tag);
+        java.util.Set<byte[]> members = commands.smembers(setKey);
         java.util.List<K> out = new java.util.ArrayList<>(members.size());
+        java.util.List<byte[]> dead = new java.util.ArrayList<>();
         for (byte[] namespaced : members) {
-            byte[] raw = java.util.Arrays.copyOfRange(namespaced, keyPrefix.length, namespaced.length);
-            out.add(keySerializer.fromBytes(raw));
+            if (commands.exists(namespaced) > 0) {
+                byte[] raw = java.util.Arrays.copyOfRange(namespaced, keyPrefix.length, namespaced.length);
+                out.add(keySerializer.fromBytes(raw));
+            } else {
+                dead.add(namespaced);
+            }
+        }
+        if (!dead.isEmpty()) {
+            commands.srem(setKey, dead.toArray(new byte[0][]));
         }
         return out;
     }
