@@ -56,10 +56,11 @@ public class TiercacheCacheProperties extends TiercacheProperties.CacheProps {
             @Nullable Long payloadCapBytes,
             @Nullable Duration staleTtl,
             @Nullable Boolean xfetchEnabled,
-            @Nullable Duration xfetchBeta) {
+            @Nullable Duration xfetchBeta,
+            @Nullable Duration degradationStaleTtl) {
         super(l1MaxSize, l1ExpireAfterWrite, l1ExpireAfterAccess, l2Ttl, jitterAmplitude,
                 nullPolicy, nullMarkerTtl, invalidationMode, payloadCapBytes, staleTtl,
-                xfetchEnabled, xfetchBeta);
+                xfetchEnabled, xfetchBeta, degradationStaleTtl);
         this.name = name;
     }
 

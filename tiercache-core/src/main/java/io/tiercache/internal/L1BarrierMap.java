@@ -6,16 +6,20 @@ import io.tiercache.Version;
 import java.time.Duration;
 
 /**
- * Bounded per-key invalidation-barrier map for the engine: the highest
- * version this instance has seen invalidated per key (including keys
- * absent from L1). Lives in its own small class so the engine class
- * itself never references the relocated Caffeine package — shadow
- * relocation rewrites referencing classes, which breaks JaCoCo
- * class-matching against the unshaded build output.
+ * Bounded per-key L1 metadata for the engine, one entry per key: the
+ * invalidation barrier (highest version seen invalidated, recorded even
+ * for absent keys) plus the freshness deadlines of the value stored with
+ * it — all written and removed in the same atomic commit as the value, so
+ * metadata always describes the value it sits with.
  *
  * <p>Every eviction (size cap or expiry) and every bulk invalidation
- * reports through the evict callback so the engine can bump its L1
+ * reports through the protection callback so the engine can bump its L1
  * generation instead of silently forgetting protective state.
+ *
+ * <p>Lives in its own small class so the engine class itself never
+ * references the relocated Caffeine package — shadow relocation rewrites
+ * referencing classes, which breaks JaCoCo class-matching against the
+ * unshaded build output.
  *
  * <p><b>Internal — not part of the supported API.</b>
  *
@@ -24,7 +28,20 @@ import java.time.Duration;
  */
 final class L1BarrierMap<K> {
 
-    private final com.github.benmanes.caffeine.cache.Cache<K, Version> barriers;
+    /**
+     * Per-key metadata.
+     *
+     * @param highestSeen          highest version invalidated/superseded
+     *                             locally (the barrier), or {@code null}
+     * @param logicalDeadlineNanos freshness deadline of the stored value
+     *                             (store time + actual jittered TTL)
+     * @param staleServeUntilNanos stale-serving horizon
+     *                             ({@code logicalDeadline + staleWindow})
+     */
+    record L1Meta(Version highestSeen, long logicalDeadlineNanos, long staleServeUntilNanos) {
+    }
+
+    private final com.github.benmanes.caffeine.cache.Cache<K, L1Meta> barriers;
 
     /**
      * @param maxSize      maximum entries before eldest eviction
@@ -36,26 +53,37 @@ final class L1BarrierMap<K> {
         this.barriers = Caffeine.newBuilder()
                 .maximumSize(maxSize)
                 .expireAfterWrite(expiry)
-                .<K, Version>removalListener((key, value, cause) -> onProtection.run())
+                .<K, L1Meta>removalListener((key, value, cause) -> onProtection.run())
                 .build();
     }
 
-    /** The barrier version for {@code key}, or {@code null} if none. */
-    Version get(K key) {
+    /** The metadata for {@code key}, or {@code null} if none. */
+    L1Meta get(K key) {
         return barriers.getIfPresent(key);
     }
 
-    /** Records {@code version} as the highest seen for {@code key}. */
+    /** Records the barrier version only (freshness deadlines unchanged). */
     void put(K key, Version version) {
-        barriers.put(key, version);
+        barriers.asMap().merge(key, new L1Meta(version, 0L, 0L),
+                (existing, barrierOnly) -> new L1Meta(
+                        existing.highestSeen() != null
+                                && (barrierOnly.highestSeen() == null
+                                || existing.highestSeen().compareTo(barrierOnly.highestSeen()) >= 0)
+                                ? existing.highestSeen() : barrierOnly.highestSeen(),
+                        existing.logicalDeadlineNanos(), existing.staleServeUntilNanos()));
     }
 
-    /** Drops the barrier for {@code key}. */
+    /** Records full metadata (barrier + deadlines) for {@code key}. */
+    void put(K key, L1Meta meta) {
+        barriers.put(key, meta);
+    }
+
+    /** Drops the metadata for {@code key}. */
     void invalidate(K key) {
         barriers.invalidate(key);
     }
 
-    /** Drops all barriers. */
+    /** Drops all metadata. */
     void invalidateAll() {
         barriers.invalidateAll();
     }

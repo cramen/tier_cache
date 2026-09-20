@@ -99,6 +99,9 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
     private final boolean staleWindowEnabled;
     private final boolean xfetchEnabled;
     private final boolean ageTrackingEnabled;          // stale window or XFetch on
+    /** Extra L1 retention window served stale while the breaker rejects L2 calls. */
+    private final Duration degradationStaleTtl;
+    private final boolean degradationStaleEnabled;
     private final long l2TtlMillis;
     private final long staleBoundaryMillis;            // l2TtlMillis + staleTtl
     private final double xfetchBetaNanos;
@@ -273,6 +276,8 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         this.jitter = jitter;
         this.staleTtl = settings.staleTtl();
         this.staleWindowEnabled = staleTtl.toMillis() > 0;
+        this.degradationStaleTtl = settings.degradationStaleTtl();
+        this.degradationStaleEnabled = degradationStaleTtl.toNanos() > 0;
         this.xfetchEnabled = settings.xfetchEnabled();
         this.ageTrackingEnabled = staleWindowEnabled || xfetchEnabled;
         this.l2TtlMillis = settings.l2Ttl().toMillis();
@@ -295,8 +300,25 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
     public V get(K key) {
         StoredEntry<V> entry = l1.get(key);
         if (entry != null) {
-            metrics.onRequest(cacheName, CacheMetricsListener.Outcome.L1_HIT);
-            return entry.isNullMarker() ? null : entry.value();
+            L1Freshness freshness = freshnessOf(key);
+            if (freshness == L1Freshness.FRESH) {
+                metrics.onRequest(cacheName, CacheMetricsListener.Outcome.L1_HIT);
+                return entry.isNullMarker() ? null : entry.value();
+            }
+            // Logically expired under the degradation window: one classified
+            // L2 read decides — converge on HIT, serve stale on REJECTED.
+            L2Result<V> result = l2Read(key);
+            if (result.read() == L2Read.HIT) {
+                warmL1(key, result.entry());
+                metrics.onRequest(cacheName, CacheMetricsListener.Outcome.L2_HIT);
+                return result.entry().isNullMarker() ? null : result.entry().value();
+            }
+            if (result.read() == L2Read.REJECTED && freshness == L1Freshness.STALE_ALLOWED) {
+                metrics.onRequest(cacheName, CacheMetricsListener.Outcome.STALE_DEGRADED);
+                return entry.isNullMarker() ? null : entry.value();
+            }
+            metrics.onRequest(cacheName, CacheMetricsListener.Outcome.MISS);
+            return null;
         }
         entry = l2Get(key);
         if (entry != null) {
@@ -320,8 +342,23 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
     public LookupResult<V> lookup(K key) {
         StoredEntry<V> entry = l1.get(key);
         if (entry != null) {
-            metrics.onRequest(cacheName, CacheMetricsListener.Outcome.L1_HIT);
-            return toResult(entry);
+            L1Freshness freshness = freshnessOf(key);
+            if (freshness == L1Freshness.FRESH) {
+                metrics.onRequest(cacheName, CacheMetricsListener.Outcome.L1_HIT);
+                return toResult(entry);
+            }
+            L2Result<V> result = l2Read(key);
+            if (result.read() == L2Read.HIT) {
+                warmL1(key, result.entry());
+                metrics.onRequest(cacheName, CacheMetricsListener.Outcome.L2_HIT);
+                return toResult(result.entry());
+            }
+            if (result.read() == L2Read.REJECTED && freshness == L1Freshness.STALE_ALLOWED) {
+                metrics.onRequest(cacheName, CacheMetricsListener.Outcome.STALE_DEGRADED);
+                return toResult(entry);
+            }
+            metrics.onRequest(cacheName, CacheMetricsListener.Outcome.MISS);
+            return LookupResult.miss();
         }
         entry = l2Get(key);
         if (entry != null) {
@@ -345,8 +382,22 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
     public V getOrCompute(K key, Function<? super K, ? extends V> loader) {
         StoredEntry<V> entry = l1.get(key);
         if (entry != null) {
-            metrics.onRequest(cacheName, CacheMetricsListener.Outcome.L1_HIT);
-            return entry.isNullMarker() ? null : entry.value();
+            L1Freshness freshness = freshnessOf(key);
+            if (freshness == L1Freshness.FRESH) {
+                metrics.onRequest(cacheName, CacheMetricsListener.Outcome.L1_HIT);
+                return entry.isNullMarker() ? null : entry.value();
+            }
+            L2Result<V> result = l2Read(key);
+            if (result.read() == L2Read.HIT) {
+                warmL1(key, result.entry());
+                metrics.onRequest(cacheName, CacheMetricsListener.Outcome.L2_HIT);
+                return result.entry().isNullMarker() ? null : result.entry().value();
+            }
+            if (result.read() == L2Read.REJECTED && freshness == L1Freshness.STALE_ALLOWED) {
+                metrics.onRequest(cacheName, CacheMetricsListener.Outcome.STALE_DEGRADED);
+                return entry.isNullMarker() ? null : entry.value();
+            }
+            // FAILED, MISS, or past the window: the loader fallback below.
         }
         entry = l2Get(key);
         if (entry != null) {
@@ -539,7 +590,8 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
     public void applyUpdateL1(Object key, Object value, Version eventVersion) {
         K typedKey = (K) key;
         synchronized (l1LockFor(typedKey)) {
-            Version highestSeen = l1Metas.get(typedKey);
+            Version highestSeen = l1Metas.get(typedKey) != null
+                    ? l1Metas.get(typedKey).highestSeen() : null;
             // First reject: an UPDATE older than the barrier is stale.
             if (highestSeen != null && eventVersion.compareTo(highestSeen) < 0) {
                 return;
@@ -553,9 +605,13 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
             }
             // One atomic step: lift the barrier AND install the payload (its
             // own version always passes — equality is not staleness).
+            Duration ttl = jitter.apply(settings.l1ExpireAfterWrite(), settings.jitterAmplitude());
+            long logicalDeadline = System.nanoTime() + ttl.toNanos();
             l1.put(typedKey, StoredEntry.ofValue((V) value, eventVersion),
-                    jitter.apply(settings.l1ExpireAfterWrite(), settings.jitterAmplitude()));
-            l1Metas.put(typedKey, maxVersion(eventVersion, highestSeen));
+                    degradationStaleEnabled ? ttl.plus(degradationStaleTtl) : ttl);
+            l1Metas.put(typedKey, new L1BarrierMap.L1Meta(
+                    maxVersion(eventVersion, highestSeen), logicalDeadline,
+                    logicalDeadline + degradationStaleTtl.toNanos()));
         }
     }
 
@@ -591,15 +647,18 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
             if (generationAtStart != l1Generation.get()) {
                 return false;
             }
-            Version highestSeen = l1Metas.get(key);
+            Version highestSeen = l1Metas.get(key) != null ? l1Metas.get(key).highestSeen() : null;
             if (entry.version() != null && highestSeen != null
                     && entry.version().compareTo(highestSeen) < 0) {
                 return false;
             }
-            l1.put(key, entry, ttl);
-            if (entry.version() != null) {
-                l1Metas.put(key, maxVersion(entry.version(), highestSeen));
-            }
+            // Freshness deadlines are stamped with the ACTUAL jittered TTL;
+            // physical retention additionally covers the degradation window.
+            long logicalDeadline = System.nanoTime() + ttl.toNanos();
+            long staleServeUntil = logicalDeadline + degradationStaleTtl.toNanos();
+            l1.put(key, entry, degradationStaleEnabled ? ttl.plus(degradationStaleTtl) : ttl);
+            l1Metas.put(key, new L1BarrierMap.L1Meta(
+                    maxVersion(entry.version(), highestSeen), logicalDeadline, staleServeUntil));
             return true;
         }
     }
@@ -612,7 +671,8 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
      */
     private void applyInvalidateL1(K key, Version eventVersion) {
         synchronized (l1LockFor(key)) {
-            Version highestSeen = l1Metas.get(key);
+            Version highestSeen = l1Metas.get(key) != null
+                    ? l1Metas.get(key).highestSeen() : null;
             StoredEntry<V> entry = l1.get(key);
             if (entry != null && (entry.version() == null
                     || eventVersion.compareTo(entry.version()) > 0)) {
@@ -1060,6 +1120,80 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         } finally {
             metrics.onL2OperationEnd(cacheName, "get", hit, span);
         }
+    }
+
+    /** Classified L2 read outcome for the permit-based degradation rule. */
+    private enum L2Read {
+        HIT, MISS, REJECTED, FAILED
+    }
+
+    private record L2Result<V>(L2Read read, StoredEntry<V> entry) {
+    }
+
+    /**
+     * One classified L2 read — the breaker permit is acquired exactly once:
+     * HIT/MISS on an admitted call, REJECTED when the breaker denies it
+     * (OPEN, or HALF_OPEN with no probe permit left), FAILED on a call that
+     * errored.
+     */
+    private L2Result<V> l2Read(K key) {
+        if (breaker != null && breaker.isOpen()) {
+            return new L2Result<>(L2Read.REJECTED, null);
+        }
+        long start = System.nanoTime();
+        Object span = metrics.onL2OperationStart(cacheName, "get");
+        boolean hit = false;
+        try {
+            StoredEntry<V> result = l2.get(key);
+            hit = result != null;
+            metrics.onLatency(cacheName, CacheMetricsListener.Level.L2, System.nanoTime() - start);
+            return result != null ? new L2Result<>(L2Read.HIT, result)
+                    : new L2Result<>(L2Read.MISS, null);
+        } catch (L2UnavailableException e) {
+            return new L2Result<>(
+                    e == L2UnavailableException.OPEN ? L2Read.REJECTED : L2Read.FAILED, null);
+        } finally {
+            metrics.onL2OperationEnd(cacheName, "get", hit, span);
+        }
+    }
+
+    /** Freshness of a physically present L1 entry under the degradation window. */
+    private enum L1Freshness {
+        /** Within the logical deadline (or the window is off). */
+        FRESH,
+        /** Past the logical deadline but within the stale-serving horizon. */
+        STALE_ALLOWED,
+        /** Past the horizon (or unknown metadata). Never stale-served. */
+        EXPIRED
+    }
+
+    /**
+     * Classifies a physically present L1 entry by its stamped deadlines.
+     * A fresh hit with expire-after-access configured slides the freshness
+     * and stale horizons forward; a stale access never moves anything.
+     */
+    private L1Freshness freshnessOf(K key) {
+        if (!degradationStaleEnabled) {
+            return L1Freshness.FRESH;
+        }
+        L1BarrierMap.L1Meta meta = l1Metas.get(key);
+        if (meta == null || meta.logicalDeadlineNanos() == 0L) {
+            return L1Freshness.EXPIRED; // unknown metadata: never stale-served
+        }
+        long now = System.nanoTime();
+        if (now <= meta.logicalDeadlineNanos()) {
+            // Fresh access slides freshness + the stale horizon (the
+            // store-time retention floor is protected at the L1 expiry level).
+            java.time.Duration accessTtl = settings.l1ExpireAfterAccess();
+            if (accessTtl != null) {
+                long logical = now + accessTtl.toNanos();
+                l1Metas.put(key, new L1BarrierMap.L1Meta(meta.highestSeen(), logical,
+                        logical + degradationStaleTtl.toNanos()));
+            }
+            return L1Freshness.FRESH;
+        }
+        return now <= meta.staleServeUntilNanos() ? L1Freshness.STALE_ALLOWED
+                : L1Freshness.EXPIRED;
     }
 
     /** @return TRUE stored, FALSE lost a version race, NULL unavailable/failed. */

@@ -64,7 +64,7 @@ public class TiercacheProperties {
         this.enabled = enabled;
         this.redisUri = redisUri;
         this.defaults = defaults != null ? defaults : new DefaultCacheProps(
-                null, null, null, null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null, null, null, null);
         this.invalidation = invalidation != null ? invalidation : new InvalidationProps(null, null, null);
         this.asyncExecutorThreads = asyncExecutorThreads != null ? asyncExecutorThreads : 0;
     }
@@ -219,6 +219,7 @@ public class TiercacheProperties {
         private final Duration staleTtl;
         private final Boolean xfetchEnabled;
         private final Duration xfetchBeta;
+        private final Duration degradationStaleTtl;
 
         /**
          * Null-caching policy bound from the {@code null-policy} property.
@@ -266,7 +267,8 @@ public class TiercacheProperties {
                 @Nullable Long payloadCapBytes,
                 @Nullable Duration staleTtl,
                 @Nullable Boolean xfetchEnabled,
-                @Nullable Duration xfetchBeta) {
+                @Nullable Duration xfetchBeta,
+                @Nullable Duration degradationStaleTtl) {
             this.l1MaxSize = l1MaxSize;
             this.l1ExpireAfterWrite = l1ExpireAfterWrite;
             this.l1ExpireAfterAccess = l1ExpireAfterAccess;
@@ -279,6 +281,7 @@ public class TiercacheProperties {
             this.staleTtl = staleTtl;
             this.xfetchEnabled = xfetchEnabled;
             this.xfetchBeta = xfetchBeta;
+            this.degradationStaleTtl = degradationStaleTtl;
         }
 
         /**
@@ -399,6 +402,18 @@ public class TiercacheProperties {
         }
 
         /**
+         * Returns the degradation stale window (extra L1 retention served
+         * stale while the L2 circuit breaker rejects calls).
+         *
+         * @return the degradation stale TTL, or {@code null} to inherit
+         * @since 1.4.0
+         */
+        @Nullable
+        public Duration getDegradationStaleTtl() {
+            return degradationStaleTtl;
+        }
+
+        /**
          * Returns whether XFetch early refresh of hot keys is enabled.
          *
          * @return the XFetch switch, or {@code null} to inherit
@@ -475,6 +490,9 @@ public class TiercacheProperties {
             if (xfetchBeta != null) {
                 override.xfetchBeta(xfetchBeta);
             }
+            if (degradationStaleTtl != null) {
+                override.degradationStaleTtl(degradationStaleTtl);
+            }
             return override;
         }
     }
@@ -518,10 +536,11 @@ public class TiercacheProperties {
                 @Nullable Long payloadCapBytes,
                 @Nullable Duration staleTtl,
                 @Nullable Boolean xfetchEnabled,
-                @Nullable Duration xfetchBeta) {
+                @Nullable Duration xfetchBeta,
+                @Nullable Duration degradationStaleTtl) {
             super(l1MaxSize, l1ExpireAfterWrite, l1ExpireAfterAccess, l2Ttl, jitterAmplitude,
                     nullPolicy, nullMarkerTtl, invalidationMode, payloadCapBytes, staleTtl,
-                    xfetchEnabled, xfetchBeta);
+                    xfetchEnabled, xfetchBeta, degradationStaleTtl);
         }
     }
 }

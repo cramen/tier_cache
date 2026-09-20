@@ -55,9 +55,18 @@ public final class CaffeineLocalCache<K, V> implements LocalCache<K, V> {
                     public long expireAfterRead(K key, Holder<V> value, long currentTime,
                             long currentDuration) {
                         // expire-after-access, if configured
-                        return settings.l1ExpireAfterAccess() != null
-                                ? settings.l1ExpireAfterAccess().toNanos()
-                                : currentDuration;
+                        if (settings.l1ExpireAfterAccess() == null) {
+                            return currentDuration;
+                        }
+                        long access = settings.l1ExpireAfterAccess().toNanos();
+                        if (settings.degradationStaleTtl().isZero()) {
+                            return access;
+                        }
+                        // With the degradation window on, access slides the
+                        // horizon but never shortens the store-time floor:
+                        // retention is max(current, access TTL + window).
+                        return Math.max(currentDuration,
+                                access + settings.degradationStaleTtl().toNanos());
                     }
                 })
                 .build();

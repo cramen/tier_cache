@@ -60,6 +60,7 @@ property name. Properties are shown relative to a level prefix — use
 | `stale-ttl` | `staleTtl` | `0` (disabled) | duration | Stale-while-revalidate window served from L2 past the entry TTL. Must be `>= 0`. See [Stale window semantics](#stale-window-semantics). |
 | `xfetch-enabled` | `xfetchEnabled` | `false` | boolean | Probabilistic early refresh (XFetch) of fresh L2 entries. See [XFetch](#xfetch). |
 | `xfetch-beta` | `xfetchBeta` | `1s` | duration | XFetch tuning factor. Must be positive when XFetch is enabled. Smaller values refresh earlier/more aggressively. |
+| `degradation-stale-ttl` | `degradationStaleTtl` | `0` (disabled) | duration | Extra L1 retention window served stale while the L2 circuit breaker rejects calls (OPEN, or HALF_OPEN with no probe permit). Must be `>= 0`. See [Degradation stale window](#degradation-stale-window). |
 
 Per-cache programmatic equivalents: `CacheOverride` exposes the same eleven
 knobs as nullable builder-style setters (`l1MaxSize(long)`,
@@ -215,6 +216,31 @@ is flushed for the affected caches — signalled via log, the
 `tiercache.invalidation{direction="dropped"}` metric, and the
 `onJournalOverflow` listener callback. A hand-built invalidation engine
 without a journal always falls back to a full flush.
+
+## Degradation stale window
+
+`degradation-stale-ttl` (per cache, default `0` = disabled) is the outage
+counterpart of the stale window, but for L1. When configured, L1 entries
+are physically retained for `L1 TTL + degradation-stale-ttl` (the engine
+tracks freshness with its own per-entry deadlines stamped at every L1
+store — never the L2 write timestamp), and while the breaker **rejects** L2
+calls — OPEN, or HALF_OPEN with no probe permit left — a logically expired
+but retained entry is served stale **without a loader call** and counted as
+`tiercache.requests{result="stale_degraded"}`. Reads that get a permit
+(CLOSED, or a HALF_OPEN probe) always follow the normal path, so probes can
+close the breaker. Fresh accesses with `l1-expire-after-access` configured
+slide freshness and the stale horizon without ever shortening the
+store-time retention floor; stale accesses never extend anything.
+
+Trade-offs to weigh before enabling: entries live longer in L1 (memory
+bounded by `window / L1 TTL x working set`, still capped by `l1-max-size`),
+and the knob changes nothing in normal mode — it only serves staleness
+during outages. Writes made while Redis is fully down are L1-only and are
+NOT healed by journal replay: a stale L2 copy with a long TTL can re-warm
+L1 repeatedly after recovery, so the divergence bound is the stale L2
+copy's remaining TTL plus one L1 warm — not one L1 TTL. The default (off)
+keeps the previous behavior exactly, including the loader fallback during
+outages.
 
 ## Example
 

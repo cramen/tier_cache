@@ -22,6 +22,8 @@ public interface CacheMetricsListener {
      */
     enum Outcome {
         /** Served from L1. */
+        /** Served a physically retained L1 entry stale while the breaker rejected L2. */
+        STALE_DEGRADED,
         L1_HIT,
         /** Served from L2 (L1 warmed). */
         L2_HIT,

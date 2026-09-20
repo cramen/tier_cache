@@ -7,6 +7,18 @@ target versions.
 
 For the full list of additions and fixes, see [CHANGELOG.md](CHANGELOG.md).
 
+## Unreleased
+
+- New opt-in knob `tiercache.degradation-stale-ttl` (per cache, default `0`
+  = unchanged): serves physically retained L1 entries stale while the L2
+  breaker rejects calls, instead of every expired key falling to the loader
+  during an outage. Off by default — existing behavior is identical unless
+  you set it. `CacheSettings` gained a record component with a compatible
+  old-arity constructor; note the documented residual for full-outage
+  writes (no replay healing; the stale L2 copy can re-warm L1 until its own
+  TTL) and the expire-after-access refinement that applies only when the
+  knob is on.
+
 ## 1.3.0
 
 - Replay cursor protocol replaced (bug fix, no API change): the replay

@@ -271,6 +271,7 @@ public class TiercacheProperties {
         private io.tiercache.InvalidationMode invalidationMode;
         private Long payloadCapBytes;
         private Duration staleTtl;
+        private Duration degradationStaleTtl;
         private Boolean xfetchEnabled;
         private Duration xfetchBeta;
 
@@ -507,6 +508,27 @@ public class TiercacheProperties {
         }
 
         /**
+         * Returns the degradation stale window (extra L1 retention served
+         * stale while the L2 circuit breaker rejects calls).
+         *
+         * @return the degradation stale TTL, or {@code null} to inherit
+         * @since 1.4.0
+         */
+        public Duration getDegradationStaleTtl() {
+            return degradationStaleTtl;
+        }
+
+        /**
+         * Sets the degradation stale window.
+         *
+         * @param degradationStaleTtl the degradation stale TTL
+         * @since 1.4.0
+         */
+        public void setDegradationStaleTtl(Duration degradationStaleTtl) {
+            this.degradationStaleTtl = degradationStaleTtl;
+        }
+
+        /**
          * Returns whether XFetch early refresh of hot keys is enabled.
          *
          * @return the XFetch switch, or {@code null} to inherit the defaults
@@ -595,6 +617,9 @@ public class TiercacheProperties {
             }
             if (staleTtl != null) {
                 override.staleTtl(staleTtl);
+            }
+            if (degradationStaleTtl != null) {
+                override.degradationStaleTtl(degradationStaleTtl);
             }
             if (xfetchEnabled != null) {
                 override.xfetchEnabled(xfetchEnabled);

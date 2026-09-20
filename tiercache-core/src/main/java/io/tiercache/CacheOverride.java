@@ -21,6 +21,7 @@ public final class CacheOverride {
     private Duration staleTtl;
     private Boolean xfetchEnabled;
     private Duration xfetchBeta;
+    private Duration degradationStaleTtl;
 
     /**
      * Creates an empty override: every field inherits the global defaults
@@ -156,6 +157,21 @@ public final class CacheOverride {
     }
 
     /**
+     * Sets the degradation stale window: extra L1 retention served stale
+     * while the L2 circuit breaker rejects calls.
+     *
+     * @param degradationStaleTtl the window, or {@code null} to inherit;
+     *                            {@code Duration.ZERO} disables stale
+     *                            degraded serving
+     * @return this override
+     * @since 1.4.0
+     */
+    public CacheOverride degradationStaleTtl(Duration degradationStaleTtl) {
+        this.degradationStaleTtl = degradationStaleTtl;
+        return this;
+    }
+
+    /**
      * Overrides the XFetch tuning factor.
      *
      * @param xfetchBeta XFetch beta; smaller values trigger early refresh
@@ -188,6 +204,7 @@ public final class CacheOverride {
                 payloadCapBytes != null ? payloadCapBytes : defaults.payloadCapBytes(),
                 staleTtl != null ? staleTtl : defaults.staleTtl(),
                 xfetchEnabled != null ? xfetchEnabled : defaults.xfetchEnabled(),
-                xfetchBeta != null ? xfetchBeta : defaults.xfetchBeta());
+                xfetchBeta != null ? xfetchBeta : defaults.xfetchBeta(),
+                degradationStaleTtl != null ? degradationStaleTtl : defaults.degradationStaleTtl());
     }
 }

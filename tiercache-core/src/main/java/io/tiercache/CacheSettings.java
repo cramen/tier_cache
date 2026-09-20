@@ -24,6 +24,9 @@ import java.util.Objects;
  *                           L2 entries; default off
  * @param xfetchBeta         XFetch tuning factor; smaller values trigger
  *                           early refresh more aggressively
+ * @param degradationStaleTtl extra L1 retention window served stale while
+ *                           the L2 circuit breaker rejects calls;
+ *                           {@code Duration.ZERO} disables it (default)
  * @since 0.1.0
  */
 public record CacheSettings(
@@ -37,7 +40,8 @@ public record CacheSettings(
         long payloadCapBytes,
         Duration staleTtl,
         boolean xfetchEnabled,
-        Duration xfetchBeta) {
+        Duration xfetchBeta,
+        Duration degradationStaleTtl) {
 
     /**
      * Validates the raw field values (presence, positivity, ranges). Value
@@ -93,6 +97,38 @@ public record CacheSettings(
         // io.tiercache.internal.CacheConfigValidator.
         Objects.requireNonNull(staleTtl, "staleTtl");
         Objects.requireNonNull(xfetchBeta, "xfetchBeta");
+        Objects.requireNonNull(degradationStaleTtl, "degradationStaleTtl");
+        if (degradationStaleTtl.isNegative()) {
+            throw new IllegalArgumentException(
+                    "degradationStaleTtl must be zero or positive, got " + degradationStaleTtl);
+        }
+    }
+
+    /**
+     * Compatibility constructor at the pre-1.4.0 arity: no degradation
+     * stale window (the default behavior).
+     *
+     * @param l1MaxSize          maximum number of entries in L1
+     * @param l1ExpireAfterWrite L1 TTL since write (before jitter)
+     * @param l1ExpireAfterAccess L1 TTL since last access, or {@code null}
+     *                            to disable
+     * @param l2Ttl              L2 entry TTL
+     * @param jitterAmplitude    TTL jitter amplitude as a fraction in [0, 1)
+     * @param nullPolicy         null-caching policy
+     * @param invalidationMode   invalidation event mode
+     * @param payloadCapBytes    max payload bytes for UPDATE events
+     * @param staleTtl           stale-while-revalidate window
+     * @param xfetchEnabled      probabilistic early refresh of fresh L2 entries
+     * @param xfetchBeta         XFetch tuning factor
+     * @since 0.1.0
+     */
+    public CacheSettings(long l1MaxSize, Duration l1ExpireAfterWrite,
+            Duration l1ExpireAfterAccess, Duration l2Ttl, double jitterAmplitude,
+            NullPolicy nullPolicy, InvalidationMode invalidationMode, long payloadCapBytes,
+            Duration staleTtl, boolean xfetchEnabled, Duration xfetchBeta) {
+        this(l1MaxSize, l1ExpireAfterWrite, l1ExpireAfterAccess, l2Ttl, jitterAmplitude,
+                nullPolicy, invalidationMode, payloadCapBytes, staleTtl, xfetchEnabled,
+                xfetchBeta, Duration.ZERO);
     }
 
     /**
@@ -138,6 +174,7 @@ public record CacheSettings(
                 64 * 1024,
                 Duration.ZERO,
                 false,
-                Duration.ofSeconds(1));
+                Duration.ofSeconds(1),
+                Duration.ZERO);
     }
 }

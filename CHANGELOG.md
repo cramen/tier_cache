@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Degradation stale window (`degradationStaleTtl` / `tiercache.degradation-stale-ttl`, per cache, default off): during an L2 outage, physically retained but logically expired L1 entries can be served stale without hitting the source — the failure mode that overloaded origins in load testing. Freshness is tracked by engine-stamped per-entry deadlines (never the L2 write timestamp), stale serving is breaker-gated (OPEN, or HALF_OPEN without a probe permit — probes always flow so the breaker can close), fresh accesses slide the horizon without shortening the store-time retention floor, stale accesses never extend it, and every stale serve is counted (`tiercache.requests{result="stale_degraded"}`). `CacheSettings` gained the component with a compatible old-arity constructor; `CacheOverride`, both starter property bindings, and the Kotlin DSL are covered. See `docs/configuration.md` for the memory trade-off and the residual contract for full-outage writes (not healed by replay; bounded by the stale L2 copy's remaining TTL, not one L1 TTL).
+
 ### Fixed
 
 - The Spring Boot starter and the Micronaut integration now build the invalidation engine with the application's configured `CacheMetricsListener` instead of silently selecting the no-op listener, so invalidation traffic (sent, received, replayed, dropped) is observable like every other metric family; without a listener the wiring falls back to NOOP explicitly.
