@@ -7,7 +7,7 @@ target versions.
 
 For the full list of additions and fixes, see [CHANGELOG.md](CHANGELOG.md).
 
-## Unreleased
+## 1.4.0
 
 - New opt-in knob `tiercache.degradation-stale-ttl` (per cache, default `0`
   = unchanged): serves physically retained L1 entries stale while the L2
