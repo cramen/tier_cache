@@ -104,4 +104,28 @@ class TierCacheDslTest {
             assertThat(cache.get("k")).isEqualTo("v")
         }
     }
+
+    @Test
+    fun `degradation stale ttl resolves through the dsl`() {
+        val dsl = TierCacheFactoryDsl(Dispatchers.IO)
+        dsl.defaults {
+            degradationStaleTtl = Duration.ofSeconds(42)
+        }
+        dsl.cache("special") {
+            degradationStaleTtl = Duration.ofSeconds(7)
+        }
+        dsl.cache("inherits") {}
+
+        val settings = dsl.resolvedDefaults()!!
+        assertThat(settings.degradationStaleTtl()).isEqualTo(Duration.ofSeconds(42))
+        assertThat(dsl.resolvedOverrides().getValue("special").resolve(settings)
+            .degradationStaleTtl()).isEqualTo(Duration.ofSeconds(7))
+        assertThat(dsl.resolvedOverrides().getValue("inherits").resolve(settings)
+            .degradationStaleTtl()).isEqualTo(Duration.ofSeconds(42))
+
+        val unset = TierCacheFactoryDsl(Dispatchers.IO)
+        unset.defaults { l1MaxSize = 1 }
+        assertThat(unset.resolvedDefaults()!!.degradationStaleTtl())
+            .isEqualTo(Duration.ZERO)
+    }
 }

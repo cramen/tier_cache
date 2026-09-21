@@ -146,6 +146,11 @@ public final class LettuceLockProvider implements DistributedLockProvider, AutoC
      * documented residual (an orphan self-expiring within one lease).
      */
     private void scheduleCompensation(String key, String token, Duration lease) {
+        if (closed) {
+            // No machinery is created and no retry is accepted after close;
+            // the caller still sees the original acquire exception.
+            return;
+        }
         long windowMillis = Math.max(2 * lease.toMillis(), COMPENSATION_MIN_WINDOW.toMillis());
         long deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(windowMillis);
         if (pendingCompensations.incrementAndGet() > COMPENSATION_PENDING_CAP) {
@@ -154,12 +159,26 @@ public final class LettuceLockProvider implements DistributedLockProvider, AutoC
                     + "If the acquire executed, the orphan expires within its lease.", key);
             return;
         }
-        scheduleCompensationAttempt(key, token, deadlineNanos);
+        try {
+            scheduleCompensationAttempt(key, token, deadlineNanos);
+        } catch (java.util.concurrent.RejectedExecutionException e) {
+            // The scheduler shut down between the checks and the schedule:
+            // best-effort must never replace the original acquire failure.
+            pendingCompensations.decrementAndGet();
+            log.debug("Lock compensation scheduling raced provider close for '{}'", key, e);
+        }
     }
 
     private void scheduleCompensationAttempt(String key, String token, long deadlineNanos) {
-        compensationScheduler().schedule(() -> attemptCompensation(key, token, deadlineNanos),
-                COMPENSATION_RETRY_MILLIS, TimeUnit.MILLISECONDS);
+        try {
+            compensationScheduler().schedule(() -> attemptCompensation(key, token, deadlineNanos),
+                    COMPENSATION_RETRY_MILLIS, TimeUnit.MILLISECONDS);
+        } catch (java.util.concurrent.RejectedExecutionException e) {
+            // Closed between the checks and the (re)schedule: release the
+            // bookkeeping; best-effort stays silent.
+            pendingCompensations.decrementAndGet();
+            log.debug("Lock compensation scheduling raced provider close for '{}'", key, e);
+        }
     }
 
     private void attemptCompensation(String key, String token, long deadlineNanos) {
@@ -192,7 +211,7 @@ public final class LettuceLockProvider implements DistributedLockProvider, AutoC
         if (scheduler == null) {
             synchronized (schedulerLock) {
                 scheduler = compensationScheduler;
-                if (scheduler == null) {
+                if (scheduler == null && !closed) {
                     scheduler = Executors.newScheduledThreadPool(COMPENSATION_THREADS, runnable -> {
                         Thread thread = new Thread(runnable, "tiercache-lock-compensation");
                         thread.setDaemon(true);
@@ -201,6 +220,10 @@ public final class LettuceLockProvider implements DistributedLockProvider, AutoC
                     compensationScheduler = scheduler;
                 }
             }
+        }
+        if (scheduler == null) {
+            throw new java.util.concurrent.RejectedExecutionException(
+                    "lock provider is closed");
         }
         return scheduler;
     }

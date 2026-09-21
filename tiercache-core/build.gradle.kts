@@ -43,6 +43,11 @@ dependencies {
 
 tasks.withType<Test> {
     useJUnitPlatform()
+    // Load main classes from the build output BEFORE the shadow jar on the
+    // classpath: otherwise tests load them from the jar (whose relocated
+    // copies differ in CRC from the classes the JaCoCo gate analyzes, so
+    // every caffeine-referencing class silently loses its coverage).
+    classpath = files(sourceSets.main.get().output) + classpath
 }
 
 // --- Shading (design D3): Caffeine is relocated so it never clashes with a

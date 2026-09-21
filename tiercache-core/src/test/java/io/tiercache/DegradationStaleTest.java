@@ -392,17 +392,232 @@ class DegradationStaleTest {
      * not stamp, e.g. the degraded setIfAbsent) is never stale-served.
      */
     @Test
-    void unknownMetadataIsNeverStaleServed() {
+    void degradedSetIfAbsentWinnerIsImmediatelyAvailable() {
         Rig rig = rig(settings(L1_TTL, null, WINDOW));
         rig.breaker().onFailure(); // outage first: putIfAbsent goes L1-only
         assertTrue(rig.cache().putIfAbsent("k", "v1"),
-                "degraded setIfAbsent stores locally without stamping metadata");
-        sleep(50);
+                "the degraded set-if-absent wins");
 
-        assertEquals("fresh", rig.cache().getOrCompute("k", key -> "fresh"),
-                "missing metadata must never be treated as stale-servable");
-        assertEquals(0, rig.metrics().count(CacheMetricsListener.Outcome.STALE_DEGRADED));
+        assertEquals("v1", rig.cache().get("k"),
+                "the winning insert is immediately readable");
+        assertEquals("v1", rig.cache().getOrCompute("k", throwingLoader()),
+                "and needs no reload — the winner got full metadata and retention");
+        assertEquals(0, rig.metrics().count(CacheMetricsListener.Outcome.STALE_DEGRADED),
+                "it is served as fresh within its logical TTL, not as stale");
+
+        // The loser still changes nothing.
+        org.junit.jupiter.api.Assertions.assertFalse(rig.cache().putIfAbsent("k", "v2"),
+                "the existing entry wins");
+        assertEquals("v1", rig.cache().get("k"));
     }
+
+    /**
+     * Freshness-aware coordinated path: with a healthy Redis (CLOSED
+     * breaker) a logically expired retained entry is NOT a hit — the
+     * coordinated load goes to the loader (the Docker healthy-stale probe).
+     */
+    @Test
+    void coordinatedPathNeverServesLogicallyExpiredAsHit() {
+        CircuitBreaker breaker = new CircuitBreaker(fastBreaker(), new CircuitBreaker.Listener() {
+            @Override
+            public void onOpen() {
+            }
+
+            @Override
+            public void onClose() {
+            }
+        });
+        InMemoryRemoteCache<String, String> delegate = new InMemoryRemoteCache<>();
+        RecordingMetrics metrics = new RecordingMetrics();
+        RemoteCache<String, String> l2 = new CircuitBreakerRemoteCache<>(delegate, breaker);
+        java.util.concurrent.ScheduledExecutorService watchdog =
+                java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
+        try {
+            DefaultTierCache<String, String> cache = new DefaultTierCache<>("c",
+                    new CountingLocalCache<>(), l2, settings(L1_TTL, null, WINDOW), true,
+                    new io.tiercache.testkit.InMemoryLockProvider(), watchdog, null, null,
+                    breaker, metrics);
+            cache.put("k", "v0");
+            // L2 expires quickly; L1 entry is retained (knob on) but logically dead.
+            delegate.evict("k");
+            sleep(250); // past the logical L1 TTL; breaker stays CLOSED
+            AtomicInteger loads = new AtomicInteger();
+
+            assertEquals("v1", cache.getOrCompute("k", key -> {
+                loads.incrementAndGet();
+                return "v1";
+            }), "a healthy Redis must never serve the retained stale entry");
+            assertEquals(1, loads.get(), "the coordinated path went to the loader");
+            assertEquals("v1", cache.getOrCompute("k", throwingLoader()),
+                "the fresh reloaded entry IS a hit on the coordinated double-check");
+            assertEquals(0, metrics.count(CacheMetricsListener.Outcome.STALE_DEGRADED),
+                    "no stale serving while the breaker is CLOSED");
+        } finally {
+            watchdog.shutdownNow();
+        }
+    }
+
+    /**
+     * Late capture fix: the generation is captured at operation start, so a
+     * warm after an L2 read that raced a generation bump is refused — the
+     * caller may receive the L2 value, but L1 must NOT keep it.
+     */
+    @Test
+    void generationBumpDuringL2ReadRefusesTheWarm() throws Exception {
+        CircuitBreaker breaker = new CircuitBreaker(fastBreaker(), new CircuitBreaker.Listener() {
+            @Override
+            public void onOpen() {
+            }
+
+            @Override
+            public void onClose() {
+            }
+        });
+        InMemoryRemoteCache<String, String> delegate = new InMemoryRemoteCache<>();
+        java.util.concurrent.CountDownLatch getEntered = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch releaseGet = new java.util.concurrent.CountDownLatch(1);
+        RecordingMetrics metrics = new RecordingMetrics();
+        // Wrap the delegate's read with a gate.
+        RemoteCache<String, String> gated = new RemoteCache<>() {
+            final InMemoryRemoteCache<String, String> inner = delegate;
+
+            @Override
+            public StoredEntry<String> get(String key) {
+                getEntered.countDown();
+                try {
+                    releaseGet.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return inner.get(key);
+            }
+
+            @Override
+            public void put(String key, StoredEntry<String> entry, Duration ttl) {
+                inner.put(key, entry, ttl);
+            }
+
+            @Override
+            public void evict(String key) {
+                inner.evict(key);
+            }
+
+            @Override
+            public void clear() {
+                inner.clear();
+            }
+
+            @Override
+            public boolean setIfAbsent(String key, StoredEntry<String> entry, Duration ttl) {
+                return inner.setIfAbsent(key, entry, ttl);
+            }
+        };
+        RemoteCache<String, String> guarded = new CircuitBreakerRemoteCache<>(gated, breaker);
+        DefaultTierCache<String, String> cache = new DefaultTierCache<>("c",
+                new CountingLocalCache<>(), guarded, settings(L1_TTL, null, WINDOW), true,
+                null, null, null, null, breaker, metrics);
+        cache.put("k", "old");
+        cache.evictAllL1(); // L1 empty, L2 still holds "old"
+
+        java.util.concurrent.atomic.AtomicReference<String> returned = new java.util.concurrent.atomic.AtomicReference<>();
+        Thread reader = new Thread(() -> returned.set(cache.get("k")));
+        reader.start();
+        if (!getEntered.await(5, java.util.concurrent.TimeUnit.SECONDS)) {
+            throw new AssertionError("the L2 read was never reached");
+        }
+        cache.evictAllL1(); // generation bump mid-read
+        releaseGet.countDown();
+        reader.join(5_000);
+
+        // The caller may receive what L2 said; L1 must NOT retain it.
+        org.junit.jupiter.api.Assertions.assertNull(cache.versionOfL1Entry("k"),
+                "the generation bump refuses the warm: L1 stays empty");
+    }
+
+    /**
+     * Fresh-access slide can never cross-assign deadlines: replacing the
+     * value with a short-lived marker while readers slide must keep the
+     * marker's OWN TTL.
+     */
+    @Test
+    void freshAccessSlideNeverCrossAssignsDeadlines() throws Exception {
+        CacheSettings settings = new CacheSettings(10_000, Duration.ofSeconds(10),
+                Duration.ofMillis(50), Duration.ofHours(1), 0.0,
+                NullPolicy.allow(Duration.ofMillis(60)), InvalidationMode.INVALIDATE,
+                64 * 1024, Duration.ZERO, false, Duration.ofSeconds(1), WINDOW);
+        Rig rig = rig(settings);
+        rig.cache().put("k", "v1");
+        java.util.concurrent.atomic.AtomicBoolean stop = new java.util.concurrent.atomic.AtomicBoolean();
+        Thread slider = new Thread(() -> {
+            while (!stop.get()) {
+                rig.cache().get("k");
+            }
+        });
+        slider.start();
+        sleep(30);
+        rig.cache().putNull("k"); // the marker must live by its own 60 ms TTL
+        stop.set(true);
+        slider.join(5_000);
+        sleep(150); // well past the marker TTL, within any leaked long deadline
+
+        assertEquals("real", rig.cache().getOrCompute("k", key -> "real"),
+                "the marker expires on its own TTL, never on the previous value's");
+    }
+
+    /**
+     * Admitted L2 HIT on the retained path goes through the normal
+     * age/SWR classification: a stale SWR frame triggers revalidation
+     * instead of being warmed as fresh.
+     */
+    @Test
+    void retainedHitKeepsSwRClassification() throws Exception {
+        CircuitBreaker breaker = new CircuitBreaker(fastBreaker(), new CircuitBreaker.Listener() {
+            @Override
+            public void onOpen() {
+            }
+
+            @Override
+            public void onClose() {
+            }
+        });
+        InMemoryRemoteCache<String, String> delegate = new InMemoryRemoteCache<>();
+        RecordingMetrics metrics = new RecordingMetrics();
+        RemoteCache<String, String> l2 = new CircuitBreakerRemoteCache<>(delegate, breaker);
+        java.util.concurrent.ExecutorService revalidation =
+                java.util.concurrent.Executors.newSingleThreadExecutor();
+        CacheSettings settings = new CacheSettings(10_000, Duration.ofMillis(50), null,
+                Duration.ofMillis(100), 0.0, NullPolicy.deny(), InvalidationMode.INVALIDATE,
+                64 * 1024, Duration.ofSeconds(1), false, Duration.ofSeconds(1), WINDOW);
+        DefaultTierCache<String, String> cache = new DefaultTierCache<>("c",
+                new CountingLocalCache<>(), l2, settings, true, null, null, null, null,
+                breaker, metrics, revalidation);
+        try {
+            AtomicInteger loads = new AtomicInteger();
+            // L2 holds a SWR frame aged past the logical L2 TTL (100 ms).
+            delegate.put("k", StoredEntry.ofValue("v0", null,
+                    System.currentTimeMillis() - 500), Duration.ofMillis(100),
+                    Duration.ofSeconds(1));
+            cache.put("k", "v0"); // L1 retained entry (its own freshness by the engine)
+            sleep(150); // L1 logical TTL (50 ms) expired; breaker CLOSED
+
+            String served = cache.getOrCompute("k", key -> {
+                loads.incrementAndGet();
+                return "v1";
+            });
+            assertEquals("v0", served,
+                    "the stale SWR frame is served stale (SWR semantics), not warmed as fresh");
+            long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+            while (loads.get() == 0 && System.nanoTime() < deadline) {
+                Thread.sleep(20);
+            }
+            assertEquals(1, loads.get(), "the retained-hit path triggered the SWR revalidation");
+        } finally {
+            revalidation.shutdownNow();
+        }
+    }
+
+    /**
+     * Full-outage residual: an L1-only write during the outage is local
 
     /**
      * The non-singleflight getOrCompute variant takes the same stale path

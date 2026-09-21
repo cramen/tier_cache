@@ -298,9 +298,10 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
 
     @Override
     public V get(K key) {
+        long g0 = l1Generation.get();
         StoredEntry<V> entry = l1.get(key);
         if (entry != null) {
-            L1Freshness freshness = freshnessOf(key);
+            L1Freshness freshness = freshnessOf(key, entry);
             if (freshness == L1Freshness.FRESH) {
                 metrics.onRequest(cacheName, CacheMetricsListener.Outcome.L1_HIT);
                 return entry.isNullMarker() ? null : entry.value();
@@ -309,7 +310,18 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
             // L2 read decides — converge on HIT, serve stale on REJECTED.
             L2Result<V> result = l2Read(key);
             if (result.read() == L2Read.HIT) {
-                warmL1(key, result.entry());
+                // Admitted read: converge through the normal age/SWR/XFetch
+                // classification — a stale SWR frame is never warmed as fresh.
+                if (ageTrackingEnabled) {
+                    entry = classifyByAge(key, result.entry(), null, g0);
+                    if (entry == null) {
+                        metrics.onRequest(cacheName, CacheMetricsListener.Outcome.MISS);
+                        return null;
+                    }
+                    metrics.onRequest(cacheName, CacheMetricsListener.Outcome.L2_HIT);
+                    return entry.isNullMarker() ? null : entry.value();
+                }
+                warmL1(key, result.entry(), g0);
                 metrics.onRequest(cacheName, CacheMetricsListener.Outcome.L2_HIT);
                 return result.entry().isNullMarker() ? null : result.entry().value();
             }
@@ -323,13 +335,13 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         entry = l2Get(key);
         if (entry != null) {
             if (ageTrackingEnabled) {
-                entry = classifyByAge(key, entry, null);
+                entry = classifyByAge(key, entry, null, g0);
                 if (entry == null) {
                     metrics.onRequest(cacheName, CacheMetricsListener.Outcome.MISS);
                     return null;
                 }
             } else {
-                warmL1(key, entry);
+                warmL1(key, entry, g0);
             }
             metrics.onRequest(cacheName, CacheMetricsListener.Outcome.L2_HIT);
             return entry.isNullMarker() ? null : entry.value();
@@ -340,16 +352,26 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
 
     @Override
     public LookupResult<V> lookup(K key) {
+        long g0 = l1Generation.get();
         StoredEntry<V> entry = l1.get(key);
         if (entry != null) {
-            L1Freshness freshness = freshnessOf(key);
+            L1Freshness freshness = freshnessOf(key, entry);
             if (freshness == L1Freshness.FRESH) {
                 metrics.onRequest(cacheName, CacheMetricsListener.Outcome.L1_HIT);
                 return toResult(entry);
             }
             L2Result<V> result = l2Read(key);
             if (result.read() == L2Read.HIT) {
-                warmL1(key, result.entry());
+                if (ageTrackingEnabled) {
+                    entry = classifyByAge(key, result.entry(), null, g0);
+                    if (entry == null) {
+                        metrics.onRequest(cacheName, CacheMetricsListener.Outcome.MISS);
+                        return LookupResult.miss();
+                    }
+                    metrics.onRequest(cacheName, CacheMetricsListener.Outcome.L2_HIT);
+                    return toResult(entry);
+                }
+                warmL1(key, result.entry(), g0);
                 metrics.onRequest(cacheName, CacheMetricsListener.Outcome.L2_HIT);
                 return toResult(result.entry());
             }
@@ -363,13 +385,13 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         entry = l2Get(key);
         if (entry != null) {
             if (ageTrackingEnabled) {
-                entry = classifyByAge(key, entry, null);
+                entry = classifyByAge(key, entry, null, g0);
                 if (entry == null) {
                     metrics.onRequest(cacheName, CacheMetricsListener.Outcome.MISS);
                     return LookupResult.miss();
                 }
             } else {
-                warmL1(key, entry);
+                warmL1(key, entry, g0);
             }
             metrics.onRequest(cacheName, CacheMetricsListener.Outcome.L2_HIT);
             return toResult(entry);
@@ -380,16 +402,26 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
 
     @Override
     public V getOrCompute(K key, Function<? super K, ? extends V> loader) {
+        long g0 = l1Generation.get();
         StoredEntry<V> entry = l1.get(key);
         if (entry != null) {
-            L1Freshness freshness = freshnessOf(key);
+            L1Freshness freshness = freshnessOf(key, entry);
             if (freshness == L1Freshness.FRESH) {
                 metrics.onRequest(cacheName, CacheMetricsListener.Outcome.L1_HIT);
                 return entry.isNullMarker() ? null : entry.value();
             }
             L2Result<V> result = l2Read(key);
             if (result.read() == L2Read.HIT) {
-                warmL1(key, result.entry());
+                if (ageTrackingEnabled) {
+                    entry = classifyByAge(key, result.entry(), loader, g0);
+                    if (entry == null) {
+                        metrics.onRequest(cacheName, CacheMetricsListener.Outcome.MISS);
+                        return null;
+                    }
+                    metrics.onRequest(cacheName, CacheMetricsListener.Outcome.L2_HIT);
+                    return entry.isNullMarker() ? null : entry.value();
+                }
+                warmL1(key, result.entry(), g0);
                 metrics.onRequest(cacheName, CacheMetricsListener.Outcome.L2_HIT);
                 return result.entry().isNullMarker() ? null : result.entry().value();
             }
@@ -402,9 +434,9 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         entry = l2Get(key);
         if (entry != null) {
             if (ageTrackingEnabled) {
-                entry = classifyByAge(key, entry, loader);
+                entry = classifyByAge(key, entry, loader, g0);
             } else {
-                warmL1(key, entry);
+                warmL1(key, entry, g0);
             }
             if (entry != null) {
                 metrics.onRequest(cacheName, CacheMetricsListener.Outcome.L2_HIT);
@@ -470,9 +502,18 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         Version version = nextVersion();
         Boolean won = l2SetIfAbsent(key, StoredEntry.ofValue(value, version), settings.l2Ttl());
         if (won == null) {
-            // Degraded: per-instance atomicity on L1 only.
-            return l1.setIfAbsent(key, StoredEntry.ofValue(value, version),
-                    jitter.apply(settings.l1ExpireAfterWrite(), settings.jitterAmplitude()));
+            // Degraded: per-instance atomicity on L1 only — the winner gets
+            // the full commit (value, barrier, deadlines, extended
+            // retention), the loser changes nothing.
+            synchronized (l1LockFor(key)) {
+                if (l1.get(key) != null) {
+                    return false;
+                }
+                commitL1(key, StoredEntry.ofValue(value, version),
+                        jitter.apply(settings.l1ExpireAfterWrite(), settings.jitterAmplitude()),
+                        g0);
+                return true;
+            }
         }
         if (won) {
             StoredEntry<V> stored = StoredEntry.ofValue(value, version);
@@ -692,11 +733,20 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         }
     }
 
-    /** Full local clear: value, barriers, and a generation bump. */
+    /** Full local clear: generation bump first, then per-stripe ordering, then the clears. */
     private void clearL1() {
+        l1Generation.incrementAndGet();
+        // Ordering point with in-flight per-key commits: a commit that
+        // passed its generation check before the bump completes its write
+        // first, and the clear below removes it; a commit after the bump is
+        // refused by its own check.
+        for (Object stripe : l1Locks) {
+            synchronized (stripe) {
+                // no-op: serialization only
+            }
+        }
         l1.clear();
         l1Metas.invalidateAll();
-        l1Generation.incrementAndGet();
     }
 
     private void publish(Object key, Version version, InvalidationMessage.Type type) {
@@ -731,15 +781,15 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
      * cannot revalidate.
      */
     private StoredEntry<V> classifyByAge(K key, StoredEntry<V> entry,
-            Function<? super K, ? extends V> loader) {
+            Function<? super K, ? extends V> loader, long generationAtStart) {
         if (!entry.hasWriteTimestamp()) {
-            warmL1(key, entry);
+            warmL1(key, entry, generationAtStart);
             return entry; // legacy frame: behaves exactly as before
         }
         long writeTimestamp = entry.writeTimestampMillis();
         long ageMillis = System.currentTimeMillis() - writeTimestamp;
         if (ageMillis < l2TtlMillis) {
-            warmL1(key, entry);
+            warmL1(key, entry, generationAtStart);
             if (xfetchEnabled && loader != null) {
                 xfetchGate(key, loader, writeTimestamp, ageMillis);
             }
@@ -885,6 +935,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
 
     private StoredEntry<V> coordinatedLoad(K key, Function<? super K, ? extends V> loader) {
         String lockName = cacheName + ":" + key;
+        long g0 = l1Generation.get();
         long overallDeadline = System.nanoTime() + OVERALL_BUDGET.toNanos();
         long waitDeadline = System.nanoTime() + WAIT_SLICE.toNanos();
         while (true) {
@@ -898,7 +949,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
                 try {
                     // Mandatory double-check: the value may have
                     // appeared while we were acquiring the lock.
-                    StoredEntry<V> entry = readThrough(key);
+                    StoredEntry<V> entry = readThrough(key, g0);
                     if (entry != null) {
                         return entry;
                     }
@@ -909,7 +960,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
             }
             StoredEntry<V> appeared = awaitValue(key, waitDeadline);
             if (appeared != null) {
-                warmL1(key, appeared);
+                warmL1(key, appeared, g0);
                 return appeared;
             }
             if (System.nanoTime() > overallDeadline) {
@@ -934,15 +985,20 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         }
     }
 
-    /** Re-read L1 then L2 (warming L1 on an L2 hit). Returns null on full miss. */
-    private StoredEntry<V> readThrough(K key) {
+    /**
+     * Re-read L1 then L2 (warming L1 on an L2 hit). A retained entry that
+     * is past its logical freshness is NOT a hit — the load path continues
+     * to the loader, so a healthy Redis never serves stale data. Returns
+     * null on full miss.
+     */
+    private StoredEntry<V> readThrough(K key, long generationAtStart) {
         StoredEntry<V> entry = l1.get(key);
-        if (entry != null) {
+        if (entry != null && freshnessOf(key, entry) == L1Freshness.FRESH) {
             return entry;
         }
         entry = l2Get(key);
         if (entry != null) {
-            warmL1(key, entry);
+            warmL1(key, entry, generationAtStart);
         }
         return entry;
     }
@@ -1168,32 +1224,38 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
     }
 
     /**
-     * Classifies a physically present L1 entry by its stamped deadlines.
-     * A fresh hit with expire-after-access configured slides the freshness
-     * and stale horizons forward; a stale access never moves anything.
+     * Classifies a physically present L1 entry by its stamped deadlines,
+     * atomically under the per-key stripe lock: a fresh access slides the
+     * deadlines (and the physical retention) only when the metadata is
+     * still the one just read — a concurrent replace can never inherit
+     * another value's TTL. A stale access never moves anything.
      */
-    private L1Freshness freshnessOf(K key) {
+    private L1Freshness freshnessOf(K key, StoredEntry<V> entry) {
         if (!degradationStaleEnabled) {
             return L1Freshness.FRESH;
         }
-        L1BarrierMap.L1Meta meta = l1Metas.get(key);
-        if (meta == null || meta.logicalDeadlineNanos() == 0L) {
-            return L1Freshness.EXPIRED; // unknown metadata: never stale-served
-        }
-        long now = System.nanoTime();
-        if (now <= meta.logicalDeadlineNanos()) {
-            // Fresh access slides freshness + the stale horizon (the
-            // store-time retention floor is protected at the L1 expiry level).
-            java.time.Duration accessTtl = settings.l1ExpireAfterAccess();
-            if (accessTtl != null) {
-                long logical = now + accessTtl.toNanos();
-                l1Metas.put(key, new L1BarrierMap.L1Meta(meta.highestSeen(), logical,
-                        logical + degradationStaleTtl.toNanos()));
+        synchronized (l1LockFor(key)) {
+            L1BarrierMap.L1Meta meta = l1Metas.get(key);
+            if (meta == null || meta.logicalDeadlineNanos() == 0L) {
+                return L1Freshness.EXPIRED; // unknown metadata: never stale-served
             }
-            return L1Freshness.FRESH;
+            long now = System.nanoTime();
+            if (now <= meta.logicalDeadlineNanos()) {
+                java.time.Duration accessTtl = settings.l1ExpireAfterAccess();
+                if (accessTtl != null && l1Metas.get(key) == meta) {
+                    // Fresh access: slide freshness, the stale horizon AND
+                    // the physical retention — identity-checked, so a
+                    // concurrently replaced value keeps its own deadlines.
+                    long logical = now + accessTtl.toNanos();
+                    l1Metas.put(key, new L1BarrierMap.L1Meta(meta.highestSeen(), logical,
+                            logical + degradationStaleTtl.toNanos()));
+                    l1.put(key, entry, accessTtl.plus(degradationStaleTtl));
+                }
+                return L1Freshness.FRESH;
+            }
+            return now <= meta.staleServeUntilNanos() ? L1Freshness.STALE_ALLOWED
+                    : L1Freshness.EXPIRED;
         }
-        return now <= meta.staleServeUntilNanos() ? L1Freshness.STALE_ALLOWED
-                : L1Freshness.EXPIRED;
     }
 
     /** @return TRUE stored, FALSE lost a version race, NULL unavailable/failed. */

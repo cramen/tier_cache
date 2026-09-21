@@ -53,6 +53,10 @@ final class L1BarrierMap<K> {
         this.barriers = Caffeine.newBuilder()
                 .maximumSize(maxSize)
                 .expireAfterWrite(expiry)
+                // Removal callbacks must be synchronous with the evicting
+                // call: the generation bump they drive is part of the
+                // commit's correctness, not a best-effort notification.
+                .executor(command -> command.run())
                 .<K, L1Meta>removalListener((key, value, cause) -> onProtection.run())
                 .build();
     }

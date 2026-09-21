@@ -268,9 +268,13 @@ class CacheSettingsDsl internal constructor() {
     /** XFetch beta threshold. See `CacheSettings.xfetchBeta`. */
     var xfetchBeta: Duration = base.xfetchBeta()
 
+    /** Degradation stale window. See `CacheSettings.degradationStaleTtl`. */
+    var degradationStaleTtl: Duration = base.degradationStaleTtl()
+
     internal fun resolve(): CacheSettings = CacheSettings(
         l1MaxSize, l1ExpireAfterWrite, l1ExpireAfterAccess, l2Ttl, jitterAmplitude,
-        nullPolicy, invalidationMode, payloadCapBytes, staleTtl, xfetchEnabled, xfetchBeta)
+        nullPolicy, invalidationMode, payloadCapBytes, staleTtl, xfetchEnabled, xfetchBeta,
+        degradationStaleTtl)
 }
 
 /**
@@ -315,6 +319,9 @@ class CacheOverrideDsl internal constructor() {
     /** XFetch beta threshold, or `null` to inherit the defaults. */
     var xfetchBeta: Duration? = null
 
+    /** Degradation stale window override. See `CacheSettings.degradationStaleTtl`. */
+    var degradationStaleTtl: Duration? = null
+
     internal fun resolve(): CacheOverride {
         val override = CacheOverride()
         l1MaxSize?.let { override.l1MaxSize(it) }
@@ -326,6 +333,7 @@ class CacheOverrideDsl internal constructor() {
         invalidationMode?.let { override.invalidationMode(it) }
         payloadCapBytes?.let { override.payloadCapBytes(it) }
         staleTtl?.let { override.staleTtl(it) }
+        degradationStaleTtl?.let { override.degradationStaleTtl(it) }
         xfetchEnabled?.let { override.xfetchEnabled(it) }
         xfetchBeta?.let { override.xfetchBeta(it) }
         return override

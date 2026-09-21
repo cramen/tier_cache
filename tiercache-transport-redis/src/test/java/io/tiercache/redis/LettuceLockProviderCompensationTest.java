@@ -337,6 +337,94 @@ class LettuceLockProviderCompensationTest {
     }
 
     /**
+     * Close during a latched acquire: no machinery is created after close,
+     * and the caller sees the original Redis timeout — never a
+     * RejectedExecutionException.
+     */
+    @Test
+    void closeDuringAcquireCreatesNoMachineryAndKeepsTheTimeout() throws Exception {
+        var connection = client.connect();
+        java.util.concurrent.CountDownLatch setEntered = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch releaseSet = new java.util.concurrent.CountDownLatch(1);
+        RedisCommands<String, String> commands = proxy(connection, (args, method) -> {
+            if ("set".equals(method.getName()) && args != null && args.length == 3
+                    && args[2] instanceof SetArgs) {
+                setEntered.countDown();
+                try {
+                    releaseSet.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                throw new RedisCommandTimeoutException("simulated client timeout");
+            }
+            return passthrough();
+        });
+        LettuceLockProvider provider = new LettuceLockProvider(connectionTo(commands));
+
+        java.util.concurrent.atomic.AtomicReference<Throwable> seen =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        Thread acquirer = new Thread(() -> {
+            try {
+                provider.tryLock("close-race", Duration.ofSeconds(30));
+            } catch (Throwable t) {
+                seen.set(t);
+            }
+        });
+        acquirer.start();
+        if (!setEntered.await(5, TimeUnit.SECONDS)) {
+            throw new AssertionError("the acquire never reached the latched SET");
+        }
+        provider.close();
+        releaseSet.countDown();
+        acquirer.join(5_000);
+
+        assertTrue(seen.get() instanceof RedisCommandTimeoutException,
+                "the original timeout surfaces, got " + seen.get());
+        assertTrue(provider.isClosed());
+        long compensationThreads = Thread.getAllStackTraces().keySet().stream()
+                .filter(t -> t.getName().startsWith("tiercache-lock-compensation")).count();
+        assertEquals(0, compensationThreads,
+                "no scheduler may be created after close");
+        connection.close();
+    }
+
+    /**
+     * Close during a latched acquire with an ALREADY-created scheduler:
+     * the scheduling race is swallowed, the original timeout still
+     * surfaces, and pending bookkeeping is released.
+     */
+    @Test
+    void closeWithLiveSchedulerSwallowsTheSchedulingRace() throws Exception {
+        var connection = client.connect();
+        // The failing proxy always reports a client timeout on acquire.
+        RedisCommands<String, String> failing = proxy(connection, (args, method) -> {
+            if ("set".equals(method.getName()) && args != null && args.length == 3
+                    && args[2] instanceof SetArgs) {
+                throw new RedisCommandTimeoutException("simulated client timeout");
+            }
+            return passthrough();
+        });
+        LettuceLockProvider provider = new LettuceLockProvider(connectionTo(failing));
+        // First ambiguous acquire spins the scheduler up.
+        assertThrows(RedisCommandTimeoutException.class,
+                () -> provider.tryLock("close-live-1", Duration.ofSeconds(30)));
+
+        provider.close();
+        // Another ambiguous acquire on the closed provider: the scheduling
+        // race must be swallowed and the ORIGINAL timeout must surface.
+        try {
+            provider.tryLock("close-live-2", Duration.ofSeconds(30));
+            throw new AssertionError("the acquire must fail");
+        } catch (Throwable t) {
+            assertTrue(t instanceof RedisCommandTimeoutException,
+                    "the original timeout surfaces even with a live scheduler, got " + t);
+        }
+        assertTrue(provider.pendingCompensations() <= 1,
+                "bookkeeping stays bounded after close, got " + provider.pendingCompensations());
+        connection.close();
+    }
+
+    /**
      * Real pause/unpause round trip (the bench's outage shape): the
      * provider cleans the orphan once Redis resumes.
      */
