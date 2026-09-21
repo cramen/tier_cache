@@ -10,7 +10,6 @@ import io.tiercache.InvalidationMessage;
 import io.tiercache.invalidation.MessageCodec;
 import io.tiercache.spi.InvalidationTransport;
 
-import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -21,7 +20,7 @@ import java.util.function.Consumer;
 /**
  * Default invalidation transport profile: Redis Pub/Sub (minimal latency).
  * One Pub/Sub connection per instance; per-cache channels
- * ({@code tiercache:inv:<cache>}); inbound events are dispatched on a
+ * ({@code tiercache:v2:inv:<token(cache)>}); inbound events are dispatched on a
  * single daemon executor, off the I/O thread, preserving per-channel order.
  *
  * <p>On reconnect (detected via the Lettuce event bus) the registered
@@ -39,7 +38,7 @@ public final class LettucePubSubInvalidationTransport implements InvalidationTra
      *
      * @since 0.1.0
      */
-    public static final String CHANNEL_PREFIX = "tiercache:inv:";
+    public static final String CHANNEL_PREFIX = RedisKeyspace.CHANNEL;
 
     private final RedisClient client;
     private final CacheSerializer<Object> keySerializer;
@@ -134,11 +133,12 @@ public final class LettucePubSubInvalidationTransport implements InvalidationTra
 
     @Override
     public AutoCloseable subscribe(String cache, Consumer<InvalidationMessage> handler) {
+        byte[] channel = channelName(cache); // validate before registering a handler
         handlers.put(cache, handler);
-        connection.sync().subscribe(channelName(cache));
+        connection.sync().subscribe(channel);
         return () -> {
             handlers.remove(cache);
-            connection.async().unsubscribe(channelName(cache));
+            connection.async().unsubscribe(channel);
         };
     }
 
@@ -156,7 +156,7 @@ public final class LettucePubSubInvalidationTransport implements InvalidationTra
     }
 
     private static byte[] channelName(String cache) {
-        return (CHANNEL_PREFIX + cache).getBytes(StandardCharsets.UTF_8);
+        return RedisKeyspace.channel(cache);
     }
 
     @Override

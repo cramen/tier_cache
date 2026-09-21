@@ -18,11 +18,11 @@ import java.util.Map;
 
 /**
  * Bounded invalidation journal on Redis Streams: one stream per cache
- * ({@code tiercache:journal:<cache>}), capacity-capped by approximate
+ * ({@code tiercache:v2:journal:<token(cache)>}), capacity-capped by approximate
  * MAXLEN trimming. Writers append inside the same atomic Lua unit as the
  * data write (see {@link LettuceRemoteCache}), so there is no "wrote but
  * didn't journal" window; every append path also keeps the exact trim
- * counter ({@code tiercache:journal-trims:<cache>}) for the
+ * counter ({@code tiercache:v2:journal-trims:<token(cache)>}) for the
  * beginning-cursor trim check.
  *
  * <p>Cursors are stream entry IDs ({@code millis-seq}); replay reads
@@ -39,7 +39,7 @@ public final class RedisStreamJournal implements InvalidationJournal {
      *
      * @since 0.1.0
      */
-    public static final String JOURNAL_KEYSPACE = "tiercache:journal:";
+    public static final String JOURNAL_KEYSPACE = RedisKeyspace.JOURNAL;
 
     /**
      * Keyspace prefix of the atomic trim counter (one per cache stream):
@@ -49,7 +49,7 @@ public final class RedisStreamJournal implements InvalidationJournal {
      *
      * @since 1.3.0
      */
-    public static final String TRIMS_KEYSPACE = "tiercache:journal-trims:";
+    public static final String TRIMS_KEYSPACE = RedisKeyspace.TRIMS;
 
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(RedisStreamJournal.class);
 
@@ -101,14 +101,14 @@ public final class RedisStreamJournal implements InvalidationJournal {
     }
 
     static byte[] streamKey(String cache) {
-        return (JOURNAL_KEYSPACE + cache).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        return RedisKeyspace.journal(cache);
     }
 
     /**
      * Stream key bytes for a cache (public for the transport's Lua script).
      *
      * @param cache the cache name
-     * @return the stream key bytes ({@code tiercache:journal:<cache>})
+     * @return the stream key bytes ({@code tiercache:v2:journal:<token(cache)>})
      * @since 0.1.0
      */
     public static byte[] streamKeyBytes(String cache) {
@@ -116,7 +116,7 @@ public final class RedisStreamJournal implements InvalidationJournal {
     }
 
     static byte[] trimCounterKey(String cache) {
-        return (TRIMS_KEYSPACE + cache).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        return RedisKeyspace.trims(cache);
     }
 
     /**
@@ -124,7 +124,7 @@ public final class RedisStreamJournal implements InvalidationJournal {
      * scripts, which increment it on every capped XADD that removed rows).
      *
      * @param cache the cache name
-     * @return the counter key bytes ({@code tiercache:journal-trims:<cache>})
+     * @return the counter key bytes ({@code tiercache:v2:journal-trims:<token(cache)>})
      * @since 1.3.0
      */
     public static byte[] trimCounterKeyBytes(String cache) {

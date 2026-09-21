@@ -334,3 +334,19 @@ only:
 Fail-fast validation is core's and applies identically: an invalid
 combination (for example an L1 TTL above the L2 TTL) aborts application
 startup with an actionable error.
+
+## Built-in Redis namespaces (v2)
+
+Each complete physical cache namespace is encoded as a delimiter-safe
+Base64URL token: Spring `users` uses the token for `spring:users`, Micronaut
+uses `micronaut:users`, and programmatic wiring uses the configured cache
+name. Colons, glob syntax, empty names where supported, and valid Unicode
+retain their literal identities. Malformed Unicode fails before mutation.
+Data and control keys occupy separate `tiercache:v2:*` families. The logical
+journal identity remains `users` in both framework examples.
+
+There is no legacy/v2 compatibility switch. This unreleased format requires
+a major release and a coordinated cold cutover; an ordinary mixed-version
+rolling upgrade is unsafe. See [exact layouts, clear limits, migration and
+rollback](redis-keyspace-v2.md). Clear removes only data in its own namespace,
+using a non-transactional scan; its journal append is a separate operation.

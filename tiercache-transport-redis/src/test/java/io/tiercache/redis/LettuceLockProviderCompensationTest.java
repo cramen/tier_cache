@@ -91,7 +91,7 @@ class LettuceLockProviderCompensationTest {
     }
 
     private static String lockKey(String name) {
-        return LettuceLockProvider.LOCK_KEYSPACE + name;
+        return RedisKeyspace.lock(name);
     }
 
     /**

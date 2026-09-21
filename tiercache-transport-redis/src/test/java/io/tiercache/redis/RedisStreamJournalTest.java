@@ -173,8 +173,8 @@ class RedisStreamJournalTest {
         var probe = client.connect(ByteArrayCodec.INSTANCE);
         try {
             var sync = probe.sync();
-            byte[] streamKey = "tiercache:journal:boundary".getBytes();
-            byte[] counter = sync.get("tiercache:journal-trims:boundary".getBytes());
+            byte[] streamKey = RedisStreamJournal.streamKeyBytes("boundary");
+            byte[] counter = sync.get(RedisStreamJournal.trimCounterKeyBytes("boundary"));
             assertTrue(counter != null && Long.parseLong(new String(counter)) > 0,
                     "the drive must have counted real trims");
             // Land exactly on the boundary the length heuristic missed.
@@ -207,7 +207,7 @@ class RedisStreamJournalTest {
         }
         var probe = client.connect(ByteArrayCodec.INSTANCE);
         try {
-            byte[] counter = probe.sync().get("tiercache:journal-trims:jctr".getBytes());
+            byte[] counter = probe.sync().get(RedisStreamJournal.trimCounterKeyBytes("jctr"));
             assertTrue(counter != null && Long.parseLong(new String(counter)) > 0,
                     "the conditional-write Lua path must count its trims");
         } finally {

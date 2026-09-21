@@ -102,6 +102,11 @@ Reads cascade L1 → L2 → loader; concurrent loads of the same key share one l
 
 ## Compatibility and versioning
 
+The unreleased Redis keyspace v2 is a breaking operational change and must
+ship in a major release. It requires a coordinated cold-cache cutover;
+old/new instances are not rolling-compatible. See the
+[v2 migration guide](docs/redis-keyspace-v2.md) before deploying a development build.
+
 All published Maven artifacts follow **semantic versioning**: patch releases for backwards-compatible fixes, minor releases for backwards-compatible additions, major releases for breaking changes.
 
 **Supported public API** — the documented entry points only:

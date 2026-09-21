@@ -234,12 +234,8 @@ class LettuceRemoteCacheTest {
     }
 
     private static byte[] rawValue(LettuceRemoteCache<String, String> cache, String cacheName, String key) {
-        byte[] prefix = (cacheName + ":").getBytes(StandardCharsets.UTF_8);
-        byte[] serializedKey = new JdkCacheSerializer<String>().toBytes(key);
-        byte[] namespaced = new byte[prefix.length + serializedKey.length];
-        System.arraycopy(prefix, 0, namespaced, 0, prefix.length);
-        System.arraycopy(serializedKey, 0, namespaced, prefix.length, serializedKey.length);
-        return cache.connection().sync().get(namespaced);
+        return cache.connection().sync().get(RedisKeyspace.dataKey(cacheName,
+                new JdkCacheSerializer<String>().toBytes(key)));
     }
 
     private static LettuceRemoteCache<String, String> sharedNamespaceInstance() {
@@ -258,7 +254,7 @@ class LettuceRemoteCacheTest {
                 Duration.ofMillis(400), new String[]{"g"});
         try (io.lettuce.core.RedisClient probe = io.lettuce.core.RedisClient.create(redisUri);
                 var conn = probe.connect()) {
-            Long pttl = conn.sync().pttl("tiercache:tags:tag-ttl:g");
+            Long pttl = conn.sync().pttl(new String(RedisKeyspace.tagKey("tag-ttl", "g"), StandardCharsets.US_ASCII));
             assertTrue(pttl != null && pttl > 0 && pttl <= 400,
                     "tag set must be TTL-bounded from write time, got PTTL=" + pttl);
         }
@@ -266,7 +262,7 @@ class LettuceRemoteCacheTest {
         // A dead member with a long-lived index row is filtered and pruned on lookup.
         try (io.lettuce.core.RedisClient probe = io.lettuce.core.RedisClient.create(redisUri);
                 var conn = probe.connect()) {
-conn.sync().sadd("tiercache:tags:tag-ttl:g", "tag-ttl:ghost");
+conn.sync().sadd(new String(RedisKeyspace.tagKey("tag-ttl", "g"), StandardCharsets.US_ASCII), "tag-ttl:ghost");
         }
         assertTrue(cache.keysByTag("g").stream().noneMatch("ghost"::equals),
                 "phantom members must not be returned");
@@ -276,7 +272,7 @@ conn.sync().sadd("tiercache:tags:tag-ttl:g", "tag-ttl:ghost");
         assertTrue(cache.keysByTag("g").isEmpty());
         try (io.lettuce.core.RedisClient probe = io.lettuce.core.RedisClient.create(redisUri);
                 var conn = probe.connect()) {
-            assertTrue(conn.sync().keys("tiercache:tags:tag-ttl:*").isEmpty(),
+            assertTrue(conn.sync().keys(new String(RedisKeyspace.tagPrefix("tag-ttl"), StandardCharsets.US_ASCII) + "*").isEmpty(),
                     "tag set must expire with the data");
         }
         cache.close();
@@ -333,7 +329,7 @@ conn.sync().sadd("tiercache:tags:tag-ttl:g", "tag-ttl:ghost");
                 int writesBefore = writes.get();
                 java.util.List<Object> result = probe.sync().eval(measure,
                         io.lettuce.core.ScriptOutputType.MULTI,
-                        new byte[][]{"tiercache:tags:tag-hot:hot".getBytes(StandardCharsets.UTF_8)});
+                        new byte[][]{RedisKeyspace.tagKey("tag-hot", "hot")});
                 // The eval itself is milliseconds — too short to guarantee a
                 // write inside it. Prove liveness instead: the counter must
                 // advance right after the measurement, within a bounded wait.
@@ -381,7 +377,7 @@ conn.sync().sadd("tiercache:tags:tag-ttl:g", "tag-ttl:ghost");
         Thread.sleep(600);
         try (io.lettuce.core.RedisClient probe = io.lettuce.core.RedisClient.create(redisUri);
                 var conn = probe.connect()) {
-            assertTrue(conn.sync().keys("tiercache:tags:tag-idle:*").isEmpty(),
+            assertTrue(conn.sync().keys(new String(RedisKeyspace.tagPrefix("tag-idle"), StandardCharsets.US_ASCII) + "*").isEmpty(),
                     "idle tag sets must expire within the longest member TTL");
         }
         cache.close();
@@ -438,7 +434,7 @@ conn.sync().sadd("tiercache:tags:tag-ttl:g", "tag-ttl:ghost");
             }
             try (io.lettuce.core.RedisClient probeClient = io.lettuce.core.RedisClient.create(redisUri);
                     var probe = probeClient.connect(io.lettuce.core.codec.ByteArrayCodec.INSTANCE)) {
-                byte[] setKey = ("tiercache:tags:tag-race:" + tag).getBytes(StandardCharsets.UTF_8);
+                byte[] setKey = RedisKeyspace.tagKey("tag-race", tag);
                 // A long-lived tag (mixed-TTL reality): the SET outlives the
                 // short-lived members, so the dead membership rows persist.
                 probe.sync().pexpire(setKey, 30_000);
@@ -461,7 +457,7 @@ conn.sync().sadd("tiercache:tags:tag-ttl:g", "tag-ttl:ghost");
             }
             try (io.lettuce.core.RedisClient probeClient = io.lettuce.core.RedisClient.create(redisUri);
                     var probe = probeClient.connect(io.lettuce.core.codec.ByteArrayCodec.INSTANCE)) {
-                byte[] setKey = ("tiercache:tags:tag-race:" + tag).getBytes(StandardCharsets.UTF_8);
+                byte[] setKey = RedisKeyspace.tagKey("tag-race", tag);
                 long members = probe.sync().scard(setKey);
                 assertTrue(members >= filler + victims / 3 && members <= filler + victims,
                         "round " + round + ": filler plus most dead victim rows must be present "

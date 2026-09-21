@@ -38,7 +38,7 @@ public final class LettuceStreamsInvalidationTransport implements InvalidationTr
      *
      * @since 0.1.0
      */
-    public static final String GROUP_PREFIX = "tiercache:cg:";
+    public static final String GROUP_PREFIX = RedisKeyspace.GROUP;
 
     private final StatefulRedisConnection<byte[], byte[]> connection;
     private final io.lettuce.core.api.sync.RedisCommands<byte[], byte[]> commands;
@@ -116,7 +116,7 @@ public final class LettuceStreamsInvalidationTransport implements InvalidationTr
     }
 
     private byte[] group(String cache) {
-        return (GROUP_PREFIX + cache + ":" + instanceId).getBytes(StandardCharsets.UTF_8);
+        return RedisKeyspace.group(cache, instanceId);
     }
 
     private void readLoop(String cache) {
@@ -224,7 +224,8 @@ public final class LettuceStreamsInvalidationTransport implements InvalidationTr
                         ? (byte[]) info.get("name") : str(info.get("name")).getBytes(StandardCharsets.UTF_8);
                 long consumers = num(info.get("consumers"));
                 long pending = num(info.get("pending"));
-                if (name == null || java.util.Arrays.equals(name, group) || consumers > 0 || pending == 0) {
+                if (name == null || !new String(name, StandardCharsets.UTF_8).startsWith(RedisKeyspace.groupPrefix(cache))
+                        || java.util.Arrays.equals(name, group) || consumers > 0 || pending == 0) {
                     continue;
                 }
                 // Dead group with unprocessed entries: claim and apply.

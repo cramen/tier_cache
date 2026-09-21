@@ -24,7 +24,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * <p>Acquire: {@code SET name token PX lease NX}. Release: Lua
  * compare-and-delete on the ownership token, so a stale holder can never
  * release another's lock. Extend: Lua token-checked {@code PEXPIRE ... XX}.
- * Locks live in the {@code tiercache:rebuild:*} keyspace, separate from data
+ * Locks live in the {@code tiercache:v2:rebuild:*} keyspace, separate from data
  * entries.
  *
  * <p><b>Ambiguous acquire compensation.</b> A failed acquire (client-side
@@ -54,7 +54,7 @@ public final class LettuceLockProvider implements DistributedLockProvider, AutoC
      *
      * @since 0.1.0
      */
-    public static final String LOCK_KEYSPACE = "tiercache:rebuild:";
+    public static final String LOCK_KEYSPACE = RedisKeyspace.LOCK;
 
     private static final String RELEASE_SCRIPT =
             "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1])"
@@ -127,7 +127,7 @@ public final class LettuceLockProvider implements DistributedLockProvider, AutoC
     @Override
     public DistributedLock tryLock(String name, Duration lease) {
         String token = UUID.randomUUID().toString();
-        String key = LOCK_KEYSPACE + name;
+        String key = RedisKeyspace.lock(name);
         try {
             String result = commands().set(key, token, SetArgs.Builder.px(lease).nx());
             return "OK".equals(result) ? new LettuceLock(key, token) : null;

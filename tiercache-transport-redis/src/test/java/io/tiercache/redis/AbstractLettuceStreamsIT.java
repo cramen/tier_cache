@@ -109,8 +109,7 @@ abstract class AbstractLettuceStreamsIT {
     void subscriptionCreatesConsumerGroupEagerly() {
         factoryB.getCache("streams");
         byte[] stream = RedisStreamJournal.streamKeyBytes("streams");
-        byte[] group = (LettuceStreamsInvalidationTransport.GROUP_PREFIX + "streams:" + instanceB)
-                .getBytes(StandardCharsets.UTF_8);
+        byte[] group = RedisKeyspace.group("streams", instanceB);
         var connection = clientB.connect(ByteArrayCodec.INSTANCE);
         try {
             assertTrue(groupExists(connection.sync(), stream, group),
@@ -162,8 +161,7 @@ abstract class AbstractLettuceStreamsIT {
      */
     private void awaitConsumerGroup(String cache) throws InterruptedException {
         byte[] stream = RedisStreamJournal.streamKeyBytes(cache);
-        byte[] group = (LettuceStreamsInvalidationTransport.GROUP_PREFIX + cache + ":" + instanceB)
-                .getBytes(StandardCharsets.UTF_8);
+        byte[] group = RedisKeyspace.group(cache, instanceB);
         var connection = clientB.connect(ByteArrayCodec.INSTANCE);
         try {
             var sync = connection.sync();

@@ -3,7 +3,7 @@ package io.tiercache.redis;
 import org.testcontainers.utility.DockerImageName;
 
 /** Contract suite against Valkey. */
-class ValkeyLettuceContractTest extends AbstractLettuceContractTest {
+class ValkeyLettuceContractTest extends AbstractNamespaceContractTest {
 
     @Override
     DockerImageName image() {

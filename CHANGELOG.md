@@ -7,7 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING — major release required:** the built-in Redis keyspace moves to v2. Complete cache names are encoded without delimiter/glob ambiguity, and data, tags, journals, channels, consumer groups and rebuild locks have separate address families. Clearing one cache can no longer delete another cache's data or library control state. Old/new active deployments require a coordinated cold cutover; no legacy reads, event bridge or automatic cleanup are provided. See UPGRADING.md and docs/redis-keyspace-v2.md. Value frames and application serializers are unchanged; whole-cache clear is still non-transactional.
+
 ### Fixed
+
+- Tagged data and its reverse index now share one absolute expiry instant. On Redis 6.2, separate relative TTL commands could produce different expiration times inside the same Lua script, especially with many tags. Extend-only tag-set TTLs and losing-write behavior remain unchanged.
 
 - Tagged writes preserve the remote acceptance result: rejected candidates no longer warm L1, publish UPDATE events, or alter tag indexes. Lettuce atomically updates accepted values, replacement tags, reverse indexes and journal bookkeeping. Losing writers perform one bounded convergence read; degraded writes stay local. Custom versioned tagged SPI providers must implement the new outcome method and capability query; see UPGRADING.md.
 

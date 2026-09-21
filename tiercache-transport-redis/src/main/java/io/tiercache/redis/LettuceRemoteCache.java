@@ -91,6 +91,13 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
     private long payloadCapBytes = 64 * 1024;
 
     private LettuceRemoteCache(Builder<K, V> builder) {
+        this.cacheName = builder.cacheName;
+        this.journalName = builder.journalName != null ? builder.journalName : builder.cacheName;
+        this.keyPrefix = RedisKeyspace.dataPrefix(cacheName);
+        // Validate all configured names before opening connections or issuing commands.
+        RedisKeyspace.tagPrefix(cacheName);
+        RedisKeyspace.journal(journalName);
+        RedisKeyspace.trims(journalName);
         this.ownsClient = builder.sharedClient == null;
         this.client = ownsClient ? RedisClient.create(builder.redisUri) : builder.sharedClient;
         if (ownsClient) {
@@ -104,9 +111,6 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
         }
         this.connection = client.connect(ByteArrayCodec.INSTANCE);
         this.commands = connection.sync();
-        this.cacheName = builder.cacheName;
-        this.journalName = builder.journalName != null ? builder.journalName : builder.cacheName;
-        this.keyPrefix = (builder.cacheName + ":").getBytes(StandardCharsets.UTF_8);
         this.keySerializer = builder.keySerializer;
         this.valueSerializer = builder.valueSerializer;
         this.journal = builder.journal;
@@ -202,8 +206,9 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
     @Override
     public void evict(K key) {
         byte[] namespaced = namespaced(key);
+        byte[] reverse = keyTagsKey(namespaced); // validate before deleting data
         commands.del(namespaced);
-        pruneTags(namespaced);
+        pruneTags(namespaced, reverse);
     }
 
     /**
@@ -217,7 +222,7 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
             return;
         }
         byte[] namespaced = namespaced(key);
-        pruneTags(namespaced);
+        pruneTags(namespaced, keyTagsKey(namespaced));
         commands.eval(Lua.VERSIONED_EVICT, io.lettuce.core.ScriptOutputType.INTEGER,
                 new byte[][]{namespaced, RedisStreamJournal.streamKeyBytes(journalName),
                         RedisStreamJournal.trimCounterKeyBytes(journalName)},
@@ -314,8 +319,8 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
         return ValueFrame.encode(entry, valueSerializer, withWriteTimestamp);
     }
 
-    // --- Tag registry: tiercache:tags:<cache>:<tag> sets + reverse index
-    // tiercache:tagkeys:<cache>:<key>. Redis sets have no per-member TTL,
+    // --- V2 tag sets contain full data keys; reverse indexes contain tag tokens.
+    // Redis sets have no per-member TTL,
     // so boundedness comes from two mechanisms (Lua.TAGGED_WRITE/TAG_LIVE_MEMBERS):
     // each tag set carries an extend-only TTL (a shorter-lived entry never
     // shrinks the index, so a set outlives its longest member by a bounded
@@ -328,15 +333,12 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
     private static final int TAG_JANITOR_SAMPLE = 8;
 
     private byte[] tagSetKey(String tag) {
-        return ("tiercache:tags:" + cacheName + ":" + tag).getBytes(StandardCharsets.UTF_8);
+        return RedisKeyspace.tagKey(cacheName, tag);
     }
 
     private byte[] keyTagsKey(byte[] namespacedKey) {
-        byte[] prefix = ("tiercache:tagkeys:").getBytes(StandardCharsets.UTF_8);
-        byte[] out = new byte[prefix.length + namespacedKey.length];
-        System.arraycopy(prefix, 0, out, 0, prefix.length);
-        System.arraycopy(namespacedKey, 0, out, prefix.length, namespacedKey.length);
-        return out;
+        return RedisKeyspace.reverseKey(cacheName,
+                java.util.Arrays.copyOfRange(namespacedKey, keyPrefix.length, namespacedKey.length));
     }
 
     @Override
@@ -372,10 +374,13 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
         args.add(rawKey);
         args.add(conditional ? journalPayload(entry) : new byte[0]);
         args.add(new byte[]{(byte) (conditional ? '1' : '0')});
-        args.add(("tiercache:tags:" + cacheName + ":").getBytes(StandardCharsets.UTF_8));
+        args.add(RedisKeyspace.tagPrefix(cacheName));
         args.add(Integer.toString(TAG_JANITOR_SAMPLE).getBytes(StandardCharsets.UTF_8));
         for (String tag : new java.util.LinkedHashSet<>(java.util.Arrays.asList(tags))) {
-            args.add(java.util.Objects.requireNonNull(tag, "tag").getBytes(StandardCharsets.UTF_8));
+            byte[] tagToken = RedisKeyspace.token(java.util.Objects.requireNonNull(tag, "tag"))
+                    .getBytes(StandardCharsets.US_ASCII);
+            RedisKeyspace.checkLength((long) args.get(8).length + tagToken.length);
+            args.add(tagToken);
         }
         Long result = commands.eval(Lua.TAGGED_WRITE, io.lettuce.core.ScriptOutputType.INTEGER,
                 new byte[][]{namespaced, RedisStreamJournal.streamKeyBytes(journalName),
@@ -398,12 +403,11 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
     }
 
     /** Removes tag bookkeeping for an evicted key. */
-    private void pruneTags(byte[] namespaced) {
-        byte[] keyTags = keyTagsKey(namespaced);
+    private void pruneTags(byte[] namespaced, byte[] keyTags) {
         java.util.Set<byte[]> tags = commands.smembers(keyTags);
         if (tags != null && !tags.isEmpty()) {
             for (byte[] tag : tags) {
-                commands.srem(tagSetKey(new String(tag, StandardCharsets.UTF_8)), namespaced);
+                commands.srem(RedisKeyspace.join(RedisKeyspace.tagPrefix(cacheName), tag), namespaced);
             }
             commands.del(keyTags);
         }
@@ -414,10 +418,7 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
     }
 
     private byte[] prefixKey(byte[] serialized) {
-        byte[] out = new byte[keyPrefix.length + serialized.length];
-        System.arraycopy(keyPrefix, 0, out, 0, keyPrefix.length);
-        System.arraycopy(serialized, 0, out, keyPrefix.length, serialized.length);
-        return out;
+        return RedisKeyspace.join(keyPrefix, serialized);
     }
 
     @Override
@@ -514,14 +515,17 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
                 local oldTags = redis.call('smembers', KEYS[4])
                 local wanted = {}
                 for i = 11, #ARGV do wanted[ARGV[i]] = true end
-                redis.call('set', KEYS[1], ARGV[2], 'PX', ARGV[3])
+                local ttl = tonumber(ARGV[3])
+                redis.replicate_commands()
+                local clock = redis.call('time')
+                local deadline = clock[1] * 1000 + math.floor(clock[2] / 1000) + ttl
+                redis.call('set', KEYS[1], ARGV[2], 'PXAT', deadline)
                 for _, tag in ipairs(oldTags) do
                     if not wanted[tag] then
                         redis.call('srem', ARGV[9] .. tag, KEYS[1])
                     end
                 end
                 redis.call('del', KEYS[4])
-                local ttl = tonumber(ARGV[3])
                 for i = 11, #ARGV do
                     local tag = ARGV[i]
                     local tagKey = ARGV[9] .. tag
@@ -537,7 +541,7 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
                         end
                     end
                 end
-                if #ARGV >= 11 then redis.call('pexpire', KEYS[4], ttl) end
+                if #ARGV >= 11 then redis.call('pexpireat', KEYS[4], deadline) end
                 if ARGV[8] == '1' then
                 """
                 + TRIM_COUNTED_XADD.replace("@CAP", "ARGV[4]")

@@ -7,6 +7,25 @@ target versions.
 
 For the full list of additions and fixes, see [CHANGELOG.md](CHANGELOG.md).
 
+## Unreleased: Redis keyspace v2 (breaking; major release required)
+
+The built-in Redis/Valkey transport now uses separate v2 data, tag, journal,
+channel, group and lock addresses. This fixes cross-cache deletion by clear
+for hierarchical names (`user` / `user:roles`) and glob-containing names
+(`a?` / `a1`). Java cache APIs and value frames are unchanged, but active
+old/new instances are **not rolling-compatible**.
+
+The published compatibility policy requires a major release for this
+operational break. Do not publish it as a compatible 1.x patch/minor upgrade;
+the current development snapshot is not a release-version decision.
+
+Follow the [v2 migration guide](docs/redis-keyspace-v2.md): quiesce traffic or
+source mutations, drain and stop all old requests/loaders/publishers, start
+with empty v2 namespaces, then resume with capacity for cold-cache loads.
+V2 never reads, copies, subscribes to or deletes legacy state. Rollback also
+requires a drained cutover and clean isolated cache storage. Whole-cache
+clear remains a non-transactional scan followed by a separate journal append.
+
 ## 1.5.0 (unreleased)
 
 ### Custom transports: versioned tagged writes
@@ -31,7 +50,9 @@ versioned entries. Unversioned entries still delegate to the legacy void
 method with its existing unconditional semantics.
 
 The built-in Lettuce transport implements this in one Lua operation on
-Redis/Valkey. Value frames, key names and journal formats do not change.
+Redis/Valkey. This tagged-write correction alone does not change value frames,
+key names or journal formats; the separate v2 keyspace change above does
+change addresses and requires its coordinated migration.
 Its existing limitation remains: without a journal, or for unversioned
 entries, tagged writes are unconditional. Retagging replaces old memberships;
 it does not accumulate every tag ever assigned to the key. During a mixed

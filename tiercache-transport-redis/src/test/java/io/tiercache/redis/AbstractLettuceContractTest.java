@@ -111,18 +111,11 @@ abstract class AbstractLettuceContractTest extends RemoteCacheContractTest {
     private static byte[] bytes(String value) { return value.getBytes(StandardCharsets.UTF_8); }
 
     private static byte[] dataKey(String name, String key) {
-        byte[] prefix = bytes(name + ":");
-        byte[] raw = new JdkCacheSerializer<String>().toBytes(key);
-        byte[] result = java.util.Arrays.copyOf(prefix, prefix.length + raw.length);
-        System.arraycopy(raw, 0, result, prefix.length, raw.length);
-        return result;
+        return RedisKeyspace.dataKey(name, new JdkCacheSerializer<String>().toBytes(key));
     }
 
-    private static byte[] reverseKey(byte[] data) {
-        byte[] prefix = bytes("tiercache:tagkeys:");
-        byte[] result = java.util.Arrays.copyOf(prefix, prefix.length + data.length);
-        System.arraycopy(data, 0, result, prefix.length, data.length);
-        return result;
+    private static byte[] reverseKey(String name, String key) {
+        return RedisKeyspace.reverseKey(name, new JdkCacheSerializer<String>().toBytes(key));
     }
 
     @Test
@@ -137,8 +130,8 @@ abstract class AbstractLettuceContractTest extends RemoteCacheContractTest {
                 assertEquals(WON, cache.putTaggedIfNewer("k", StoredEntry.ofValue("new", new Version(20, id)),
                         Duration.ofMinutes(1), new String[]{"A"}));
                 byte[] data = dataKey(name, "k");
-                byte[][] keys = {data, reverseKey(data), bytes("tiercache:tags:" + name + ":A"),
-                        bytes("tiercache:tags:" + name + ":B"), RedisStreamJournal.streamKey(name),
+                byte[][] keys = {data, reverseKey(name, "k"), RedisKeyspace.tagKey(name, "A"),
+                        RedisKeyspace.tagKey(name, "B"), RedisStreamJournal.streamKey(name),
                         RedisStreamJournal.trimCounterKey(name)};
                 for (boolean tombstone : new boolean[]{false, true}) {
                     if (tombstone) cache.evict("k", new Version(30, id));
@@ -165,24 +158,21 @@ abstract class AbstractLettuceContractTest extends RemoteCacheContractTest {
             var cmd = connection.sync();
             cache.putTagged("other", StoredEntry.ofValue("shared"), Duration.ofMinutes(2), new String[]{"A"});
             cache.putTagged("k", StoredEntry.ofValue("old"), Duration.ofMinutes(2), new String[]{"A", "keep"});
-            long before = cmd.pttl(bytes("tiercache:tags:" + name + ":keep"));
+            long before = cmd.pttl(RedisKeyspace.tagKey(name, "keep"));
             cache.putTagged("k", StoredEntry.ofValue("new"), Duration.ofSeconds(30), new String[]{"B", "keep", "B"});
             assertEquals(List.of("other"), cache.keysByTag("A"));
             assertEquals(List.of("k"), cache.keysByTag("B"));
             byte[] data = dataKey(name, "k");
-            List<Long> ttls = cmd.eval("return {redis.call('pttl', KEYS[1]), redis.call('pttl', KEYS[2])}",
-                    ScriptOutputType.MULTI, new byte[][]{data, reverseKey(data)});
-            assertEquals(ttls.get(0), ttls.get(1));
-            assertTrue(ttls.get(0) > 0);
-            long after = cmd.pttl(bytes("tiercache:tags:" + name + ":keep"));
+            assertSameExpiry(cmd, data, reverseKey(name, "k"));
+            long after = cmd.pttl(RedisKeyspace.tagKey(name, "keep"));
             assertTrue(after > 90000 && after <= before, "retained tags must not shrink to the new 30s TTL");
-            assertEquals(java.util.Set.of("B", "keep"), cmd.smembers(reverseKey(data)).stream()
+            assertEquals(java.util.Set.of(RedisKeyspace.token("B"), RedisKeyspace.token("keep")), cmd.smembers(reverseKey(name, "k")).stream()
                     .map(b -> new String(b, StandardCharsets.UTF_8)).collect(java.util.stream.Collectors.toSet()));
             for (String key : cache.keysByTag("A")) cache.evict(key);
             assertEquals("new", cache.get("k").value(), "old tag eviction must not delete the retagged value");
             for (String key : cache.keysByTag("B")) cache.evict(key);
             assertNull(cache.get("k")); assertTrue(cache.keysByTag("keep").isEmpty());
-            assertEquals(0, cmd.exists(reverseKey(data)));
+            assertEquals(0, cmd.exists(reverseKey(name, "k")));
         }
     }
 
@@ -279,4 +269,57 @@ abstract class AbstractLettuceContractTest extends RemoteCacheContractTest {
             assertEquals(List.of("k"), cache.keysByTag("A")); assertTrue(cache.keysByTag("B").isEmpty());
         }
     }
+    @Test
+    void clearDoesNotCrossHierarchicalNamespace() {
+        assertClearIsolation("user", "user:roles");
+    }
+
+    @Test
+    void clearDoesNotInterpretNamespaceGlob() {
+        assertClearIsolation("a?", "a1");
+    }
+
+    private void assertClearIsolation(String cleared, String retained) {
+        String suffix = "-" + UUID.randomUUID();
+        try (var first = LettuceRemoteCache.<String, String>builder(redisUri()).client(client).cacheName(cleared).build();
+             var second = LettuceRemoteCache.<String, String>builder(redisUri()).client(client).cacheName(retained).build()) {
+            first.put(suffix, StoredEntry.ofValue("own"), Duration.ofMinutes(1));
+            second.put(suffix, StoredEntry.ofValue("other"), Duration.ofMinutes(1));
+            first.clear();
+            assertNull(first.get(suffix));
+            assertNotNull(second.get(suffix), "clear must preserve another complete cache namespace");
+            assertEquals("other", second.get(suffix).value());
+            second.evict(suffix);
+        }
+    }
+
+    @Test
+    void largeTaggedWriteUsesOneExpirationInstant() {
+        String name = "expiry-" + UUID.randomUUID();
+        try (var connection = client.connect(ByteArrayCodec.INSTANCE);
+             var cache = LettuceRemoteCache.<String, String>builder(redisUri()).client(client).cacheName(name).build()) {
+            String[] tags = java.util.stream.IntStream.range(0, 3000).mapToObj(i -> "t" + i).toArray(String[]::new);
+            cache.putTagged("k", StoredEntry.ofValue("v"), Duration.ofSeconds(30), tags);
+            assertSameExpiry(connection.sync(), dataKey(name, "k"), reverseKey(name, "k"));
+        }
+    }
+
+    private static void assertSameExpiry(io.lettuce.core.api.sync.RedisCommands<byte[], byte[]> commands,
+            byte[] data, byte[] reverse) {
+        // Redis 6.2 updates time during Lua execution. Compare PTTLs only when
+        // both were sampled inside one server millisecond, without a tolerance.
+        String script = "local a=redis.call('time'); local d=redis.call('pttl',KEYS[1]); "
+                + "local r=redis.call('pttl',KEYS[2]); local b=redis.call('time'); "
+                + "return {a[1]*1000+math.floor(a[2]/1000), b[1]*1000+math.floor(b[2]/1000), d, r}";
+        for (int i = 0; i < 20; i++) {
+            List<Long> sample = commands.eval(script, ScriptOutputType.MULTI, new byte[][]{data, reverse});
+            if (sample.get(0).equals(sample.get(1))) {
+                assertTrue(sample.get(2) > 0, "data must still be live");
+                assertEquals(sample.get(2), sample.get(3), "data and reverse index must expire at exactly the same instant");
+                return;
+            }
+        }
+        fail("could not sample both PTTLs within one Redis millisecond");
+    }
+
 }
