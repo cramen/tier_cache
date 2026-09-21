@@ -51,7 +51,7 @@ property name. Properties are shown relative to a level prefix — use
 | `l1-max-size` | `l1MaxSize` | `10000` | entries | Maximum number of entries in the in-process L1 (bounded Caffeine cache). Must be positive. |
 | `l1-expire-after-write` | `l1ExpireAfterWrite` | `5m` | duration | L1 TTL since write, before jitter. Must be positive. Invariant: `<= l2-ttl` (fail-fast). |
 | `l1-expire-after-access` | `l1ExpireAfterAccess` | unset (disabled) | duration | L1 TTL since last access. Unset means no access-based expiry. When set: must be positive and `<= l2-ttl`. |
-| `l2-ttl` | `l2Ttl` | `1h` | duration | Logical TTL of L2 (Redis) entries — the freshness bound. Must be positive. With a stale window configured, entries are physically stored for `l2-ttl + stale-ttl`; see [Stale window semantics](#stale-window-semantics). |
+| `l2-ttl` | `l2Ttl` | `1h` | duration | Logical TTL of L2 (Redis) entries; see [end-to-end staleness budgeting](sizing-and-ttl.md#l1-ttl-vs-l2-ttl). Must be positive. With a stale window configured, entries are physically stored for `l2-ttl + stale-ttl`; see [Stale window semantics](#stale-window-semantics). |
 | `jitter-amplitude` | `jitterAmplitude` | `0.10` | fraction in `[0, 1)` | TTL jitter amplitude. `0.1` shortens TTLs by up to 10%. See [TTL jitter](#ttl-jitter). |
 | `null-policy` | `nullPolicy` | `deny` | `deny` or `allow` | Null-caching policy. See [Null-caching policy](#null-caching-policy). |
 | `null-marker-ttl` | `nullPolicy.markerTtl()` | `1m` (when policy is `allow`) | duration | TTL of cached null-markers (jittered). Must be positive and `<= l2-ttl`. Ignored under `deny`. |
@@ -209,13 +209,16 @@ surfaced via the `tiercache.degraded=1` metric and a log line. After 5
 seconds the breaker half-opens and admits up to 3 probe calls; it closes
 when all probes succeed and reopens on any probe failure.
 
-On recovery, missed invalidations are replayed from the journal **before**
-recovery is reported; L1 is not flushed on reconnect within the journal
-window. If the disconnect outlives the window (missed rows were trimmed), L1
-is flushed for the affected caches — signalled via log, the
-`tiercache.invalidation{direction="dropped"}` metric, and the
-`onJournalOverflow` listener callback. A hand-built invalidation engine
-without a journal always falls back to a full flush.
+On recovery, the engine attempts journal replay **before** reporting
+recovery. Successful replay retains entries it does not invalidate. If the
+required history cannot be verified — including trimmed rows or a failed
+replay read — the affected cache's L1 is flushed. This can happen even
+within the journal's capacity window and can cause a source-load burst.
+The fallback emits a log, `tiercache.invalidation{direction="dropped"}` and
+the `onJournalOverflow` callback; despite its name, that callback also
+reports failed replay verification. A hand-built engine without a journal
+instead logs and flushes every registered L1; that path has no journal
+overflow metric or callback.
 
 ## Degradation stale window
 
@@ -236,11 +239,13 @@ Trade-offs to weigh before enabling: entries live longer in L1 (memory
 bounded by `window / L1 TTL x working set`, still capped by `l1-max-size`),
 and the knob changes nothing in normal mode — it only serves staleness
 during outages. Writes made while Redis is fully down are L1-only and are
-NOT healed by journal replay: a stale L2 copy with a long TTL can re-warm
-L1 repeatedly after recovery, so the divergence bound is the stale L2
-copy's remaining TTL plus one L1 warm — not one L1 TTL. The default (off)
-keeps the previous behavior exactly, including the loader fallback during
-outages.
+NOT healed by journal replay: a stale L2 copy can re-warm L1 after recovery.
+With write-based expiry, no access sliding or SWR, and no later stale
+writes, budget its remaining L2 TTL plus one final L1 warm. During an
+ongoing outage, the configured degradation window additionally permits
+local stale serving. Access expiry and SWR require separate budgeting;
+see [TTL sizing](sizing-and-ttl.md#l1-ttl-vs-l2-ttl). The default (off)
+keeps the existing loader fallback during outages.
 
 ## Example
 

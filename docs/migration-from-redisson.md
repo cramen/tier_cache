@@ -54,27 +54,27 @@ What Redisson does (per its public docs for `LocalCachedMapOptions.ReconnectionS
 What Tiercache does: one strategy, no knob. The invalidation engine keeps a
 bounded journal (`RedisStreamJournal`, capacity 10,000 entries per cache by
 default, `tiercache.invalidation.journal-capacity`). On reconnect — including
-circuit-breaker recovery after an L2 outage — missed events are replayed from
-the journal; healthy L1 entries are kept. L1 is flushed only when replay is
-impossible: the journal window was exceeded during the disconnect (logged,
-`onJournalOverflow` callback, `tiercache.invalidation{direction=dropped}`
-metric), or you wired the programmatic `InvalidationService` without a
-journal. See
+circuit-breaker recovery after an L2 outage — recorded events are replayed
+when the required history is readable and intact. Unverifiable history or
+a replay-read failure triggers an L1 flush for the affected cache, with a
+log, `onJournalOverflow` callback and
+`tiercache.invalidation{direction=dropped}` metric. An engine without a
+journal instead logs and flushes every registered L1. See
 [`InvalidationService.onReconnect`](../tiercache-invalidation/src/main/java/io/tiercache/invalidation/InvalidationService.java).
 
 ### What changes for you operationally
 
-- If you ran `CLEAR`: Redis blips stop causing fleet-wide L1 drops. Expect
-  far fewer reconnect-triggered loader spikes; the flush path now fires only
-  on journal overflow, which is a sized and monitored event instead of a
-  routine one. If you sized your loader for CLEAR-style reconnect storms, you
-  can likely shrink that headroom.
+- If you ran `CLEAR`: successful replay avoids an unconditional L1 flush.
+  Recovery can still flush L1, including after a replay-read failure within
+  the journal window. Retain capacity for recovery-time loader bursts and
+  validate it under failures before reducing source headroom.
 - If you ran `LOAD`: behavior is equivalent in shape — replay first, flush as
   the bounded fallback. The journal capacity is the knob you already know
   (`journal-capacity`); watch the overflow signal above.
-- If you ran `NONE`: staleness is now actively healed on reconnect. Your
-  worst-case staleness window after a blip shrinks from "until L1 TTL" to
-  "journal replay latency".
+- If you ran `NONE`: replay applies missed events that survived in the
+  journal. It cannot reconstruct writes that never reached Redis or rows
+  lost during Redis failover. Overall source convergence is not bounded by
+  replay latency; see the [outage residual and TTL budgeting](configuration.md#degradation-stale-window).
 
 ## Feature parity
 
@@ -234,6 +234,8 @@ semantics; see
 2. Exercise a hot read twice; the second call is served from L1
    (`tiercache.requests{result="l1_hit"}` if you bind the metrics module —
    see [observability](observability.md)).
-3. Restart Redis briefly: expect `tiercache.degraded=1` while it is down,
-   then `tiercache.invalidation{direction="replayed"}` on recovery — with no
-   mass L1 flush, unless the journal window was exceeded.
+3. Restart Redis briefly: expect `tiercache.degraded=1` while it is down.
+   On recovery, missed journal rows produce `direction="replayed"`; a
+   journal-backed flush produces `direction="dropped"`. Inspect logs for
+   unavailable history or replay-read failures, and measure the resulting
+   source load rather than assuming recovery never flushes L1.

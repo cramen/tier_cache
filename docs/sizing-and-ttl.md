@@ -49,25 +49,28 @@ recommendation — it is enforced. Startup validation
 values, and the fix. Startup aborts; no traffic is served with the invalid
 configuration.
 
-Why it must hold: TTL expiry is local and silent. L2 entries do not
-generate an invalidation event when they expire, and invalidation events
-only cover explicit writes and evictions. If an L1 entry could outlive its
-L2 counterpart, an instance would keep serving data past its freshness
-bound with no signal that the source entry is gone. With L1 ≤ L2, L1 can
-never serve anything staler than the freshness bound `l2-ttl` that L2
-enforces for everyone.
+This rule compares configured durations, not the remaining lifetime of a
+specific Redis entry. L2 expiry is silent, and warming L1 from L2 starts a
+new local TTL. The rule therefore does not guarantee that a local copy
+expires at the same instant as its Redis counterpart.
+
+For write-based expiry, with no access sliding, SWR or degradation stale
+window, and no later stale writes, budget a stale Redis copy's remaining
+TTL plus one final L1 warm. This matters for out-of-band source changes and
+evictions that never reached Redis during an outage. Expire-after-access
+can slide local deadlines; opt-in SWR and degradation windows permit
+additional stale serving. Assess those policies separately rather than
+applying the simple write-expiry bound.
 
 Choosing the ratio within that constraint:
 
-- **`l2-ttl` is the freshness bound.** Set it from how stale the data may
-  become when it changes *out of band* (a write that bypasses the cache
-  invalidation path entirely). Writes through the cache propagate by
-  invalidation in milliseconds; the TTL only matters for changes nobody
-  told the cache about.
-- **`l1-expire-after-write` trades L2 traffic against staleness on missed
-  events.** A longer L1 TTL cuts L2 reads, but it is also the upper bound
-  on how long a missed or dropped invalidation can leave a stale L1 copy
-  serving. The shipped default ratio is 1:12 (`5m` vs `1h`); ratios
+- **`l2-ttl` controls a Redis entry's logical freshness lifetime.** Size it together
+  with the final L1 warm and any access/stale policies against your
+  application's freshness budget. Timely invalidation usually shortens
+  staleness, but propagation is asynchronous.
+- **`l1-expire-after-write` trades L2 traffic against local retention.**
+  It bounds one L1 copy's lifetime without access sliding or stale serving;
+  it does not bound repeated warming from a still-stale L2 entry. The shipped default ratio is 1:12 (`5m` vs `1h`); ratios
   between 1:4 and 1:20 are the sensible band. Below 1:4 L1 stops earning
   its keep; above 1:20 the staleness window on a lost event usually stops
   being acceptable.
