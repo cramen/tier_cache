@@ -7,6 +7,47 @@ target versions.
 
 For the full list of additions and fixes, see [CHANGELOG.md](CHANGELOG.md).
 
+## 1.5.0 (unreleased)
+
+### Custom transports: versioned tagged writes
+
+The public `TierCache.put(key, value, tags)` signature is unchanged. Custom
+`RemoteCache` providers and decorators must implement both
+`supportsTaggedWriteOutcomes()` (a side-effect-free, no-I/O capability query)
+and `putTaggedIfNewer(...)` before accepting **versioned tagged writes**.
+The existing void `putTagged(...)` method alone is no longer sufficient.
+Old providers still compile and link, but core now throws an actionable
+`CacheConfigurationException` before any mutation for this unsupported
+operation, including when the breaker is OPEN. Unsupported capability is
+not recorded as an infrastructure failure.
+
+Return `WON` only after accepting the candidate, and `LOST` when a newer
+stored value or tombstone rejects it. Couple the acceptance decision with
+data, replacement tag memberships, reverse index and any configured journal
+append. A losing candidate must leave all of them unchanged. Advertise the
+capability only when this contract is implemented; decorators must forward
+both methods. The default extension returns `UNSUPPORTED` without I/O for
+versioned entries. Unversioned entries still delegate to the legacy void
+method with its existing unconditional semantics.
+
+The built-in Lettuce transport implements this in one Lua operation on
+Redis/Valkey. Value frames, key names and journal formats do not change.
+Its existing limitation remains: without a journal, or for unversioned
+entries, tagged writes are unconditional. Retagging replaces old memberships;
+it does not accumulate every tag ever assigned to the key. During a mixed
+rollout, old writers can still create incorrect memberships or publish a
+losing candidate. Upgrade all writers; already-corrupt indexes are not
+repaired automatically by the new protocol.
+
+A confirmed loss performs at most one convergence read and never publishes
+the losing value. A refused breaker probe or an admitted infrastructure
+failure uses local-only fallback without publishing or persisting tags.
+This does not make an unacknowledged timeout a confirmed loss: Redis may
+have accepted the write before the client timed out. There is no guaranteed
+rollback, exactly-once retry, or reconciliation after such an uncertain
+outcome. Lua excludes interleaving commands, but does not roll back commands
+already executed if a later Redis runtime error occurs.
+
 ## 1.4.0
 
 - New opt-in knob `tiercache.degradation-stale-ttl` (per cache, default `0`

@@ -14,6 +14,7 @@ import io.tiercache.spi.DistributedLockProvider;
 import io.tiercache.spi.LockProviderSource;
 import io.tiercache.spi.RemoteCache;
 import io.tiercache.spi.StoredEntry;
+import io.tiercache.spi.TaggedWriteOutcome;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -315,7 +316,7 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
 
     // --- Tag registry: tiercache:tags:<cache>:<tag> sets + reverse index
     // tiercache:tagkeys:<cache>:<key>. Redis sets have no per-member TTL,
-    // so boundedness comes from two mechanisms (Lua.TAG_ADD/TAG_LIVE_MEMBERS):
+    // so boundedness comes from two mechanisms (Lua.TAGGED_WRITE/TAG_LIVE_MEMBERS):
     // each tag set carries an extend-only TTL (a shorter-lived entry never
     // shrinks the index, so a set outlives its longest member by a bounded
     // margin and then expires — including tags never touched again), and
@@ -340,23 +341,47 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
 
     @Override
     public void putTagged(K key, StoredEntry<V> entry, Duration ttl, String[] tags) {
-        put(key, entry, ttl);
-        byte[] namespaced = namespaced(key);
-        byte[] keyTags = keyTagsKey(namespaced);
-        if (tags.length > 0) {
-            long ttlMillis = Math.max(1, ttl.toMillis());
-            commands.del(keyTags);
-            commands.sadd(keyTags, java.util.Arrays.stream(tags)
-                    .map(t -> t.getBytes(StandardCharsets.UTF_8)).toArray(byte[][]::new));
-            commands.pexpire(keyTags, ttlMillis);
-            for (String tag : tags) {
-                commands.eval(Lua.TAG_ADD, io.lettuce.core.ScriptOutputType.INTEGER,
-                        new byte[][]{tagSetKey(tag)},
-                        namespaced,
-                        String.valueOf(ttlMillis).getBytes(StandardCharsets.UTF_8),
-                        String.valueOf(TAG_JANITOR_SAMPLE).getBytes(StandardCharsets.UTF_8));
-            }
+        putTaggedIfNewer(key, entry, ttl, tags);
+    }
+
+    @Override
+    public boolean supportsTaggedWriteOutcomes() {
+        return true;
+    }
+
+    @Override
+    public TaggedWriteOutcome putTaggedIfNewer(K key, StoredEntry<V> entry,
+            Duration ttl, String[] tags) {
+        java.util.Objects.requireNonNull(entry, "entry");
+        java.util.Objects.requireNonNull(tags, "tags");
+        long ttlMillis = ttl.toMillis();
+        if (ttlMillis <= 0) {
+            throw new IllegalArgumentException("Tagged entry TTL must be at least one millisecond");
         }
+        // Fully encode/validate before issuing any mutating Redis operation.
+        byte[] rawKey = keySerializer.toBytes(key);
+        byte[] namespaced = prefixKey(rawKey);
+        boolean conditional = journal != null && entry.version() != null;
+        java.util.List<byte[]> args = new java.util.ArrayList<>();
+        args.add(entry.version() == null ? new byte[0]
+                : entry.version().toWire().getBytes(StandardCharsets.UTF_8));
+        args.add(encode(entry, false));
+        args.add(Long.toString(ttlMillis).getBytes(StandardCharsets.UTF_8));
+        args.add(Integer.toString(journal == null ? 0 : journal.capacity()).getBytes(StandardCharsets.UTF_8));
+        args.add(new byte[]{(byte) InvalidationMessage.Type.INVALIDATE.ordinal()});
+        args.add(rawKey);
+        args.add(conditional ? journalPayload(entry) : new byte[0]);
+        args.add(new byte[]{(byte) (conditional ? '1' : '0')});
+        args.add(("tiercache:tags:" + cacheName + ":").getBytes(StandardCharsets.UTF_8));
+        args.add(Integer.toString(TAG_JANITOR_SAMPLE).getBytes(StandardCharsets.UTF_8));
+        for (String tag : new java.util.LinkedHashSet<>(java.util.Arrays.asList(tags))) {
+            args.add(java.util.Objects.requireNonNull(tag, "tag").getBytes(StandardCharsets.UTF_8));
+        }
+        Long result = commands.eval(Lua.TAGGED_WRITE, io.lettuce.core.ScriptOutputType.INTEGER,
+                new byte[][]{namespaced, RedisStreamJournal.streamKeyBytes(journalName),
+                        RedisStreamJournal.trimCounterKeyBytes(journalName), keyTagsKey(namespaced)},
+                args.toArray(new byte[0][]));
+        return result != null && result == 1L ? TaggedWriteOutcome.WON : TaggedWriteOutcome.LOST;
     }
 
     @Override
@@ -385,7 +410,10 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
     }
 
     private byte[] namespaced(K key) {
-        byte[] serialized = keySerializer.toBytes(key);
+        return prefixKey(keySerializer.toBytes(key));
+    }
+
+    private byte[] prefixKey(byte[] serialized) {
         byte[] out = new byte[keyPrefix.length + serialized.length];
         System.arraycopy(keyPrefix, 0, out, 0, keyPrefix.length);
         System.arraycopy(serialized, 0, out, keyPrefix.length, serialized.length);
@@ -477,25 +505,44 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
                         .replace("@FIELDS", "'t', ARGV[4], 'k', ARGV[5], 'v', ARGV[6], 'p', ARGV[7]")
                 + "return 1";
 
-        /**
-         * Tag write: add the member, then lift the set TTL extend-only
-         * (PTTL -1/-2 both fall below any real TTL, so the comparison
-         * covers them; a shorter-lived entry never shrinks the index —
-         * the 6.2-compatible emulation of PEXPIRE GT). The janitor runs
-         * in the same call: a random member sample, each SREM conditional
-         * on the data key being absent — atomically, so a concurrently
-         * rewritten key keeps its membership.
-         */
-        static final String TAG_ADD =
-                "redis.call('sadd', KEYS[1], ARGV[1]) "
-                        + "local ttl = tonumber(ARGV[2]) "
-                        + "if redis.call('pttl', KEYS[1]) < ttl then "
-                        + "redis.call('pexpire', KEYS[1], ttl) end "
-                        + "local candidates = redis.call('srandmember', KEYS[1], tonumber(ARGV[3])) "
-                        + "for _, m in ipairs(candidates) do "
-                        + "if redis.call('exists', m) == 0 then redis.call('srem', KEYS[1], m) end "
-                        + "end "
-                        + "return 1";
+        /** One acceptance decision for data, replacement tags and optional journal. */
+        static final String TAGGED_WRITE = VERSION_COMPARE + """
+                if ARGV[8] == '1' then
+                    local curVer = curVersion(redis.call('get', KEYS[1]))
+                    if curVer and newer(curVer, ARGV[1]) then return 0 end
+                end
+                local oldTags = redis.call('smembers', KEYS[4])
+                local wanted = {}
+                for i = 11, #ARGV do wanted[ARGV[i]] = true end
+                redis.call('set', KEYS[1], ARGV[2], 'PX', ARGV[3])
+                for _, tag in ipairs(oldTags) do
+                    if not wanted[tag] then
+                        redis.call('srem', ARGV[9] .. tag, KEYS[1])
+                    end
+                end
+                redis.call('del', KEYS[4])
+                local ttl = tonumber(ARGV[3])
+                for i = 11, #ARGV do
+                    local tag = ARGV[i]
+                    local tagKey = ARGV[9] .. tag
+                    redis.call('sadd', KEYS[4], tag)
+                    redis.call('sadd', tagKey, KEYS[1])
+                    if redis.call('pttl', tagKey) < ttl then
+                        redis.call('pexpire', tagKey, ttl)
+                    end
+                    local candidates = redis.call('srandmember', tagKey, tonumber(ARGV[10]))
+                    for _, member in ipairs(candidates) do
+                        if redis.call('exists', member) == 0 then
+                            redis.call('srem', tagKey, member)
+                        end
+                    end
+                end
+                if #ARGV >= 11 then redis.call('pexpire', KEYS[4], ttl) end
+                if ARGV[8] == '1' then
+                """
+                + TRIM_COUNTED_XADD.replace("@CAP", "ARGV[4]")
+                        .replace("@FIELDS", "'t', ARGV[5], 'k', ARGV[6], 'v', ARGV[1], 'p', ARGV[7]")
+                + "end return 1";
 
         /**
          * Tag read: returns the live members only; dead members are

@@ -3,6 +3,7 @@ package io.tiercache.testkit;
 import io.tiercache.Version;
 import io.tiercache.spi.RemoteCache;
 import io.tiercache.spi.StoredEntry;
+import io.tiercache.spi.TaggedWriteOutcome;
 
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -71,4 +72,15 @@ public final class FailingRemoteCache<K, V> implements RemoteCache<K, V> {
         maybeFail();
         return delegate.setIfAbsent(key, entry, ttl);
     }
+    @Override
+    public boolean supportsTaggedWriteOutcomes() {
+        return delegate.supportsTaggedWriteOutcomes();
+    }
+
+    @Override
+    public TaggedWriteOutcome putTaggedIfNewer(K key, StoredEntry<V> entry, Duration ttl, String[] tags) {
+        maybeFail();
+        return delegate.putTaggedIfNewer(key, entry, ttl, tags);
+    }
+
 }

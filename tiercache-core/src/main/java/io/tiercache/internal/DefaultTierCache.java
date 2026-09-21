@@ -1,6 +1,7 @@
 package io.tiercache.internal;
 
 import io.tiercache.CacheSettings;
+import io.tiercache.CacheConfigurationException;
 import io.tiercache.InvalidationMode;
 import io.tiercache.InvalidationMessage;
 import io.tiercache.LookupResult;
@@ -15,6 +16,7 @@ import io.tiercache.spi.CacheMetricsListener;
 import io.tiercache.spi.LocalCache;
 import io.tiercache.spi.RemoteCache;
 import io.tiercache.spi.StoredEntry;
+import io.tiercache.spi.TaggedWriteOutcome;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -614,6 +616,11 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
             put(key, value);
             return;
         }
+        // A missing SPI capability is a configuration error, including while
+        // OPEN: it must not silently become a successful local-only write.
+        if (versionGenerator != null && !l2.supportsTaggedWriteOutcomes()) {
+            throw unsupportedTaggedWrite();
+        }
         long g0 = l1Generation.get();
         Version version = nextVersion();
         StoredEntry<V> entry = StoredEntry.ofValue(value, version);
@@ -621,13 +628,33 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
             warmL1(key, entry, g0);
             return;
         }
+        TaggedWriteOutcome outcome;
         try {
-            l2.putTagged(key, entry, settings.l2Ttl(), tags);
-            warmL1(key, entry, g0);
-            publishStore(key, entry, version);
+            outcome = l2.putTaggedIfNewer(key, entry, settings.l2Ttl(), tags);
         } catch (L2UnavailableException e) {
             warmL1(key, entry, g0);
+            return;
         }
+        if (outcome == TaggedWriteOutcome.UNSUPPORTED) {
+            throw unsupportedTaggedWrite();
+        }
+        if (outcome == TaggedWriteOutcome.LOST) {
+            StoredEntry<V> current = l2Get(key);
+            if (current != null) {
+                warmL1(key, current, g0);
+            } else {
+                evictLocal(key);
+            }
+            return;
+        }
+        warmL1(key, entry, g0);
+        publishStore(key, entry, version);
+    }
+
+    private CacheConfigurationException unsupportedTaggedWrite() {
+        return new CacheConfigurationException("Cache '" + cacheName
+                + "' requires versioned tagged-write outcomes. Implement RemoteCache."
+                + "supportsTaggedWriteOutcomes() and putTaggedIfNewer() in the custom transport.");
     }
 
     @Override

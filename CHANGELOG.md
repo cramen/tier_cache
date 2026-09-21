@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Tagged writes preserve the remote acceptance result: rejected candidates no longer warm L1, publish UPDATE events, or alter tag indexes. Lettuce atomically updates accepted values, replacement tags, reverse indexes and journal bookkeeping. Losing writers perform one bounded convergence read; degraded writes stay local. Custom versioned tagged SPI providers must implement the new outcome method and capability query; see UPGRADING.md.
+
 - Foreground misses that join a skipped SWR/XFetch refresh no longer receive a false null. In-flight claims distinguish real results from skipped coordination and promote foreground demand through the existing bounded load path. Races with an already-skipped or replacement refresh retain singleflight ownership, the original coordination deadline and the two-loader-execution limit; genuine nulls and loader failures remain distinct.
 
 ## [1.4.0] - 2026-09-21

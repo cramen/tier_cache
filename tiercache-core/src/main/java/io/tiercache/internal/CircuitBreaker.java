@@ -113,6 +113,7 @@ public final class CircuitBreaker {
 
     private State state = State.CLOSED;
     private long openedAtNanos;
+    private long epoch;
     private int probesInFlight;
     private int probesSucceeded;
 
@@ -199,6 +200,71 @@ public final class CircuitBreaker {
     }
 
     /**
+     * Admits one operation whose completion may be neutral (for example, an
+     * unsupported capability discovered by a custom SPI). The permit cannot
+     * retire a probe from a subsequent breaker episode.
+     *
+     * @return a once-completable permit, or null when admission is rejected
+     * @since 1.5.0
+     */
+    public synchronized Permit tryAcquirePermit() {
+        return tryAcquire() ? new Permit(epoch) : null;
+    }
+
+    /**
+     * Once-only accounting for an admitted operation; callbacks use the same
+     * transition rules as the legacy accounting methods.
+     * @since 1.5.0
+     */
+    public final class Permit {
+        private final long acquiredEpoch;
+        private boolean completed;
+
+        private Permit(long acquiredEpoch) {
+            this.acquiredEpoch = acquiredEpoch;
+        }
+
+        /**
+         * Records successful remote execution.
+         * @since 1.5.0
+         */
+        public void success() { complete(1); }
+
+        /**
+         * Records failed remote execution.
+         * @since 1.5.0
+         */
+        public void failure() { complete(-1); }
+
+        /**
+         * Retires admission without recording a remote outcome.
+         * @since 1.5.0
+         */
+        public void cancel() { complete(0); }
+
+        private void complete(int outcome) {
+            synchronized (CircuitBreaker.this) {
+                if (completed) {
+                    return;
+                }
+                completed = true;
+                if (acquiredEpoch != epoch) {
+                    return;
+                }
+                if (outcome == 0) {
+                    if (state == State.HALF_OPEN) {
+                        probesInFlight--;
+                    }
+                } else if (outcome > 0) {
+                    onSuccess();
+                } else {
+                    onFailure();
+                }
+            }
+        }
+    }
+
+    /**
      * Records a successful L2 call.
      *
      * @since 0.1.0
@@ -245,6 +311,7 @@ public final class CircuitBreaker {
     }
 
     private void open() {
+        epoch++;
         if (state != State.OPEN) {
             state = State.OPEN;
             openedAtNanos = System.nanoTime();
@@ -255,6 +322,7 @@ public final class CircuitBreaker {
     }
 
     private void close() {
+        epoch++;
         state = State.CLOSED;
         windowPos = 0;
         windowCount = 0;

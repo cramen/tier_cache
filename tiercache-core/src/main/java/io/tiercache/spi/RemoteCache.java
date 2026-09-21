@@ -180,6 +180,49 @@ public interface RemoteCache<K, V> {
     }
 
     /**
+     * Whether versioned tagged stores expose their outcome without losing the
+     * relationship between the accepted value and its tag metadata. This
+     * capability check must have no I/O or mutation, including during outages.
+     *
+     * @return true if versioned tagged outcomes are implemented
+     * @since 1.5.0
+     */
+    default boolean supportsTaggedWriteOutcomes() {
+        return false;
+    }
+
+    /**
+     * Stores a tagged candidate and reports its outcome. Implementations that
+     * support version comparisons must couple acceptance, data, tags and any
+     * journal append atomically. LOST must have no such side effects.
+     * Unversioned legacy stores retain their unconditional semantics; a
+     * versioned legacy store is unsupported and performs no work. Implementing
+     * this method also requires advertising the capability above. Existing
+     * providers still link, but versioned tagged calls through core fail with
+     * a configuration error until both methods are implemented, even during
+     * OPEN-breaker local fallback.
+     *
+     * <p>A transport exception is not a confirmed loss: a timed-out command
+     * may have committed remotely. No rollback or exactly-once retry follows
+     * from this outcome contract.
+     *
+     * @param key the key to store
+     * @param entry the candidate entry
+     * @param ttl the entry lifetime
+     * @param tags the replacement tags
+     * @return the accepted, rejected, or unsupported outcome; never null
+     * @since 1.5.0
+     */
+    default TaggedWriteOutcome putTaggedIfNewer(K key, StoredEntry<V> entry,
+            Duration ttl, String[] tags) {
+        if (entry.version() != null) {
+            return TaggedWriteOutcome.UNSUPPORTED;
+        }
+        putTagged(key, entry, ttl, tags);
+        return TaggedWriteOutcome.WON;
+    }
+
+    /**
      * Keys currently tagged with {@code tag} (deserialized). Default: none.
      *
      * @param tag the tag to look up

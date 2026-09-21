@@ -2,6 +2,7 @@ package io.tiercache.testkit;
 
 import io.tiercache.spi.RemoteCache;
 import io.tiercache.spi.StoredEntry;
+import io.tiercache.spi.TaggedWriteOutcome;
 
 import java.time.Duration;
 import java.util.Map;
@@ -27,7 +28,7 @@ public final class InMemoryRemoteCache<K, V> implements RemoteCache<K, V> {
     }
 
     @Override
-    public StoredEntry<V> get(K key) {
+    public synchronized StoredEntry<V> get(K key) {
         Entry<V> entry = store.get(key);
         if (entry == null) {
             return null;
@@ -40,7 +41,7 @@ public final class InMemoryRemoteCache<K, V> implements RemoteCache<K, V> {
     }
 
     @Override
-    public void put(K key, StoredEntry<V> value, Duration ttl) {
+    public synchronized void put(K key, StoredEntry<V> value, Duration ttl) {
         store.put(key, new Entry<>(value, System.nanoTime() + ttl.toNanos()));
     }
 
@@ -50,7 +51,7 @@ public final class InMemoryRemoteCache<K, V> implements RemoteCache<K, V> {
      * the current write time, so reads can classify freshness by age.
      */
     @Override
-    public void put(K key, StoredEntry<V> entry, Duration ttl, Duration staleTtl) {
+    public synchronized void put(K key, StoredEntry<V> entry, Duration ttl, Duration staleTtl) {
         if (staleTtl == null || staleTtl.isZero() || staleTtl.isNegative()) {
             put(key, entry, ttl);
             return;
@@ -70,7 +71,7 @@ public final class InMemoryRemoteCache<K, V> implements RemoteCache<K, V> {
     }
 
     @Override
-    public void evict(K key) {
+    public synchronized void evict(K key) {
         store.remove(key);
         java.util.Set<String> tags = keyTags.remove(key);
         if (tags != null) {
@@ -84,12 +85,12 @@ public final class InMemoryRemoteCache<K, V> implements RemoteCache<K, V> {
     }
 
     @Override
-    public void clear() {
+    public synchronized void clear() {
         store.clear();
     }
 
     @Override
-    public boolean setIfAbsent(K key, StoredEntry<V> entry, Duration ttl) {
+    public synchronized boolean setIfAbsent(K key, StoredEntry<V> entry, Duration ttl) {
         long now = System.nanoTime();
         Entry<V> candidate = new Entry<>(entry, now + ttl.toNanos());
         Entry<V> result = store.merge(key, candidate,
@@ -101,16 +102,34 @@ public final class InMemoryRemoteCache<K, V> implements RemoteCache<K, V> {
     private final Map<K, java.util.Set<String>> keyTags = new ConcurrentHashMap<>();
 
     @Override
-    public void putTagged(K key, StoredEntry<V> entry, Duration ttl, String[] tags) {
+    public synchronized void putTagged(K key, StoredEntry<V> entry, Duration ttl, String[] tags) {
+        putTaggedIfNewer(key, entry, ttl, tags);
+    }
+
+    @Override
+    public boolean supportsTaggedWriteOutcomes() {
+        return true;
+    }
+
+    @Override
+    public synchronized TaggedWriteOutcome putTaggedIfNewer(
+            K key, StoredEntry<V> entry, Duration ttl, String[] tags) {
+        StoredEntry<V> current = get(key);
+        if (entry.version() != null && current != null && current.version() != null
+                && entry.version().compareTo(current.version()) < 0) {
+            return TaggedWriteOutcome.LOST;
+        }
+        evict(key);
         put(key, entry, ttl);
         for (String tag : tags) {
             tagIndex.computeIfAbsent(tag, t -> ConcurrentHashMap.newKeySet()).add(key);
             keyTags.computeIfAbsent(key, k -> ConcurrentHashMap.newKeySet()).add(tag);
         }
+        return TaggedWriteOutcome.WON;
     }
 
     @Override
-    public java.util.List<K> keysByTag(String tag) {
+    public synchronized java.util.List<K> keysByTag(String tag) {
         return java.util.List.copyOf(tagIndex.getOrDefault(tag, java.util.Set.of()));
     }
 
