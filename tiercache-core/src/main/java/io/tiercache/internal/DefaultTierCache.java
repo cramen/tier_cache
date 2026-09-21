@@ -118,7 +118,13 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
      * the forgotten barrier reopen the race.
      */
     private static final int L1_META_MAX = 100_000;
-    private static final Duration L1_META_EXPIRY = Duration.ofMinutes(10);
+    /**
+     * Barrier-map expiry. Mutable ONLY as a test seam (accelerated expiry
+     * in race tests); production wiring never touches it. Public solely
+     * because the race tests live in another package — not for application
+     * use.
+     */
+    public static Duration L1_META_EXPIRY = Duration.ofMinutes(10);
     private static final int L1_STRIPES = 64;
 
     private final L1BarrierMap<K> l1Metas;
@@ -413,17 +419,18 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
             L2Result<V> result = l2Read(key);
             if (result.read() == L2Read.HIT) {
                 if (ageTrackingEnabled) {
-                    entry = classifyByAge(key, result.entry(), loader, g0);
-                    if (entry == null) {
-                        metrics.onRequest(cacheName, CacheMetricsListener.Outcome.MISS);
-                        return null;
+                    StoredEntry<V> classified = classifyByAge(key, result.entry(), loader, g0);
+                    if (classified != null) {
+                        metrics.onRequest(cacheName, CacheMetricsListener.Outcome.L2_HIT);
+                        return classified.isNullMarker() ? null : classified.value();
                     }
+                    // Past the SWR horizon: fall through to the loader path —
+                    // a hard miss must never surface as a false null here.
+                } else {
+                    warmL1(key, result.entry(), g0);
                     metrics.onRequest(cacheName, CacheMetricsListener.Outcome.L2_HIT);
-                    return entry.isNullMarker() ? null : entry.value();
+                    return result.entry().isNullMarker() ? null : result.entry().value();
                 }
-                warmL1(key, result.entry(), g0);
-                metrics.onRequest(cacheName, CacheMetricsListener.Outcome.L2_HIT);
-                return result.entry().isNullMarker() ? null : result.entry().value();
             }
             if (result.read() == L2Read.REJECTED && freshness == L1Freshness.STALE_ALLOWED) {
                 metrics.onRequest(cacheName, CacheMetricsListener.Outcome.STALE_DEGRADED);
@@ -509,10 +516,12 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
                 if (l1.get(key) != null) {
                     return false;
                 }
-                commitL1(key, StoredEntry.ofValue(value, version),
+                // Success is reported only for a really committed insert: a
+                // refused commit (generation/barrier) is a lost race, never
+                // a fabricated win.
+                return commitL1(key, StoredEntry.ofValue(value, version),
                         jitter.apply(settings.l1ExpireAfterWrite(), settings.jitterAmplitude()),
                         g0);
-                return true;
             }
         }
         if (won) {
@@ -565,18 +574,19 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
             put(key, value);
             return;
         }
+        long g0 = l1Generation.get();
         Version version = nextVersion();
         StoredEntry<V> entry = StoredEntry.ofValue(value, version);
         if (breaker != null && breaker.isOpen()) {
-            warmL1(key, entry);
+            warmL1(key, entry, g0);
             return;
         }
         try {
             l2.putTagged(key, entry, settings.l2Ttl(), tags);
-            warmL1(key, entry);
+            warmL1(key, entry, g0);
             publishStore(key, entry, version);
         } catch (L2UnavailableException e) {
-            warmL1(key, entry);
+            warmL1(key, entry, g0);
         }
     }
 
@@ -685,10 +695,14 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
      */
     private boolean commitL1(K key, StoredEntry<V> entry, Duration ttl, long generationAtStart) {
         synchronized (l1LockFor(key)) {
+            // Read metadata FIRST: its lookup may itself expire a barrier and
+            // bump the generation — that bump must be seen by the check
+            // below, never after it.
+            L1BarrierMap.L1Meta meta = l1Metas.get(key);
             if (generationAtStart != l1Generation.get()) {
                 return false;
             }
-            Version highestSeen = l1Metas.get(key) != null ? l1Metas.get(key).highestSeen() : null;
+            Version highestSeen = meta != null ? meta.highestSeen() : null;
             if (entry.version() != null && highestSeen != null
                     && entry.version().compareTo(highestSeen) < 0) {
                 return false;
@@ -881,6 +895,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
      */
     private StoredEntry<V> revalidate(K key, Function<? super K, ? extends V> loader,
             long servedWriteTimestamp) {
+        long g0 = l1Generation.get();
         if (lockProvider == null || watchdog == null || !l2Available()) {
             // No coordination possible: the in-flight claim already bounds
             // this to one load per key per instance.
@@ -895,7 +910,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
             if (current != null && current.hasWriteTimestamp()
                     && current.writeTimestampMillis() > servedWriteTimestamp) {
                 // A newer write landed while we claimed the lock: converge, no load.
-                warmL1(key, current);
+                warmL1(key, current, g0);
                 return current;
             }
             return loadWithWatchdog(key, loader, lock);
@@ -1129,14 +1144,12 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         return entry;
     }
 
-    /** Writes into L1 with a jittered TTL through the atomic commit. */
-    private void warmL1(K key, StoredEntry<V> entry) {
-        warmL1(key, entry, l1Generation.get());
-    }
-
     /**
      * Commit-warms with the generation captured at the operation's start:
-     * a generation change or a newer barrier skips ONLY the L1 fill.
+     * a generation change or a newer barrier skips ONLY the L1 fill. There
+     * is deliberately no generation-less overload: every call site must
+     * show where its generation was captured, so a late capture is visible
+     * to the compiler (and the reviewer).
      */
     private void warmL1(K key, StoredEntry<V> entry, long generationAtStart) {
         commitL1(key, entry,
@@ -1235,6 +1248,11 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
             return L1Freshness.FRESH;
         }
         synchronized (l1LockFor(key)) {
+            // Coherent snapshot under the lock: the entry is re-read here,
+            // so a completed concurrent write can never be overwritten by a
+            // stale caller-side read. The barrier metadata belongs to the
+            // same commit, so value and metadata always describe each other.
+            entry = l1.get(key);
             L1BarrierMap.L1Meta meta = l1Metas.get(key);
             if (meta == null || meta.logicalDeadlineNanos() == 0L) {
                 return L1Freshness.EXPIRED; // unknown metadata: never stale-served
@@ -1242,7 +1260,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
             long now = System.nanoTime();
             if (now <= meta.logicalDeadlineNanos()) {
                 java.time.Duration accessTtl = settings.l1ExpireAfterAccess();
-                if (accessTtl != null && l1Metas.get(key) == meta) {
+                if (accessTtl != null && entry != null && l1Metas.get(key) == meta) {
                     // Fresh access: slide freshness, the stale horizon AND
                     // the physical retention — identity-checked, so a
                     // concurrently replaced value keeps its own deadlines.

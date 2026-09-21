@@ -237,8 +237,14 @@ public final class LettuceLockProvider implements DistributedLockProvider, AutoC
      */
     @Override
     public void close() {
-        closed = true;
-        ScheduledExecutorService scheduler = compensationScheduler;
+        ScheduledExecutorService scheduler;
+        // The closed transition and the scheduler lookup happen under the
+        // same lifecycle lock as creation/publication: no scheduler can be
+        // published after a completed close.
+        synchronized (schedulerLock) {
+            closed = true;
+            scheduler = compensationScheduler;
+        }
         if (scheduler != null) {
             scheduler.shutdownNow();
         }

@@ -425,6 +425,44 @@ class LettuceLockProviderCompensationTest {
     }
 
     /**
+     * close() and scheduler creation share one lifecycle lock: a close
+     * racing the first ambiguous acquire can never leave a live pool.
+     */
+    @Test
+    void closeRacingSchedulerPublicationLeavesNoPool() throws Exception {
+        for (int round = 0; round < 30; round++) {
+            var connection = client.connect();
+            RedisCommands<String, String> failing = proxy(connection, (args, method) -> {
+                if ("set".equals(method.getName()) && args != null && args.length == 3
+                        && args[2] instanceof SetArgs) {
+                    throw new RedisCommandTimeoutException("simulated client timeout");
+                }
+                return passthrough();
+            });
+            LettuceLockProvider provider = new LettuceLockProvider(connectionTo(failing));
+            java.util.concurrent.CountDownLatch started = new java.util.concurrent.CountDownLatch(1);
+            Thread acquirer = new Thread(() -> {
+                started.countDown();
+                try {
+                    provider.tryLock("race", Duration.ofSeconds(1));
+                } catch (Throwable ignored) {
+                    // expected: the simulated timeout
+                }
+            });
+            acquirer.start();
+            started.await(5, TimeUnit.SECONDS);
+            provider.close();
+            acquirer.join(5_000);
+            long live = Thread.getAllStackTraces().keySet().stream()
+                    .filter(t -> t.getName().startsWith("tiercache-lock-compensation")
+                            && t.isAlive())
+                    .count();
+            assertEquals(0, live, "round " + round + ": no live pool after close");
+            connection.close();
+        }
+    }
+
+    /**
      * Real pause/unpause round trip (the bench's outage shape): the
      * provider cleans the orphan once Redis resumes.
      */
