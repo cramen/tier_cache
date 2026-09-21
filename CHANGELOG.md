@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Foreground misses that join a skipped SWR/XFetch refresh no longer receive a false null. In-flight claims distinguish real results from skipped coordination and promote foreground demand through the existing bounded load path. Races with an already-skipped or replacement refresh retain singleflight ownership, the original coordination deadline and the two-loader-execution limit; genuine nulls and loader failures remain distinct.
+
 ## [1.4.0] - 2026-09-21
 
 ### Added

@@ -20,7 +20,6 @@ import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledExecutorService;
@@ -49,9 +48,11 @@ import java.util.function.Function;
  * overwritten by the stale copy) and a single asynchronous revalidation per
  * key per instance
  * (claimed on the same in-flight map as singleflight) refreshes them through
- * the coordinated load path; failures keep serving stale and never reach
- * readers. XFetch (opt-in via {@code xfetchEnabled}) adds a probabilistic
- * early refresh on fresh L2 hits, driven by entry age and a per-cache EMA of
+ * the coordinated load path. A skipped refresh is not a source miss:
+ * foreground demand promotes it to a bounded ordinary load, while stale
+ * readers keep their immediate result. Background failures do not replace
+ * an already served stale result. XFetch (opt-in via {@code xfetchEnabled})
+ * adds a probabilistic early refresh on fresh L2 hits, driven by entry age and a per-cache EMA of
  * loader durations measured internally.
  *
  * <p>Hot-path discipline: a steady-state L1 hit performs exactly one
@@ -108,7 +109,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
     private final TtlJitter jitter;
     /** EMA of loader durations in nanoseconds; updated on every load. */
     private final AtomicLong loaderDurationEmaNanos = new AtomicLong(EMA_UNINITIALIZED);
-    private final Map<K, CompletableFuture<StoredEntry<V>>> inflight = new ConcurrentHashMap<>();
+    private final Map<K, LoadClaim<K, V>> inflight = new ConcurrentHashMap<>();
 
     /**
      * Per-key invalidation barrier: the highest version this instance has
@@ -459,23 +460,59 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
                     ? CacheMetricsListener.Outcome.LOAD : CacheMetricsListener.Outcome.MISS);
             return unwrap(result);
         }
-        CompletableFuture<StoredEntry<V>> future = new CompletableFuture<>();
-        CompletableFuture<StoredEntry<V>> existing = inflight.putIfAbsent(key, future);
-        if (existing != null) {
-            metrics.onRequest(cacheName, CacheMetricsListener.Outcome.COALESCED);
-            return unwrap(existing.join());
+        LoadClaim.Demand<K, V> demand = new LoadClaim.Demand<>(loader,
+                System.nanoTime() + OVERALL_BUDGET.toNanos());
+        LoadClaim<K, V> claim = new LoadClaim<>(demand);
+        LoadClaim<K, V> existing = inflight.putIfAbsent(key, claim);
+        if (existing == null) {
+            return runForegroundClaim(key, claim, demand, true);
         }
+        existing.requireResult(demand);
+        metrics.onRequest(cacheName, CacheMetricsListener.Outcome.COALESCED);
+        LoadClaim.Outcome<V> outcome = existing.result.join();
+        if (!outcome.isSkipped()) {
+            return unwrap(outcome.resultEntry());
+        }
+        return recoverSkippedRefresh(key, existing, demand);
+    }
+
+    /**
+     * One map transition replaces a terminal skip or promotes its replacement.
+     * The selected claim cannot skip again: foreground demand is registered
+     * before the map transition ends. The old owner's finally uses identity
+     * removal and cannot delete this replacement.
+     */
+    private V recoverSkippedRefresh(K key, LoadClaim<K, V> skipped,
+            LoadClaim.Demand<K, V> demand) {
+        LoadClaim<K, V> replacement = new LoadClaim<>(demand);
+        LoadClaim<K, V> selected = inflight.compute(key, (ignored, current) -> {
+            if (current == null || current == skipped || !current.requireResult(demand)) {
+                return replacement;
+            }
+            return current;
+        });
+        if (selected == replacement) {
+            // The original request was already counted as coalesced.
+            return runForegroundClaim(key, replacement, demand, false);
+        }
+        return unwrap(selected.result.join().resultEntry());
+    }
+
+    private V runForegroundClaim(K key, LoadClaim<K, V> claim,
+            LoadClaim.Demand<K, V> demand, boolean recordOutcome) {
         try {
-            StoredEntry<V> loaded = loadPath(key, loader);
-            metrics.onRequest(cacheName, loaded != null && !loaded.isNullMarker()
-                    ? CacheMetricsListener.Outcome.LOAD : CacheMetricsListener.Outcome.MISS);
-            future.complete(loaded);
+            StoredEntry<V> loaded = loadPath(key, demand.loader(), demand.deadlineNanos());
+            if (recordOutcome) {
+                metrics.onRequest(cacheName, loaded != null && !loaded.isNullMarker()
+                        ? CacheMetricsListener.Outcome.LOAD : CacheMetricsListener.Outcome.MISS);
+            }
+            claim.result.complete(LoadClaim.Outcome.result(loaded));
             return unwrap(loaded);
-        } catch (RuntimeException e) {
-            future.completeExceptionally(e);
+        } catch (RuntimeException | Error e) {
+            claim.result.completeExceptionally(e);
             throw e;
         } finally {
-            inflight.remove(key, future);
+            inflight.remove(key, claim);
         }
     }
 
@@ -868,19 +905,19 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         if (revalidationExecutor == null) {
             return; // legacy wiring: stale keeps serving without revalidation
         }
-        CompletableFuture<StoredEntry<V>> claim = new CompletableFuture<>();
+        LoadClaim<K, V> claim = new LoadClaim<>(null);
         if (inflight.putIfAbsent(key, claim) != null) {
             return; // a load or revalidation for this key is already in flight
         }
-        metrics.onRevalidationTriggered(cacheName);
         try {
+            metrics.onRevalidationTriggered(cacheName);
             revalidationExecutor.execute(
                     () -> runRevalidation(key, loader, servedWriteTimestamp, claim));
         } catch (RuntimeException e) {
             // Executor rejected (saturated or shut down): complete the claim
             // first so waiters already joined on it fail fast instead of
             // hanging, then release the slot so a later read retries.
-            claim.completeExceptionally(e);
+            claim.result.completeExceptionally(e);
             inflight.remove(key, claim);
             metrics.onRevalidationFailed(cacheName);
             log.warn("Revalidation for key '{}' in cache '{}' could not be submitted "
@@ -890,16 +927,29 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
     }
 
     private void runRevalidation(K key, Function<? super K, ? extends V> loader,
-            long servedWriteTimestamp, CompletableFuture<StoredEntry<V>> claim) {
+            long servedWriteTimestamp, LoadClaim<K, V> claim) {
         try {
-            StoredEntry<V> refreshed = revalidate(key, loader, servedWriteTimestamp);
-            claim.complete(refreshed);
+            LoadClaim.Outcome<V> refreshed = revalidate(key, loader, servedWriteTimestamp);
+            if (refreshed.isSkipped()) {
+                LoadClaim.Demand<K, V> demand = claim.skipOrForeground();
+                if (demand != null) {
+                    // Still the same local owner. A skipped acquisition used
+                    // no loader budget; this one load path retains its normal
+                    // two-execution bound and the original foreground deadline.
+                    refreshed = LoadClaim.Outcome.result(
+                            loadPath(key, demand.loader(), demand.deadlineNanos()));
+                }
+            }
+            claim.result.complete(refreshed);
             metrics.onRevalidationCompleted(cacheName);
-        } catch (RuntimeException e) {
-            claim.completeExceptionally(e);
+        } catch (RuntimeException | Error e) {
+            claim.result.completeExceptionally(e);
             metrics.onRevalidationFailed(cacheName);
             log.warn("Revalidation failed for key '{}' in cache '{}'; the stale entry "
                     + "keeps serving until its window ends.", key, cacheName, e);
+            if (e instanceof Error error) {
+                throw error;
+            }
         } finally {
             inflight.remove(key, claim);
         }
@@ -912,17 +962,17 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
      * served suppresses the reload. A lost lock race is not a failure: another
      * instance is refreshing, and the stale entry keeps serving.
      */
-    private StoredEntry<V> revalidate(K key, Function<? super K, ? extends V> loader,
+    private LoadClaim.Outcome<V> revalidate(K key, Function<? super K, ? extends V> loader,
             long servedWriteTimestamp) {
         long g0 = l1Generation.get();
         if (lockProvider == null || watchdog == null || !l2Available()) {
             // No coordination possible: the in-flight claim already bounds
             // this to one load per key per instance.
-            return loadAndStore(key, loader);
+            return LoadClaim.Outcome.result(loadAndStore(key, loader));
         }
         DistributedLock lock = tryLockGuarded(cacheName + ":" + key);
         if (lock == null) {
-            return null; // another instance holds the rebuild lock
+            return LoadClaim.Outcome.skippedRefresh(); // no source absence was observed
         }
         try {
             StoredEntry<V> current = l2Get(key);
@@ -930,9 +980,9 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
                     && current.writeTimestampMillis() > servedWriteTimestamp) {
                 // A newer write landed while we claimed the lock: converge, no load.
                 warmL1(key, current, g0);
-                return current;
+                return LoadClaim.Outcome.result(current);
             }
-            return loadWithWatchdog(key, loader, lock);
+            return LoadClaim.Outcome.result(loadWithWatchdog(key, loader, lock));
         } finally {
             releaseGuarded(lock, key);
         }
@@ -960,19 +1010,29 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
     // --- Load path selection: coordinated when possible ---
 
     private StoredEntry<V> loadPath(K key, Function<? super K, ? extends V> loader) {
+        return loadPath(key, loader, System.nanoTime() + OVERALL_BUDGET.toNanos());
+    }
+
+    private StoredEntry<V> loadPath(K key, Function<? super K, ? extends V> loader,
+            long overallDeadline) {
         if (lockProvider == null || watchdog == null || !l2Available()) {
             // No coordination possible (or L2 down): per-instance load.
             return loadAndStore(key, loader);
         }
-        return coordinatedLoad(key, loader);
+        return coordinatedLoad(key, loader, overallDeadline);
     }
 
-    private StoredEntry<V> coordinatedLoad(K key, Function<? super K, ? extends V> loader) {
+    private StoredEntry<V> coordinatedLoad(K key, Function<? super K, ? extends V> loader,
+            long overallDeadline) {
         String lockName = cacheName + ":" + key;
         long g0 = l1Generation.get();
-        long overallDeadline = System.nanoTime() + OVERALL_BUDGET.toNanos();
-        long waitDeadline = System.nanoTime() + WAIT_SLICE.toNanos();
         while (true) {
+            if (System.nanoTime() >= overallDeadline) {
+                log.warn("Rebuild coordination budget exhausted for key '{}' in cache '{}'; "
+                        + "loading without coordination (possible stampede after repeated "
+                        + "winner failures).", key, cacheName);
+                return loadAndStore(key, loader);
+            }
             DistributedLock lock = tryLockGuarded(lockName);
             if (!l2Available()) {
                 // L2 failed between the availability check and lock
@@ -997,18 +1057,13 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
                     releaseGuarded(lock, key);
                 }
             }
+            long waitDeadline = Math.min(overallDeadline,
+                    System.nanoTime() + WAIT_SLICE.toNanos());
             StoredEntry<V> appeared = awaitValue(key, waitDeadline);
             if (appeared != null) {
                 warmL1(key, appeared, g0);
                 return appeared;
             }
-            if (System.nanoTime() > overallDeadline) {
-                log.warn("Rebuild coordination budget exhausted for key '{}' in cache '{}'; "
-                        + "loading without coordination (possible stampede after repeated "
-                        + "winner failures).", key, cacheName);
-                return loadAndStore(key, loader);
-            }
-            waitDeadline = System.nanoTime() + WAIT_SLICE.toNanos();
         }
     }
 

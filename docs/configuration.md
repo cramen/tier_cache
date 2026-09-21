@@ -164,8 +164,14 @@ An L2 hit is classified by write age:
   **without** warming L1 (so an in-flight refresh is never overwritten by
   the stale copy), and one asynchronous revalidation per key per instance is
   triggered through the same coordinated load path as a miss. Revalidation
-  failures never reach readers; the stale entry keeps serving until its
-  window ends.
+  failures do not replace an already served stale result; the stale entry
+  keeps serving until its window ends. A foreground hard miss joining that
+  refresh receives its actual result or failure. If the refresh skips a
+  busy distributed lock, foreground demand continues through ordinary
+  bounded coordination/loading instead of treating the skip as a missing
+  value. This transition preserves the original coordination deadline and
+  existing loader-retry budget; a genuine loader null still follows the
+  configured null policy.
 - **past the window** — treated as a hard miss.
 
 `stale-ttl` must be `>= 0` (fail-fast validation). Stale hits and
