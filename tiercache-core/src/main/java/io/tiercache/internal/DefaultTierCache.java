@@ -307,10 +307,10 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         long g0 = l1Generation.get();
         StoredEntry<V> entry = l1.get(key);
         if (entry != null) {
-            L1Freshness freshness = freshnessOf(key, entry);
-            if (freshness == L1Freshness.FRESH) {
+            FreshnessSnapshot<V> snapshot = freshnessOf(key, entry);
+            if (snapshot.freshness() == L1Freshness.FRESH) {
                 metrics.onRequest(cacheName, CacheMetricsListener.Outcome.L1_HIT);
-                return entry.isNullMarker() ? null : entry.value();
+                return snapshot.entry().isNullMarker() ? null : snapshot.entry().value();
             }
             // Logically expired under the degradation window: one classified
             // L2 read decides — converge on HIT, serve stale on REJECTED.
@@ -331,9 +331,10 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
                 metrics.onRequest(cacheName, CacheMetricsListener.Outcome.L2_HIT);
                 return result.entry().isNullMarker() ? null : result.entry().value();
             }
-            if (result.read() == L2Read.REJECTED && freshness == L1Freshness.STALE_ALLOWED) {
+            if (result.read() == L2Read.REJECTED
+                    && snapshot.freshness() == L1Freshness.STALE_ALLOWED) {
                 metrics.onRequest(cacheName, CacheMetricsListener.Outcome.STALE_DEGRADED);
-                return entry.isNullMarker() ? null : entry.value();
+                return snapshot.entry().isNullMarker() ? null : snapshot.entry().value();
             }
             metrics.onRequest(cacheName, CacheMetricsListener.Outcome.MISS);
             return null;
@@ -361,10 +362,10 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         long g0 = l1Generation.get();
         StoredEntry<V> entry = l1.get(key);
         if (entry != null) {
-            L1Freshness freshness = freshnessOf(key, entry);
-            if (freshness == L1Freshness.FRESH) {
+            FreshnessSnapshot<V> snapshot = freshnessOf(key, entry);
+            if (snapshot.freshness() == L1Freshness.FRESH) {
                 metrics.onRequest(cacheName, CacheMetricsListener.Outcome.L1_HIT);
-                return toResult(entry);
+                return toResult(snapshot.entry());
             }
             L2Result<V> result = l2Read(key);
             if (result.read() == L2Read.HIT) {
@@ -381,9 +382,10 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
                 metrics.onRequest(cacheName, CacheMetricsListener.Outcome.L2_HIT);
                 return toResult(result.entry());
             }
-            if (result.read() == L2Read.REJECTED && freshness == L1Freshness.STALE_ALLOWED) {
+            if (result.read() == L2Read.REJECTED
+                    && snapshot.freshness() == L1Freshness.STALE_ALLOWED) {
                 metrics.onRequest(cacheName, CacheMetricsListener.Outcome.STALE_DEGRADED);
-                return toResult(entry);
+                return toResult(snapshot.entry());
             }
             metrics.onRequest(cacheName, CacheMetricsListener.Outcome.MISS);
             return LookupResult.miss();
@@ -411,10 +413,10 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         long g0 = l1Generation.get();
         StoredEntry<V> entry = l1.get(key);
         if (entry != null) {
-            L1Freshness freshness = freshnessOf(key, entry);
-            if (freshness == L1Freshness.FRESH) {
+            FreshnessSnapshot<V> snapshot = freshnessOf(key, entry);
+            if (snapshot.freshness() == L1Freshness.FRESH) {
                 metrics.onRequest(cacheName, CacheMetricsListener.Outcome.L1_HIT);
-                return entry.isNullMarker() ? null : entry.value();
+                return snapshot.entry().isNullMarker() ? null : snapshot.entry().value();
             }
             L2Result<V> result = l2Read(key);
             if (result.read() == L2Read.HIT) {
@@ -432,9 +434,10 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
                     return result.entry().isNullMarker() ? null : result.entry().value();
                 }
             }
-            if (result.read() == L2Read.REJECTED && freshness == L1Freshness.STALE_ALLOWED) {
+            if (result.read() == L2Read.REJECTED
+                    && snapshot.freshness() == L1Freshness.STALE_ALLOWED) {
                 metrics.onRequest(cacheName, CacheMetricsListener.Outcome.STALE_DEGRADED);
-                return entry.isNullMarker() ? null : entry.value();
+                return snapshot.entry().isNullMarker() ? null : snapshot.entry().value();
             }
             // FAILED, MISS, or past the window: the loader fallback below.
         }
@@ -1008,8 +1011,11 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
      */
     private StoredEntry<V> readThrough(K key, long generationAtStart) {
         StoredEntry<V> entry = l1.get(key);
-        if (entry != null && freshnessOf(key, entry) == L1Freshness.FRESH) {
-            return entry;
+        if (entry != null) {
+            FreshnessSnapshot<V> snapshot = freshnessOf(key, entry);
+            if (snapshot.freshness() == L1Freshness.FRESH) {
+                return snapshot.entry();
+            }
         }
         entry = l2Get(key);
         if (entry != null) {
@@ -1243,9 +1249,18 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
      * still the one just read — a concurrent replace can never inherit
      * another value's TTL. A stale access never moves anything.
      */
-    private L1Freshness freshnessOf(K key, StoredEntry<V> entry) {
+    /**
+     * The coherent result of a freshness check: the CURRENT L1 entry (re-read
+     * under the stripe lock, never a stale caller-side copy) plus its
+     * freshness classification. Callers must use {@link #entry()} for every
+     * value they serve — the caller-side read may already be superseded.
+     */
+    private record FreshnessSnapshot<V>(StoredEntry<V> entry, L1Freshness freshness) {
+    }
+
+    private FreshnessSnapshot<V> freshnessOf(K key, StoredEntry<V> entry) {
         if (!degradationStaleEnabled) {
-            return L1Freshness.FRESH;
+            return new FreshnessSnapshot<>(entry, L1Freshness.FRESH);
         }
         synchronized (l1LockFor(key)) {
             // Coherent snapshot under the lock: the entry is re-read here,
@@ -1255,7 +1270,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
             entry = l1.get(key);
             L1BarrierMap.L1Meta meta = l1Metas.get(key);
             if (meta == null || meta.logicalDeadlineNanos() == 0L) {
-                return L1Freshness.EXPIRED; // unknown metadata: never stale-served
+                return new FreshnessSnapshot<>(entry, L1Freshness.EXPIRED);
             }
             long now = System.nanoTime();
             if (now <= meta.logicalDeadlineNanos()) {
@@ -1269,10 +1284,11 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
                             logical + degradationStaleTtl.toNanos()));
                     l1.put(key, entry, accessTtl.plus(degradationStaleTtl));
                 }
-                return L1Freshness.FRESH;
+                return new FreshnessSnapshot<>(entry, L1Freshness.FRESH);
             }
-            return now <= meta.staleServeUntilNanos() ? L1Freshness.STALE_ALLOWED
-                    : L1Freshness.EXPIRED;
+            return new FreshnessSnapshot<>(entry,
+                    now <= meta.staleServeUntilNanos() ? L1Freshness.STALE_ALLOWED
+                            : L1Freshness.EXPIRED);
         }
     }
 

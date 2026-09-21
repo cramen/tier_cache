@@ -113,7 +113,8 @@ class ConsistencyRaceTest {
         DefaultTierCache<String, String> a = engine(gated, l2, windowed(Duration.ofMillis(100)));
         a.put("k", "v1");
         gated.gateGet.set(true);
-        Thread reader = new Thread(() -> a.get("k"));
+        AtomicReference<String> readerResult = new AtomicReference<>();
+        Thread reader = new Thread(() -> readerResult.set(a.get("k")));
         reader.start();
         if (!gated.getReturned.await(5, TimeUnit.SECONDS)) {
             throw new AssertionError("the reader never reached the L1 get");
@@ -122,6 +123,8 @@ class ConsistencyRaceTest {
         gated.releaseAfterGet.countDown();
         reader.join(5_000);
 
+        assertEquals("v2", readerResult.get(),
+                "the concurrent reader itself must see the coherent snapshot, never v1");
         assertEquals("v2", a.get("k"), "the completed put must win; no stale re-put");
     }
 
