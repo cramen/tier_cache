@@ -976,7 +976,12 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
             DistributedLock lock = tryLockGuarded(lockName);
             if (!l2Available()) {
                 // L2 failed between the availability check and lock
-                // acquisition: fall back to the per-instance load.
+                // acquisition: fall back to the per-instance load — after
+                // releasing the lock we just took, or another node would
+                // wait out the remaining lease for nothing.
+                if (lock != null) {
+                    releaseGuarded(lock, key);
+                }
                 return loadAndStore(key, loader);
             }
             if (lock != null) {

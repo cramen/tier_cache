@@ -295,6 +295,55 @@ class ConsistencyRaceTest {
     }
 
     /**
+     * P2: the early degraded fallback in coordinatedLoad must release the
+     * lock it just took — otherwise another node waits out the remaining
+     * lease for nothing.
+     */
+    @Test
+    void earlyDegradedFallbackReleasesTheAcquiredLock() {
+        CircuitBreaker breaker = new CircuitBreaker(
+                new CircuitBreaker.Config(1, 1.0, 1, Duration.ofMillis(200), 1),
+                new CircuitBreaker.Listener() {
+                    @Override
+                    public void onOpen() {
+                    }
+
+                    @Override
+                    public void onClose() {
+                    }
+                });
+        java.util.concurrent.atomic.AtomicInteger releaseCalls = new java.util.concurrent.atomic.AtomicInteger();
+        io.tiercache.spi.DistributedLockProvider provider = (name, lease) -> {
+            breaker.onFailure(); // the breaker opens right after the acquire
+            return new io.tiercache.spi.DistributedLock() {
+                @Override
+                public boolean extend(Duration leaseDuration) {
+                    return true;
+                }
+
+                @Override
+                public void release() {
+                    releaseCalls.incrementAndGet();
+                }
+            };
+        };
+        ScheduledExecutorService watchdog = Executors.newSingleThreadScheduledExecutor();
+        try {
+            VersionedL2 l2 = new VersionedL2();
+            DefaultTierCache<String, String> a = new DefaultTierCache<>("c",
+                    new CountingLocalCache<>(), new CircuitBreakerRemoteCache<>(l2, breaker),
+                    windowed(null), true, provider, watchdog, new VersionGenerator(), null);
+
+            assertEquals("v1", a.getOrCompute("k", key -> "v1"),
+                    "the degraded fallback still loads");
+            assertEquals(1, releaseCalls.get(),
+                    "the lock taken before the fallback is released, not left to the lease");
+        } finally {
+            watchdog.shutdownNow();
+        }
+    }
+
+    /**
      * P1: a barrier expiring inside the commit's own metadata lookup bumps
      * the generation BEFORE the commit's final check — the stale write is
      * refused, never committed.
