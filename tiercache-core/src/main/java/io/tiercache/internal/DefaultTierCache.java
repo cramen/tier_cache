@@ -1269,6 +1269,13 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
             // same commit, so value and metadata always describe each other.
             entry = l1.get(key);
             L1BarrierMap.L1Meta meta = l1Metas.get(key);
+            if (entry == null) {
+                // The value was evicted or removed concurrently: never hand
+                // out a null entry (a FRESH classification would NPE the
+                // caller). The protective barrier metadata stays untouched;
+                // the caller continues to the normal L2/loader path.
+                return new FreshnessSnapshot<>(null, L1Freshness.EXPIRED);
+            }
             if (meta == null || meta.logicalDeadlineNanos() == 0L) {
                 return new FreshnessSnapshot<>(entry, L1Freshness.EXPIRED);
             }

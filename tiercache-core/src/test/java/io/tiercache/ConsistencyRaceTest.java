@@ -129,6 +129,48 @@ class ConsistencyRaceTest {
     }
 
     /**
+     * P1 (follow-up): an entry evicted between the caller's L1 read and
+     * the freshness snapshot must never produce a null FRESH snapshot
+     * (NPE) — the read continues to the normal L2 path instead.
+     */
+    @Test
+    void evictedBetweenReadAndSnapshotNeverNpe() throws Exception {
+        GatedL1 gated = new GatedL1();
+        VersionedL2 l2 = new VersionedL2();
+        DefaultTierCache<String, String> a = engine(gated, l2, windowed(null));
+        a.put("k", "v1");
+        gated.gateGet.set(true);
+        AtomicReference<String> result = new AtomicReference<>();
+        Thread reader = new Thread(() -> result.set(a.get("k")));
+        reader.start();
+        if (!gated.getReturned.await(5, TimeUnit.SECONDS)) {
+            throw new AssertionError("the reader never reached the L1 get");
+        }
+        a.evict("k"); // the value vanishes while the reader is parked
+        gated.releaseAfterGet.countDown();
+        reader.join(5_000);
+
+        assertNull(l2.delegate.get("k"), "the engine's evict removes L2 as well");
+        assertNull(result.get(), "evicted everywhere: an honest miss, never an NPE");
+
+        // And with the value still in L2 (size-eviction shape), the read
+        // converges from L2 instead of failing.
+        a.put("x", "vx");
+        gated.gateGet.set(true);
+        AtomicReference<String> resultX = new AtomicReference<>();
+        Thread readerX = new Thread(() -> resultX.set(a.get("x")));
+        readerX.start();
+        if (!gated.getReturned.await(5, TimeUnit.SECONDS)) {
+            throw new AssertionError("the second reader never reached the L1 get");
+        }
+        a.evictAllL1(); // L1 vanishes, L2 keeps the value
+        gated.releaseAfterGet.countDown();
+        readerX.join(5_000);
+        assertEquals("vx", resultX.get(),
+                "with L2 intact the read converges from L2 instead of failing");
+    }
+
+    /**
      * P1: a barrier expiring inside the commit's own metadata lookup bumps
      * the generation BEFORE the commit's final check — the stale write is
      * refused, never committed.
