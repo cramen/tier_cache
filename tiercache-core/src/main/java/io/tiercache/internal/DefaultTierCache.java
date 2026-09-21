@@ -742,6 +742,22 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         }
     }
 
+    /**
+     * Best-effort lock release: a release failure (Redis down) is a CLEANUP
+     * issue, never a business error — the lease self-expires by TTL, and a
+     * loaded value or the loader's own failure must never be overridden by
+     * it. The token-checked release (Lua compare-and-delete) can never
+     * remove another owner's lock.
+     */
+    private void releaseGuarded(DistributedLock lock, K key) {
+        try {
+            lock.release();
+        } catch (RuntimeException e) {
+            log.debug("Rebuild lock release failed for key '{}' in cache '{}'; "
+                    + "the lease self-expires.", key, cacheName, e);
+        }
+    }
+
     /** Local unversioned evict: drops value and barrier together. */
     private void evictLocal(K key) {
         synchronized (l1LockFor(key)) {
@@ -918,7 +934,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
             }
             return loadWithWatchdog(key, loader, lock);
         } finally {
-            lock.release();
+            releaseGuarded(lock, key);
         }
     }
 
@@ -973,7 +989,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
                     }
                     return loadWithWatchdog(key, loader, lock);
                 } finally {
-                    lock.release();
+                    releaseGuarded(lock, key);
                 }
             }
             StoredEntry<V> appeared = awaitValue(key, waitDeadline);

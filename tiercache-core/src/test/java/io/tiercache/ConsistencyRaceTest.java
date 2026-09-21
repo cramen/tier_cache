@@ -131,43 +131,167 @@ class ConsistencyRaceTest {
     /**
      * P1 (follow-up): an entry evicted between the caller's L1 read and
      * the freshness snapshot must never produce a null FRESH snapshot
-     * (NPE) — the read continues to the normal L2 path instead.
+     * (NPE) — the read continues to the normal L2 path instead. Thread
+     * exceptions are asserted explicitly and every scenario gets fresh
+     * latches.
      */
     @Test
     void evictedBetweenReadAndSnapshotNeverNpe() throws Exception {
+        // Scenario 1: evicted everywhere → an honest miss, no exception.
+        AtomicReference<Throwable> failure1 = new AtomicReference<>();
+        AtomicReference<String> miss = new AtomicReference<>("unset");
+        evictRace((a, l1, l2) -> {
+            a.evict("k");
+            return null;
+        }, failure1, miss);
+        assertNull(failure1.get(), "no thread exception is allowed");
+        assertNull(miss.get(), "evicted everywhere: an honest miss, never an NPE");
+
+        // Scenario 2: L1 gone, L2 intact → converge from L2 (size-eviction shape).
+        AtomicReference<Throwable> failure2 = new AtomicReference<>();
+        AtomicReference<String> converged = new AtomicReference<>();
+        evictRace((a, l1, l2) -> {
+            a.evictAllL1();
+            return null;
+        }, failure2, converged);
+        assertNull(failure2.get(), "no thread exception is allowed");
+        assertEquals("v1", converged.get(),
+                "with L2 intact the read converges from L2 instead of failing");
+
+        // Scenario 3: the same for getOrCompute and lookup.
+        AtomicReference<Throwable> failure3 = new AtomicReference<>();
+        AtomicReference<String> computed = new AtomicReference<>();
+        evictRaceCompute((a, l1, l2) -> {
+            a.evict("k");
+            return null;
+        }, failure3, computed);
+        assertNull(failure3.get(), "getOrCompute must not throw either");
+        assertNull(computed.get(), "getOrCompute: an honest miss");
+        AtomicReference<Throwable> failure4 = new AtomicReference<>();
+        AtomicReference<LookupResult<String>> looked = new AtomicReference<>();
+        evictRaceLookup((a, l1, l2) -> {
+            a.evict("k");
+            return null;
+        }, failure4, looked);
+        assertNull(failure4.get(), "lookup must not throw either");
+        assertEquals(LookupResult.Miss.instance(), looked.get(), "lookup: an honest miss");
+    }
+
+    private void evictRace(RaceAction action, AtomicReference<Throwable> failure,
+            AtomicReference<String> result) throws Exception {
+        GatedL1 gated = new GatedL1(); // fresh latches per scenario
+        VersionedL2 l2 = new VersionedL2();
+        DefaultTierCache<String, String> a = engine(gated, l2, windowed(null));
+        a.put("k", "v1");
+        gated.gateGet.set(true);
+        Thread reader = new Thread(() -> {
+            try {
+                result.set(a.get("k"));
+            } catch (Throwable t) {
+                failure.set(t);
+            }
+        });
+        reader.start();
+        if (!gated.getReturned.await(5, TimeUnit.SECONDS)) {
+            throw new AssertionError("the reader never reached the L1 get");
+        }
+        action.run(a, gated, l2);
+        gated.releaseAfterGet.countDown();
+        reader.join(5_000);
+    }
+
+    private void evictRaceCompute(RaceAction action, AtomicReference<Throwable> failure,
+            AtomicReference<String> result) throws Exception {
         GatedL1 gated = new GatedL1();
         VersionedL2 l2 = new VersionedL2();
         DefaultTierCache<String, String> a = engine(gated, l2, windowed(null));
         a.put("k", "v1");
         gated.gateGet.set(true);
-        AtomicReference<String> result = new AtomicReference<>();
-        Thread reader = new Thread(() -> result.set(a.get("k")));
+        Thread reader = new Thread(() -> {
+            try {
+                result.set(a.getOrCompute("k", key -> null));
+            } catch (Throwable t) {
+                failure.set(t);
+            }
+        });
         reader.start();
         if (!gated.getReturned.await(5, TimeUnit.SECONDS)) {
             throw new AssertionError("the reader never reached the L1 get");
         }
-        a.evict("k"); // the value vanishes while the reader is parked
+        action.run(a, gated, l2);
         gated.releaseAfterGet.countDown();
         reader.join(5_000);
+    }
 
-        assertNull(l2.delegate.get("k"), "the engine's evict removes L2 as well");
-        assertNull(result.get(), "evicted everywhere: an honest miss, never an NPE");
-
-        // And with the value still in L2 (size-eviction shape), the read
-        // converges from L2 instead of failing.
-        a.put("x", "vx");
+    private void evictRaceLookup(RaceAction action, AtomicReference<Throwable> failure,
+            AtomicReference<LookupResult<String>> result) throws Exception {
+        GatedL1 gated = new GatedL1();
+        VersionedL2 l2 = new VersionedL2();
+        DefaultTierCache<String, String> a = engine(gated, l2, windowed(null));
+        a.put("k", "v1");
         gated.gateGet.set(true);
-        AtomicReference<String> resultX = new AtomicReference<>();
-        Thread readerX = new Thread(() -> resultX.set(a.get("x")));
-        readerX.start();
+        Thread reader = new Thread(() -> {
+            try {
+                result.set(a.lookup("k"));
+            } catch (Throwable t) {
+                failure.set(t);
+            }
+        });
+        reader.start();
         if (!gated.getReturned.await(5, TimeUnit.SECONDS)) {
-            throw new AssertionError("the second reader never reached the L1 get");
+            throw new AssertionError("the reader never reached the L1 get");
         }
-        a.evictAllL1(); // L1 vanishes, L2 keeps the value
+        action.run(a, gated, l2);
         gated.releaseAfterGet.countDown();
-        readerX.join(5_000);
-        assertEquals("vx", resultX.get(),
-                "with L2 intact the read converges from L2 instead of failing");
+        reader.join(5_000);
+    }
+
+    private interface RaceAction {
+        Object run(DefaultTierCache<String, String> a, GatedL1 l1, VersionedL2 l2);
+    }
+
+    /**
+     * P1: a failing lock RELEASE (Redis down) is a cleanup issue, never a
+     * business error: the loaded value is returned, and a failing loader's
+     * own exception is preserved instead of being replaced by the release
+     * failure.
+     */
+    @Test
+    void lockReleaseFailureNeverOverridesTheOutcome() {
+        io.tiercache.spi.DistributedLockProvider throwingProvider = (name, lease) ->
+                new io.tiercache.spi.DistributedLock() {
+                    @Override
+                    public boolean extend(Duration leaseDuration) {
+                        return true;
+                    }
+
+                    @Override
+                    public void release() {
+                        throw new RuntimeException("redis down");
+                    }
+                };
+        ScheduledExecutorService watchdog = Executors.newSingleThreadScheduledExecutor();
+        try {
+            VersionedL2 l2 = new VersionedL2();
+            DefaultTierCache<String, String> a = new DefaultTierCache<>("c",
+                    new CountingLocalCache<>(), l2, windowed(null), true,
+                    throwingProvider, watchdog, new VersionGenerator(), null);
+
+            assertEquals("v1", a.getOrCompute("k1", key -> "v1"),
+                    "a successful load is returned despite the release failure");
+
+            try {
+                a.getOrCompute("k2", key -> {
+                    throw new IllegalStateException("source down");
+                });
+                throw new AssertionError("the loader failure must surface");
+            } catch (IllegalStateException expected) {
+                assertEquals("source down", expected.getMessage(),
+                        "the loader's own exception is preserved, not the release error");
+            }
+        } finally {
+            watchdog.shutdownNow();
+        }
     }
 
     /**
