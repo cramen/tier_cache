@@ -332,12 +332,14 @@ class ConsistencyRaceTest {
             VersionedL2 l2 = new VersionedL2();
             DefaultTierCache<String, String> a = new DefaultTierCache<>("c",
                     new CountingLocalCache<>(), new CircuitBreakerRemoteCache<>(l2, breaker),
-                    windowed(null), true, provider, watchdog, new VersionGenerator(), null);
+                    windowed(null), true, provider, watchdog, new VersionGenerator(), null,
+                    breaker, io.tiercache.spi.CacheMetricsListener.NOOP);
 
-            assertEquals("v1", a.getOrCompute("k", key -> "v1"),
-                    "the degraded fallback still loads");
-            assertEquals(1, releaseCalls.get(),
-                    "the lock taken before the fallback is released, not left to the lease");
+            assertEquals("v1", a.getOrCompute("k", key -> {
+                assertEquals(1, releaseCalls.get(),
+                        "the lock taken before the fallback is released BEFORE the load runs");
+                return "v1";
+            }), "the degraded fallback still loads");
         } finally {
             watchdog.shutdownNow();
         }
