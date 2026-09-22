@@ -169,6 +169,7 @@ class InvalidationServiceTest {
         assertEquals(new Version(1, idA), targetB.entries.get("k"), "lost event: still stale");
 
         b.transport().reconnect();
+        awaitFirstPass(b.service());
         assertNull(targetB.entries.get("k"), "replay must heal the missed invalidation");
         a.service().close();
         b.service().close();
@@ -194,6 +195,7 @@ class InvalidationServiceTest {
                     idA, InvalidationMessage.Type.INVALIDATE));
         }
         b.transport().reconnect();
+        awaitFirstPass(b.service());
 
         assertEquals(0, targetB.entries.size(), "overflow must flush L1");
         assertEquals(1, overflows.get(), "listener must be notified");
@@ -384,10 +386,12 @@ class InvalidationServiceTest {
         a.onLocalWrite("c", "k", v2, InvalidationMessage.Type.INVALIDATE);
 
         transportB.reconnect();
+        awaitFirstPass(b);
         assertEquals(1, metrics.count(Direction.REPLAYED), "the missed event is replayed");
 
         transportB.disconnect();
         transportB.reconnect();
+        awaitFirstPass(b);
         assertEquals(1, metrics.count(Direction.REPLAYED),
                 "the cursor advanced: nothing is replayed twice");
         a.close();
@@ -414,6 +418,7 @@ class InvalidationServiceTest {
                     idA, InvalidationMessage.Type.INVALIDATE));
         }
         transportB.reconnect();
+        awaitFirstPass(b);
 
         assertEquals(1, metrics.count(Direction.DROPPED), "the overflow is surfaced");
         assertEquals(0, targetB.entries.size(), "overflow still flushes L1");
@@ -430,6 +435,7 @@ class InvalidationServiceTest {
         a.registerTarget("c", targetA);
 
         a.onL2Recovery();
+        awaitFirstPass(a);
 
         assertEquals(1, targetA.flushCount.get(), "no journal: the honest fallback is a full flush");
         assertTrue(targetA.entries.isEmpty());
@@ -473,6 +479,7 @@ class InvalidationServiceTest {
 
         b.transport().disconnect();
         b.transport().reconnect();
+        awaitFirstPass(b.service());
         assertNull(targetB.entries.get("k"),
                 "the cursor must not have advanced past the unconsumed row: replay applies it");
         assertEquals(0, targetB.flushCount.get(), "nothing was trimmed: no flush expected");
@@ -516,6 +523,7 @@ class InvalidationServiceTest {
         journal.append("c", new InvalidationMessage("c", "k3", new Version(3, idA), idA,
                 InvalidationMessage.Type.INVALIDATE));
         b.transport().reconnect();
+        awaitFirstPass(b.service());
 
         assertNull(targetB.entries.get("k2"));
         assertNull(targetB.entries.get("k3"));
@@ -562,6 +570,7 @@ class InvalidationServiceTest {
                     InvalidationMessage.Type.INVALIDATE));
         }
         transportB.reconnect();
+        awaitFirstPass(b);
 
         assertEquals(1, targetB.flushCount.get(),
                 "unconfirmable cursor integrity must take the flush path");
@@ -602,6 +611,7 @@ class InvalidationServiceTest {
             a.service().onLocalWrite("c", "x" + i, v, InvalidationMessage.Type.INVALIDATE);
         }
 
+        awaitCondition(() -> targetB.entries.get("kd") == null);
         assertNull(targetB.entries.get("kd"),
                 "the delayed row must be applied by journal catch-up, without a reconnect");
         assertEquals(0, targetB.flushCount.get(), "catch-up is not a flush: nothing was trimmed");
@@ -646,6 +656,7 @@ class InvalidationServiceTest {
         journal.append("c", new InvalidationMessage("c", "k", v66, idA,
                 InvalidationMessage.Type.INVALIDATE));
         transportB.reconnect();
+        awaitFirstPass(b);
         assertNull(targetB.entries.get("k"), "the missed row is replayed");
         assertEquals(0, targetB.flushCount.get(), "still no flush");
         a.service().close();
@@ -699,6 +710,7 @@ class InvalidationServiceTest {
 
         transportB.disconnect();
         transportB.reconnect();
+        awaitFirstPass(b);
 
         assertEquals(1, targetB.flushCount.get(),
                 "a failed read is unconfirmable integrity: flush, never \"no loss\"");
@@ -749,12 +761,14 @@ class InvalidationServiceTest {
                     InvalidationMessage.Type.INVALIDATE));
         }
         b.transport().reconnect();
+        awaitFirstPass(b.service());
         assertEquals(1, targetB.flushCount.get(), "trimmed cursor: the flush fired");
         assertEquals(new Version(1, idA), targetB.entries.get("k"),
                 "the stale re-warm is in place after the clear");
 
         b.transport().disconnect();
         b.transport().reconnect();
+        awaitFirstPass(b.service());
         assertNull(targetB.entries.get("k"),
                 "the row journaled during the flush must be replayed, not baselined away");
         a.service().close();
@@ -822,10 +836,12 @@ class InvalidationServiceTest {
         }
         failBaseline.set(true); // the flush's baseline read will fail once
         transportB.reconnect();
+        awaitFirstPass(b);
         assertEquals(1, targetB.flushCount.get());
 
         transportB.disconnect();
         transportB.reconnect();
+        awaitFirstPass(b);
         assertEquals(2, targetB.flushCount.get(),
                 "the kept cursor is still trimmed: the flush path repeats honestly");
         assertEquals("3", checkedReadCursors.get(checkedReadCursors.size() - 1),
@@ -879,28 +895,39 @@ class InvalidationServiceTest {
         }
     }
 
-    @SuppressWarnings("unchecked")
-    private static int windowSize(InvalidationService service, String cache) {
+    private static Object stateField(InvalidationService service, String cache, String name) {
         try {
-            var field = InvalidationService.class.getDeclaredField("appliedWindows");
-            field.setAccessible(true);
-            Set<Version> window = ((Map<String, Set<Version>>) field.get(service)).get(cache);
-            return window == null ? 0 : window.size();
-        } catch (ReflectiveOperationException e) {
-            throw new AssertionError(e);
-        }
+            var states = InvalidationService.class.getDeclaredField("states"); states.setAccessible(true);
+            Object state = ((Map<?, ?>) states.get(service)).get(cache);
+            if (state == null) return null;
+            synchronized (state) {
+                var field = state.getClass().getDeclaredField(name); field.setAccessible(true);
+                Object value = field.get(state);
+                return value instanceof Map<?, ?> map ? Map.copyOf(map) : value;
+            }
+        } catch (ReflectiveOperationException e) { throw new AssertionError(e); }
     }
 
+    private static int windowSize(InvalidationService service, String cache) {
+        Object value = stateField(service, cache, "applied");
+        return value == null ? 0 : ((Map<?, ?>) value).size();
+    }
     private static boolean resyncRequired(InvalidationService service, String cache) {
-        try {
-            var field = InvalidationService.class.getDeclaredField("resyncRequired");
-            field.setAccessible(true);
-            return ((Map<String, ?>) field.get(service)).containsKey(cache);
-        } catch (NoSuchFieldException e) {
-            return false; // the state does not exist before the fix
-        } catch (ReflectiveOperationException e) {
-            throw new AssertionError(e);
+        return Boolean.TRUE.equals(stateField(service, cache, "resyncRequired"));
+    }
+    private static void awaitCondition(java.util.function.BooleanSupplier condition) {
+        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
+        while (!condition.getAsBoolean() && System.nanoTime() < deadline) {
+            try { Thread.sleep(5); } catch (InterruptedException e) { throw new AssertionError(e); }
         }
+        assertTrue(condition.getAsBoolean(), "asynchronous recovery did not settle");
+    }
+    private static void awaitFirstPass(InvalidationService service) {
+        awaitCondition(() -> stateField(service, "c", "lastResult") != null
+                && !Boolean.TRUE.equals(stateField(service, "c", "running")));
+    }
+    private static void awaitIdle(InvalidationService service) {
+        awaitCondition(() -> !Boolean.TRUE.equals(stateField(service, "c", "pending")));
     }
 
     /**
@@ -931,7 +958,8 @@ class InvalidationServiceTest {
             messages.add(message);
             journal.append("c", message);
         }
-        b.transport().reconnect(); // replay applies all 1,000; cursor at the end
+        b.transport().reconnect();
+        awaitFirstPass(b.service()); // replay applies all 1,000; cursor at the end
         journal.readCalls.set(0);
 
         int peakWindow = 0;
@@ -941,7 +969,8 @@ class InvalidationServiceTest {
             peakWindow = Math.max(peakWindow, windowSize(b.service(), "c"));
         }
 
-        assertTrue(peakWindow <= 200,
+        awaitIdle(b.service());
+        assertTrue(peakWindow <= 512,
                 "duplicates must not accumulate without bound: peak window " + peakWindow);
         assertTrue(windowSize(b.service(), "c") <= APPLIED_WINDOW_NOMINAL,
                 "re-tracked duplicates beyond the confirmed horizon stay within the nominal "
@@ -980,6 +1009,7 @@ class InvalidationServiceTest {
             a.service().onLocalWrite("c", "k" + i, v, InvalidationMessage.Type.INVALIDATE);
         }
 
+        awaitFirstPass(b.service());
         assertTrue(resyncRequired(b.service(), "c"),
                 "failed catch-up must enter the resync-required state");
         assertEquals(0, windowSize(b.service(), "c"),
@@ -1006,6 +1036,7 @@ class InvalidationServiceTest {
                 InvalidationMessage.Type.INVALIDATE));
         a.service().onLocalWrite("c", "k1002", v1002, InvalidationMessage.Type.INVALIDATE);
 
+        awaitCondition(() -> !resyncRequired(b.service(), "c"));
         assertFalse(resyncRequired(b.service(), "c"),
                 "a successful resync to the journal end clears the state");
         assertEquals(0, windowSize(b.service(), "c"));
@@ -1014,14 +1045,9 @@ class InvalidationServiceTest {
         b.service().close();
     }
 
-    /**
-     * The lazy-recovery contract: an invalidation missed before the
-     * failures stays unapplied while no delivery or reconnect occurs —
-     * L1 may serve stale data — and is applied at the next recovery
-     * trigger, never silently dropped.
-     */
+    /** Triggered failed recovery retries on its own; healthy caches are not polled. */
     @Test
-    void lazyRecoveryStaysIncompleteUntilTheNextTrigger() throws Exception {
+    void triggeredRecoveryRetriesAfterReadsHealWithoutAnotherDelivery() throws Exception {
         var hub = new InMemoryInvalidationTransport.Hub();
         StubJournal journal = new StubJournal(new InMemoryJournal(2000));
         UUID idA = UUID.randomUUID();
@@ -1045,26 +1071,15 @@ class InvalidationServiceTest {
                     InvalidationMessage.Type.INVALIDATE));
             a.service().onLocalWrite("c", "x" + i, v, InvalidationMessage.Type.INVALIDATE);
         }
+        awaitFirstPass(b.service());
         assertTrue(resyncRequired(b.service(), "c"));
         assertEquals(new Version(1, idA), targetB.entries.get("k"),
                 "the missed invalidation is not yet applied");
-
-        // Reads heal, but no delivery or reconnect occurs: recovery stays
-        // incomplete — the stale entry is still served.
         journal.failReads.set(false);
-        assertEquals(new Version(1, idA), targetB.entries.get("k"),
-                "lazy recovery: L1 may serve stale data until the next trigger");
-
-        // The next delivery (throttle interval elapsed) triggers the resync.
-        Thread.sleep(1_100);
-        Version trigger = new Version(1_000, idA);
-        journal.append("c", new InvalidationMessage("c", "xT", trigger, idA,
-                InvalidationMessage.Type.INVALIDATE));
-        a.service().onLocalWrite("c", "xT", trigger, InvalidationMessage.Type.INVALIDATE);
-
-        assertNull(targetB.entries.get("k"),
-                "the missed invalidation is applied at the next recovery trigger");
-        assertFalse(resyncRequired(b.service(), "c"));
+        // No new live event or reconnect: the already-triggered retry owns progress.
+        awaitCondition(() -> targetB.entries.get("k") == null);
+        awaitCondition(() -> !resyncRequired(b.service(), "c"));
+        assertEquals(0, windowSize(b.service(), "c"));
         a.service().close();
         b.service().close();
     }

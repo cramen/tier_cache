@@ -102,66 +102,64 @@ public final class CircuitBreaker {
 
     private final Config config;
     private final Listener listener;
+    private final java.util.function.LongSupplier clock;
     private final boolean[] window;
-    private int windowPos;
-    private int windowCount;
-    private int windowFailures;
-
-    private enum State {
-        CLOSED, OPEN, HALF_OPEN
-    }
-
+    private int windowPos, windowCount, windowFailures;
+    private enum State { CLOSED, OPEN, HALF_OPEN }
     private State state = State.CLOSED;
-    private long openedAtNanos;
-    private long epoch;
-    private int probesInFlight;
-    private int probesSucceeded;
+    private long openedAtNanos, epoch, recoveryDelayNanos;
+    private int probesInFlight, probesSucceeded, recoveryFailures;
+    private boolean recoveryPending;
+    private java.util.concurrent.Executor recoveryExecutor;
+    private java.util.function.Supplier<java.util.concurrent.CompletionStage<Boolean>> recoveryHook;
 
-    /**
-     * Creates a breaker.
-     *
-     * @param config   the thresholds
-     * @param listener transition callback
-     * @since 0.1.0
-     */
+    /** Creates a breaker over count-based thresholds. */
     public CircuitBreaker(Config config, Listener listener) {
-        this.config = config;
-        this.listener = listener;
-        this.window = new boolean[config.windowSize()]; // true = failure
+        this(config, listener, System::nanoTime);
     }
 
-    /**
-     * Whether the breaker is currently open (failing L2 calls fast). An open
-     * breaker whose wait has elapsed lazily transitions to half-open here.
-     *
-     * @return {@code true} while the breaker is open
-     * @since 0.1.0
-     */
-    public synchronized boolean isOpen() {
-        if (state == State.OPEN
-                && System.nanoTime() - openedAtNanos >= config.halfOpenAfter().toNanos()) {
+    CircuitBreaker(Config config, Listener listener, java.util.function.LongSupplier clock) {
+        this.clock = clock;
+        this.config = Objects.requireNonNull(config);
+        this.listener = Objects.requireNonNull(listener);
+        this.window = new boolean[config.windowSize()];
+    }
+
+    /** Configures asynchronous coherence recovery; callers install this before use. */
+    public synchronized void configureRecovery(java.util.concurrent.Executor executor,
+            java.util.function.Supplier<java.util.concurrent.CompletionStage<Boolean>> hook) {
+        recoveryExecutor = Objects.requireNonNull(executor);
+        recoveryHook = Objects.requireNonNull(hook);
+    }
+
+    /** Retires the coherence hook without manufacturing a successful data probe. */
+    public synchronized void detachRecovery() {
+        recoveryHook = null;
+        recoveryExecutor = null;
+        recoveryDelayNanos = 0;
+        recoveryFailures = 0;
+        epoch++;
+        recoveryPending = false;
+        probesInFlight = 0;
+        probesSucceeded = 0;
+        // An actual OPEN episode keeps its original probe wait.
+    }
+
+    private void advance() {
+        if (state == State.OPEN && clock.getAsLong() - openedAtNanos >=
+                Math.max(config.halfOpenAfter().toNanos(), recoveryDelayNanos)) {
             state = State.HALF_OPEN;
             probesInFlight = 0;
             probesSucceeded = 0;
         }
-        return state == State.OPEN;
     }
 
-    /**
-     * Current state of the breaker machine. An open breaker whose wait has
-     * elapsed is reported as {@link BreakerState#HALF_OPEN} even before the
-     * next probe call (the same lazy transition {@link #isOpen()} performs).
-     *
-     * @return the current state; never {@code null}
-     * @since 0.1.0
-     */
+    /** Whether the breaker is currently OPEN, including its configured wait. */
+    public synchronized boolean isOpen() { advance(); return state == State.OPEN; }
+
+    /** Current state; pending coherence recovery is HALF_OPEN, never CLOSED. */
     public synchronized BreakerState state() {
-        if (state == State.OPEN
-                && System.nanoTime() - openedAtNanos >= config.halfOpenAfter().toNanos()) {
-            state = State.HALF_OPEN;
-            probesInFlight = 0;
-            probesSucceeded = 0;
-        }
+        advance();
         return switch (state) {
             case CLOSED -> BreakerState.CLOSED;
             case OPEN -> BreakerState.OPEN;
@@ -169,164 +167,148 @@ public final class CircuitBreaker {
         };
     }
 
-    /**
-     * Asks permission for an L2 call. When open (and not yet probe time) or
-     * when the probe budget is exhausted, returns {@code false}.
-     *
-     * @return {@code true} if the call may proceed
-     * @since 0.1.0
-     */
+    /** Admits one remote attempt without waiting for recovery. */
     public synchronized boolean tryAcquire() {
-        switch (state) {
-            case CLOSED:
-                return true;
-            case OPEN:
-                if (System.nanoTime() - openedAtNanos < config.halfOpenAfter().toNanos()) {
-                    return false;
-                }
-                state = State.HALF_OPEN;
-                probesInFlight = 0;
-                probesSucceeded = 0;
-                // fall through
-            case HALF_OPEN:
-                if (probesInFlight >= config.probesToClose()) {
-                    return false;
-                }
-                probesInFlight++;
-                return true;
-            default:
-                throw new IllegalStateException("unknown state");
-        }
+        advance();
+        if (state == State.CLOSED) return true;
+        if (state == State.OPEN || recoveryPending || probesInFlight >= config.probesToClose()) return false;
+        probesInFlight++;
+        return true;
     }
 
-    /**
-     * Admits one operation whose completion may be neutral (for example, an
-     * unsupported capability discovered by a custom SPI). The permit cannot
-     * retire a probe from a subsequent breaker episode.
-     *
-     * @return a once-completable permit, or null when admission is rejected
-     * @since 1.5.0
-     */
-    public synchronized Permit tryAcquirePermit() {
-        return tryAcquire() ? new Permit(epoch) : null;
-    }
+    /** Returns an epoch-bound, once-completable admission or null on rejection. */
+    public synchronized Permit tryAcquirePermit() { return tryAcquire() ? new Permit(epoch) : null; }
 
-    /**
-     * Once-only accounting for an admitted operation; callbacks use the same
-     * transition rules as the legacy accounting methods.
-     * @since 1.5.0
-     */
+    /** Once-only accounting, including neutral completion of unsupported calls. */
     public final class Permit {
         private final long acquiredEpoch;
         private boolean completed;
-
-        private Permit(long acquiredEpoch) {
-            this.acquiredEpoch = acquiredEpoch;
-        }
-
-        /**
-         * Records successful remote execution.
-         * @since 1.5.0
-         */
+        private Permit(long acquiredEpoch) { this.acquiredEpoch = acquiredEpoch; }
+        /** Records a successful remote execution. */
         public void success() { complete(1); }
-
-        /**
-         * Records failed remote execution.
-         * @since 1.5.0
-         */
+        /** Records a failed remote execution. */
         public void failure() { complete(-1); }
-
-        /**
-         * Retires admission without recording a remote outcome.
-         * @since 1.5.0
-         */
+        /** Returns admission without adding a remote outcome to the window. */
         public void cancel() { complete(0); }
-
         private void complete(int outcome) {
+            Runnable action;
             synchronized (CircuitBreaker.this) {
-                if (completed) {
-                    return;
-                }
+                if (completed) return;
                 completed = true;
-                if (acquiredEpoch != epoch) {
+                if (acquiredEpoch != epoch) return;
+                if (outcome == 0) {
+                    if (state == State.HALF_OPEN && probesInFlight > 0) probesInFlight--;
                     return;
                 }
-                if (outcome == 0) {
-                    if (state == State.HALF_OPEN) {
-                        probesInFlight--;
-                    }
-                } else if (outcome > 0) {
-                    onSuccess();
-                } else {
-                    onFailure();
-                }
+                action = outcome > 0 ? successLocked() : failureLocked();
             }
+            notifySafely(action);
         }
     }
 
-    /**
-     * Records a successful L2 call.
-     *
-     * @since 0.1.0
-     */
-    public synchronized void onSuccess() {
+    /** Compatibility accounting method; transition callbacks run outside the monitor. */
+    public void onSuccess() {
+        Runnable action;
+        synchronized (this) { action = successLocked(); }
+        notifySafely(action);
+    }
+
+    /** Compatibility accounting method; transition callbacks run outside the monitor. */
+    public void onFailure() {
+        Runnable action;
+        synchronized (this) { action = failureLocked(); }
+        notifySafely(action);
+    }
+
+    private Runnable successLocked() {
+        if (state == State.OPEN || recoveryPending) return null;
         if (state == State.HALF_OPEN) {
-            probesInFlight--;
-            if (++probesSucceeded >= config.probesToClose()) {
-                close();
-            }
-            return;
+            if (probesInFlight > 0) probesInFlight--;
+            if (++probesSucceeded < config.probesToClose()) return null;
+            if (recoveryHook == null) return closeLocked();
+            recoveryPending = true;
+            long expected = epoch;
+            var executor = recoveryExecutor;
+            var hook = recoveryHook;
+            return () -> {
+                try { executor.execute(() -> startRecovery(expected, hook)); }
+                catch (RuntimeException e) { finishRecovery(expected, false); }
+            };
         }
         record(false);
+        return null;
     }
 
-    /**
-     * Records a failed L2 call.
-     *
-     * @since 0.1.0
-     */
-    public synchronized void onFailure() {
-        if (state == State.HALF_OPEN) {
-            open(); // probe failed: reopen, restart the wait
-            return;
+    private void startRecovery(long expected,
+            java.util.function.Supplier<java.util.concurrent.CompletionStage<Boolean>> hook) {
+        synchronized (this) {
+            if (epoch != expected || !recoveryPending || recoveryHook != hook) return;
         }
+        try {
+            hook.get().whenComplete((result, error) -> finishRecovery(expected,
+                    error == null && Boolean.TRUE.equals(result)));
+        } catch (Throwable e) { finishRecovery(expected, false); }
+    }
+
+    private void finishRecovery(long expected, boolean success) {
+        Runnable action;
+        synchronized (this) {
+            if (epoch != expected || !recoveryPending || recoveryHook == null) return;
+            recoveryPending = false;
+            if (success) {
+                recoveryFailures = 0;
+                recoveryDelayNanos = 0;
+                action = closeLocked();
+            } else {
+                recoveryFailures = Math.min(6, recoveryFailures + 1);
+                recoveryDelayNanos = java.util.concurrent.TimeUnit.SECONDS.toNanos(
+                        Math.min(30, 1L << (recoveryFailures - 1)));
+                action = openLocked();
+            }
+        }
+        notifySafely(action);
+    }
+
+    private Runnable failureLocked() {
+        if (state == State.HALF_OPEN) return openLocked();
         record(true);
         if (windowCount >= config.minimumCalls()
                 && windowFailures >= Math.ceil(config.failureRatio() * Math.min(windowCount, config.windowSize()))) {
-            open();
+            return openLocked();
         }
+        return null;
     }
 
     private void record(boolean failure) {
-        if (windowCount < config.windowSize()) {
-            windowCount++;
-        } else if (window[windowPos]) {
-            windowFailures--; // overwritten failure leaves the window
-        }
-        if (failure) {
-            windowFailures++;
-        }
+        if (windowCount < config.windowSize()) windowCount++;
+        else if (window[windowPos]) windowFailures--;
+        if (failure) windowFailures++;
         window[windowPos] = failure;
         windowPos = (windowPos + 1) % config.windowSize();
     }
 
-    private void open() {
+    private Runnable openLocked() {
         epoch++;
-        if (state != State.OPEN) {
-            state = State.OPEN;
-            openedAtNanos = System.nanoTime();
-            listener.onOpen();
-        } else {
-            openedAtNanos = System.nanoTime(); // re-opened: restart the wait
-        }
+        recoveryPending = false;
+        boolean changed = state != State.OPEN;
+        state = State.OPEN;
+        openedAtNanos = clock.getAsLong();
+        return changed ? listener::onOpen : null;
     }
 
-    private void close() {
+    private Runnable closeLocked() {
         epoch++;
         state = State.CLOSED;
-        windowPos = 0;
-        windowCount = 0;
-        windowFailures = 0;
-        listener.onClose();
+        recoveryPending = false;
+        windowPos = windowCount = windowFailures = 0;
+        return listener::onClose;
+    }
+
+    private static void notifySafely(Runnable action) {
+        if (action == null) return;
+        try { action.run(); }
+        catch (Throwable e) {
+            org.slf4j.LoggerFactory.getLogger(CircuitBreaker.class).warn("Circuit breaker observer failed", e);
+        }
     }
 }

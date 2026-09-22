@@ -26,6 +26,23 @@ V2 never reads, copies, subscribes to or deletes legacy state. Rollback also
 requires a drained cutover and clean isolated cache storage. Whole-cache
 clear remains a non-transactional scan followed by a separate journal append.
 
+## Unreleased: asynchronous invalidation recovery
+
+Replay no longer runs under state monitors or inline in the successful probe
+or reconnect callback. The breaker stays HALF_OPEN until its recovery epoch
+has verified replay or a safe baseline-and-clear result; CLOSED/recovered
+notifications can therefore arrive later. A failed baseline still clears L1
+but keeps the confirmed cursor and recovery pending. Repeated failures retry
+with bounded backoff instead of waiting for another live event.
+
+Factories own two recovery workers and unregister pending gauges on close.
+Closed coherence hooks cannot be restarted by surviving synchronous caches;
+real probes may still establish caller-owned L2 availability. Existing SPI
+methods remain, with additive asynchronous completion and local-clear epoch
+hooks. Custom callers must await the completion stage when they require
+settled recovery; returning from the old void callback is no longer that
+boundary. See [the recovery contract](docs/recovery.md).
+
 ## 1.5.0 (unreleased)
 
 ### Custom transports: versioned tagged writes

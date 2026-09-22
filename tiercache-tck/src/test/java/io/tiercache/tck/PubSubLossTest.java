@@ -63,9 +63,10 @@ abstract class AbstractPubSubLossTest extends AbstractInvalidationChaosTest {
                 Thread.sleep(300);
                 assertEquals("v", b.cache.get("keep"), "sanity: stale while disconnected");
 
-                // Overflow -> synchronous full L1 flush on reconnect.
+                // Overflow -> asynchronously scheduled baseline-and-clear on reconnect.
                 b.transport.reconnect();
                 // After the flush, reads re-resolve from L2: B agrees with L2.
+                waitFor(() -> java.util.Objects.equals(l2Truth(b, "keep"), b.cache.get("keep")));
                 assertEquals(l2Truth(b, "keep"), b.cache.get("keep"));
                 assertEquals("v0", b.cache.get("flood-0"));
             } finally {

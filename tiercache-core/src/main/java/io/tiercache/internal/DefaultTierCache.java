@@ -131,6 +131,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
     private static final int L1_STRIPES = 64;
 
     private final L1BarrierMap<K> l1Metas;
+    private final java.util.concurrent.atomic.AtomicLong recoveryGeneration = new java.util.concurrent.atomic.AtomicLong();
     private final Object[] l1Locks;
     /** Bumped when protective L1 state is forgotten (barrier eviction, evictAll). */
     private final AtomicLong l1Generation = new AtomicLong();
@@ -733,6 +734,32 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         }
     }
 
+    @Override
+    public long recoveryGeneration() { return recoveryGeneration.get(); }
+
+    @Override
+    public long resetRecovery(long expectedGeneration) {
+        if (!recoveryGeneration.compareAndSet(expectedGeneration, expectedGeneration + 1)) return -1;
+        clearL1Contents();
+        return expectedGeneration + 1;
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public long applyRecovery(InvalidationMessage message, long expectedGeneration) {
+        if (message.type() == InvalidationMessage.Type.EVICT_ALL) return resetRecovery(expectedGeneration);
+        K key = (K) message.key();
+        synchronized (l1LockFor(key)) {
+            if (recoveryGeneration.get() != expectedGeneration) return -1;
+            if (message.type() == InvalidationMessage.Type.UPDATE) {
+                applyUpdateL1(key, message.payload(), message.version());
+            } else {
+                evictL1IfNewer(key, message.version());
+            }
+            return expectedGeneration;
+        }
+    }
+
     private Version nextVersion() {
         return versionGenerator != null ? versionGenerator.next() : null;
     }
@@ -832,6 +859,11 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
 
     /** Full local clear: generation bump first, then per-stripe ordering, then the clears. */
     private void clearL1() {
+        recoveryGeneration.incrementAndGet();
+        clearL1Contents();
+    }
+
+    private void clearL1Contents() {
         l1Generation.incrementAndGet();
         // Ordering point with in-flight per-key commits: a commit that
         // passed its generation check before the bump completes its write

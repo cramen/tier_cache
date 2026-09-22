@@ -69,6 +69,7 @@ class RedisNamespaceWiringTest {
             assertEquals("old", reader.get("k"));
             subscriber.sync().subscribe(RedisKeyspace.channel("user"), RedisKeyspace.channel("user:roles"));
             reconnect.run();
+            assertTrue(handler.recoverAsync(Runnable::run).toCompletableFuture().get(5, TimeUnit.SECONDS));
             assertEquals("new", reader.get("k"), "reconnect replay must use the writer's logical journal");
 
             subscriber.sync().unsubscribe();
@@ -84,6 +85,7 @@ class RedisNamespaceWiringTest {
                     .anyMatch(row -> row.message().type() == InvalidationMessage.Type.EVICT_ALL));
             subscriber.sync().subscribe(RedisKeyspace.channel("user"), RedisKeyspace.channel("user:roles"));
             reconnect.run();
+            assertTrue(handler.recoverAsync(Runnable::run).toCompletableFuture().get(5, TimeUnit.SECONDS));
             assertNull(reader.get("clear")); assertNull(reader.get("k"));
             assertEquals("roles", rolesB.get("keep"));
 

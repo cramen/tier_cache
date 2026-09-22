@@ -169,17 +169,19 @@ public final class CircuitBreakerRemoteCache<K, V> implements RemoteCache<K, V> 
     }
 
     private <T> T guard(java.util.concurrent.Callable<T> call) {
-        if (!breaker.tryAcquire()) {
+        CircuitBreaker.Permit permit = breaker.tryAcquirePermit();
+        if (permit == null) {
             throw L2UnavailableException.OPEN;
         }
         try {
             T result = call.call();
-            breaker.onSuccess();
+            permit.success();
             return result;
         } catch (L2UnavailableException e) {
+            permit.cancel();
             throw e;
         } catch (Exception e) {
-            breaker.onFailure();
+            permit.failure();
             throw new L2UnavailableException("L2 call failed: " + e.getClass().getSimpleName(), e);
         }
     }

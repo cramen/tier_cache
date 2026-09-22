@@ -61,6 +61,7 @@ public final class TierCacheFactory implements AutoCloseable {
     private final boolean ownsLockProvider;
     private final ScheduledExecutorService watchdog;
     private final VersionGenerator versionGenerator;
+    private final ScheduledExecutorService recoveryExecutor;
     private final InvalidationHandler invalidation; // null = single-node
     private final CircuitBreaker breaker;           // null = unguarded L2 (opt-out)
     private final CacheMetricsListener metricsListener;
@@ -78,7 +79,7 @@ public final class TierCacheFactory implements AutoCloseable {
      */
     private final Object factoryLifecycleLock = new Object();
     /** Set under {@link #factoryLifecycleLock} by {@link #close()}. */
-    private boolean closed;
+    private volatile boolean closed;
 
     private TierCacheFactory(Builder builder) {
         this.defaults = builder.defaults;
@@ -140,11 +141,17 @@ public final class TierCacheFactory implements AutoCloseable {
                 new DaemonThreadFactory("tiercache-async"),
                 new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
 
+        java.util.concurrent.ScheduledThreadPoolExecutor recoveryPool = builder.invalidationFactory == null
+                ? null : new java.util.concurrent.ScheduledThreadPoolExecutor(2,
+                        new DaemonThreadFactory("tiercache-recovery"));
+        if (recoveryPool != null) recoveryPool.setRemoveOnCancelPolicy(true);
+        this.recoveryExecutor = recoveryPool;
         this.versionGenerator = new VersionGenerator();
         this.invalidation = builder.invalidationFactory != null
                 ? builder.invalidationFactory.apply(versionGenerator)
                 : null;
         if (this.invalidation != null) {
+            this.invalidation.configureRecoveryExecutor(recoveryExecutor);
             this.invalidation.setEventListener(builder.invalidationEventListener);
         }
         this.metricsListener = builder.metricsListener;
@@ -163,15 +170,15 @@ public final class TierCacheFactory implements AutoCloseable {
 
                 @Override
                 public void onClose() {
-                    // Recovery: replay missed invalidations BEFORE we report
-                    // recovery; L1 is never flushed here.
-                    if (invalidation != null) {
-                        invalidation.onL2Recovery();
-                    }
-                    log.info("L2 circuit breaker CLOSED: L2 recovered, missed invalidations replayed.");
-                    degradationListener.onRecovered();
+                    log.info("L2 circuit breaker CLOSED: data-path availability restored.");
+                    if (!closed) degradationListener.onRecovered();
                 }
             });
+            if (invalidation != null) {
+                this.breaker.configureRecovery(recoveryExecutor, () -> closed
+                        ? java.util.concurrent.CompletableFuture.completedFuture(false)
+                        : invalidation.recoverAsync(recoveryExecutor));
+            }
             if (rawRemoteCache != null) {
                 rawRemoteCache = new CircuitBreakerRemoteCache<>(rawRemoteCache, breaker);
             }
@@ -219,7 +226,7 @@ public final class TierCacheFactory implements AutoCloseable {
                     (RemoteCache<K, V>) l2For(n), settings, singleflightEnabled,
                     coordinationEnabled ? lockProvider : null, watchdog, versionGenerator, invalidation,
                     breaker, metricsListener, revalidationExecutor, jitter);
-            if (invalidation != null) {
+            if (invalidation != null && !closed) {
                 invalidation.registerTarget(n, cache);
             }
             return cache;
@@ -336,6 +343,7 @@ public final class TierCacheFactory implements AutoCloseable {
             closed = true;
             views = new java.util.ArrayList<>(liveAsyncCaches.values());
         }
+        if (breaker != null) breaker.detachRecovery();
         // Draining happens outside the lock: completing stages may run
         // user callbacks.
         views.forEach(view ->
@@ -352,8 +360,10 @@ public final class TierCacheFactory implements AutoCloseable {
                 log.warn("Failed to close the derived rebuild-lock provider", e);
             }
         }
-        if (invalidation != null) {
-            invalidation.close();
+        try {
+            if (invalidation != null) invalidation.close();
+        } finally {
+            if (recoveryExecutor != null) recoveryExecutor.shutdownNow();
         }
     }
 

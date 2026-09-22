@@ -164,7 +164,7 @@ class DegradationTest {
     @Test
     void recoveryTriggersInvalidationReplayHookBeforeRecovered() throws Exception {
         FailingRemoteCache<String, String> l2 = new FailingRemoteCache<>();
-        List<String> events = new ArrayList<>();
+        List<String> events = new java.util.concurrent.CopyOnWriteArrayList<>();
         InvalidationHandler handler = new InvalidationHandler() {
             @Override
             public void onLocalWrite(String cache, Object key, Version version,
@@ -204,6 +204,8 @@ class DegradationTest {
         Thread.sleep(100);
         cache.getOrCompute("k", key -> "v"); // probe -> close
         assertFalse(factory.isDegraded());
+        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
+        while (events.size() < 2 && System.nanoTime() < deadline) Thread.sleep(5);
         assertEquals(List.of("replay", "recovered"), events,
                 "journal replay runs before the recovered signal");
         factory.close();

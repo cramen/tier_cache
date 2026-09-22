@@ -53,4 +53,29 @@ public interface InvalidationTarget {
     default void applyUpdateL1(Object key, Object value, Version eventVersion) {
         evictL1IfNewer(key, eventVersion); // default: no payload application
     }
+    /** Local clear epoch used to reject recovery responses obtained before a clear. */
+    default long recoveryGeneration() { return 0; }
+
+    /**
+     * Applies one recovered row if its local clear epoch is still valid.
+     * Returns the next epoch, or -1 when superseded. Targets with concurrent
+     * clears override this together with recoveryGeneration for atomic checks.
+     */
+    default long applyRecovery(io.tiercache.InvalidationMessage message, long expectedGeneration) {
+        if (recoveryGeneration() != expectedGeneration) return -1;
+        switch (message.type()) {
+            case INVALIDATE -> evictL1IfNewer(message.key(), message.version());
+            case UPDATE -> applyUpdateL1(message.key(), message.payload(), message.version());
+            case EVICT_ALL -> evictAllL1();
+        }
+        return recoveryGeneration();
+    }
+
+    /** Clears against a reserved epoch; -1 means a concurrent clear superseded the reservation. */
+    default long resetRecovery(long expectedGeneration) {
+        if (recoveryGeneration() != expectedGeneration) return -1;
+        evictAllL1();
+        return recoveryGeneration();
+    }
+
 }

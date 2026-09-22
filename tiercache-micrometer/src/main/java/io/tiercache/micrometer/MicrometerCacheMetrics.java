@@ -57,6 +57,32 @@ public final class MicrometerCacheMetrics
         this.registry = registry;
     }
 
+    private final Map<String, RecoveryGauge> recoveryGauges = new ConcurrentHashMap<>();
+
+    private static final class RecoveryGauge {
+        final Map<Object, java.util.function.BooleanSupplier> sources = new ConcurrentHashMap<>();
+        Gauge meter;
+        double pending() { return sources.values().stream().anyMatch(java.util.function.BooleanSupplier::getAsBoolean) ? 1 : 0; }
+    }
+
+    @Override
+    public AutoCloseable registerRecovery(String cache, java.util.function.BooleanSupplier pending) {
+        Object registration = new Object();
+        recoveryGauges.compute(cache, (name, existing) -> {
+            RecoveryGauge state = existing == null ? new RecoveryGauge() : existing;
+            state.sources.put(registration, pending);
+            if (state.meter == null) state.meter = Gauge.builder("tiercache.invalidation.recovery.pending", state, RecoveryGauge::pending)
+                    .tag("cache", cache).register(registry);
+            return state;
+        });
+        return () -> recoveryGauges.computeIfPresent(cache, (name, state) -> {
+            state.sources.remove(registration);
+            if (!state.sources.isEmpty()) return state;
+            registry.remove(state.meter);
+            return null;
+        });
+    }
+
     // --- CacheMetricsListener ---
 
     @Override

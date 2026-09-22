@@ -175,7 +175,7 @@ public interface CacheMetricsListener {
     }
 
     /**
-     * Wraps inbound invalidation processing (tracing span in the binder).
+     * Observes committed invalidation outside state monitors (binder tracing span).
      *
      * @param cache the cache name
      * @return an opaque observation handle, or {@code null}
@@ -195,4 +195,13 @@ public interface CacheMetricsListener {
      */
     default void onInvalidationEnd(String cache, Object handle) {
     }
+    /**
+     * Registers the triggered-recovery pending gauge. The supplier is a
+     * nonblocking state read. Closing the returned handle unregisters this
+     * source without reporting a successful recovery.
+     */
+    default AutoCloseable registerRecovery(String cache, java.util.function.BooleanSupplier pending) {
+        return () -> { };
+    }
+
 }

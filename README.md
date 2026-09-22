@@ -144,3 +144,5 @@ Everything else — builders, transport internals, metrics helpers, and any type
 ## License
 
 [Apache License 2.0](LICENSE)
+
+Recovery completion, HALF_OPEN admission and fallback limits are described in [the recovery guide](docs/recovery.md).

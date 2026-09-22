@@ -37,7 +37,8 @@ All meters are created by
 | `tiercache.latency` | Timer | `cache`, `level` | Latency of cache operations by level. The level enum defines `l1`/`l2`; core times only L2-touching operations, so `level="l2"` is what you will see in practice (L1 hits are deliberately not timed — zero clock reads on the hot path). |
 | `tiercache.invalidation` | Counter | `cache`, `direction` | Invalidation events by direction: `sent`, `received`, `replayed` (from the journal on recovery), `dropped` (a journal-backed L1 flush because replay history could not be verified, for example after trimming or a read failure). The latter records fallback events, not a count of individually lost messages. |
 | `tiercache.degraded` | Gauge | — | `1` while the L2 circuit breaker is open (L1-only mode), else `0`. |
-| `tiercache.breaker.state` | Gauge | — | Breaker machine state: `0` = closed, `1` = half-open (recovery probing), `2` = open. During half-open `tiercache.degraded` is already back at `0`. |
+| `tiercache.breaker.state` | Gauge | — | Breaker machine state: `0` = closed, `1` = half-open (probing or awaiting coherence recovery), `2` = open. During half-open `tiercache.degraded` is already back at `0`. |
+| `tiercache.invalidation.recovery.pending` | Gauge | `cache` | `1` while triggered recovery or its follow-up/retry is pending, `0` when settled. Unregistered on close. Read alongside breaker state and logs; a failed-baseline clear does not reset it to success. |
 | `tiercache.journal.size` | Gauge | `cache` | Invalidation journal entries currently held for the cache. |
 | `tiercache.last.load.age` | Gauge | `cache` | Milliseconds since the last load event for the cache, tracked from store events, not per-entry metadata. |
 | `tiercache.null.entries` | Counter | `cache` | Null-markers stored under the `allow` null policy. |
@@ -64,7 +65,9 @@ and produces OpenTelemetry spans (tracer name `io.tiercache`):
 
 - `tiercache.l2.<operation>` — one span per L2 operation, with attributes
   `cache.name`, `db.system=redis`, and `cache.hit` set at span end.
-- `tiercache.invalidation.apply` — wraps inbound invalidation processing.
+- `tiercache.invalidation.apply` — observes an already-committed inbound invalidation.
+  Observer dispatch runs outside state monitors; this span does not measure
+  time spent inside the L1 state commit.
 
 There are deliberately **no spans on the L1-hit path** — core never calls
 the tracing hooks there, so hot reads pay nothing. Wire it alongside the
@@ -132,3 +135,5 @@ with four alerts:
 
 Load the file into your Prometheus `rule_files` (or drop it into an
 Alertmanager/Grafana-managed rule provisioning directory).
+
+See [triggered recovery](recovery.md) for HALF_OPEN admission, baseline failure, bounded retries and shutdown semantics.

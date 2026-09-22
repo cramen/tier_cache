@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Journal recovery now uses two owned workers with bounded per-cache scheduling, pass budgets and exponential retries. Redis I/O and observer callbacks run outside cache-state and breaker monitors. Successful probes return without waiting for replay; CLOSED is gated by the same recovery epoch's verified replay or safe reset. Failed baseline reads still clear L1 but retain the cursor and remain pending. Shutdown cancels queued work and detaches retired coherence hooks. Added `tiercache.invalidation.recovery.pending{cache}` and real-Redis JFR coverage; see docs/recovery.md.
+
 - Tagged data and its reverse index now share one absolute expiry instant. On Redis 6.2, separate relative TTL commands could produce different expiration times inside the same Lua script, especially with many tags. Extend-only tag-set TTLs and losing-write behavior remain unchanged.
 
 - Tagged writes preserve the remote acceptance result: rejected candidates no longer warm L1, publish UPDATE events, or alter tag indexes. Lettuce atomically updates accepted values, replacement tags, reverse indexes and journal bookkeeping. Losing writers perform one bounded convergence read; degraded writes stay local. Custom versioned tagged SPI providers must implement the new outcome method and capability query; see UPGRADING.md.

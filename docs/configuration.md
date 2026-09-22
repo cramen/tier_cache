@@ -131,7 +131,8 @@ transport is used; `tiercache.invalidation.enabled=false` opts out.
 
 Both profiles share the journal (`tiercache.invalidation.journal-capacity`,
 default 10000 entries per cache stream), which records recent invalidations
-so a recovering instance replays what it missed instead of flushing L1.
+so a recovering instance can replay verified retained history. Unverifiable
+history may require a per-cache L1 clear; see [recovery behavior](recovery.md).
 
 ## Invalidation modes
 
@@ -212,8 +213,11 @@ window (after at least 5 calls). While open, the cache runs **L1-only**: no
 infrastructure exceptions escape into business code, and cross-instance
 atomicity (`putIfAbsent`, rebuild coordination) degrades to per-instance —
 surfaced via the `tiercache.degraded=1` metric and a log line. After 5
-seconds the breaker half-opens and admits up to 3 probe calls; it closes
-when all probes succeed and reopens on any probe failure.
+seconds the breaker half-opens and admits up to 3 probe calls. With a recovery
+handler it remains HALF_OPEN after successful probes until asynchronous
+replay or a safe reset completes. Probes return their results without waiting
+for replay; additional L2 calls are rejected while recovery is pending. Any
+probe failure reopens the breaker.
 
 On recovery, the engine attempts journal replay **before** reporting
 recovery. Successful replay retains entries it does not invalidate. If the
@@ -225,6 +229,11 @@ the `onJournalOverflow` callback; despite its name, that callback also
 reports failed replay verification. A hand-built engine without a journal
 instead logs and flushes every registered L1; that path has no journal
 overflow metric or callback.
+
+Recovery uses two owned workers per factory, coalesced per cache, with bounded
+passes and 1–30 second exponential failure retries. A failed baseline read
+still clears L1 but retains the confirmed cursor and leaves recovery pending;
+it cannot close the breaker. See [completion, shutdown, metrics and limits](recovery.md).
 
 ## Degradation stale window
 

@@ -69,7 +69,7 @@ tasks.test {
 | `MultiInstanceStampedeTest` | With distributed rebuild coordination, the loader runs exactly once cluster-wide on a shared Redis; with coordination disabled, at most once per instance (harness sensitivity). |
 | `AvalancheTest` | Mass writes with one base TTL get effective L1 TTLs spread over the jitter band, so entries do not expire simultaneously. |
 | `PenetrationTest` | Repeated requests for nonexistent keys are absorbed by null markers; the loader sees only a tiny fraction of the traffic. |
-| `DegradationChaosTest` | Redis paused under read load: business operations continue at L1-only latency, no infrastructure exceptions escape, the degraded signal fires; after recovery L1 survives (no reconnect flush) and several instances recover without a loader spike (reconnect storm). |
+| `DegradationChaosTest` | Redis paused under read load: business operations continue at L1-only latency, no infrastructure exceptions escape, the degraded signal fires; verified retained history preserves unaffected L1 entries. The reconnect-storm fixture checks its configured workload, not a universal source-load multiplier. |
 | `PubSubLossTest` | A disconnected receiver heals missed invalidations via journal replay on reconnect within the journal window; beyond the window it flushes L1 entirely. |
 | `InvalidationRaceTest` | Concurrent put/evict races across instances converge every L1 to the L2 content (versioned writes, last-write-wins) — no resurrected or stale values after quiescence. |
 | `TagAndUpdateTest` | Tag and batch invalidation across instances, UPDATE-mode cross-instance warm-up, and oversized-payload fallback on a real server. |
@@ -98,3 +98,13 @@ All of the following are excluded from `check`; run them explicitly.
 The propagation harness (`io.tiercache.tck.PropagationBenchmark`) is a plain
 `main` class inside the `tests` jar, so consumers can also run it from the
 artifact on a classpath assembled as shown above.
+
+### Real-journal recovery and virtual threads
+
+`RecoveryJfrTest` supplements the in-memory 100k-thread read gate with a real
+Redis journal, a virtual-thread HTTP probe and the registered reconnect
+callback. Deterministic gates verify callbacks return before replay; JFR
+checks library-attributed monitor pinning on JDK 21. Run it with
+`./gradlew :tiercache-tck:vtStressTest --tests '*RecoveryJfrTest'`; use
+`-PtiercacheVtJdk=25` for newer-JDK functional coverage. Recordings remain in
+`tiercache-tck/build/reports/recovery-jdk*.jfr`. See [recovery](recovery.md).
