@@ -24,25 +24,26 @@ You will receive an acknowledgment within 3 business days.
 
 ## Scope
 
-This policy covers the published library modules (`tiercache-core`,
-`tiercache-invalidation`, `tiercache-transport-redis`,
-`tiercache-spring-boot-starter`, `tiercache-micrometer`,
-`tiercache-kotlin`). The `examples/` applications are demonstration code
-and are out of scope.
+This policy covers the published library modules and TCK, including their shipped
+classifiers. The `examples/` applications are demonstration code and are out of scope.
 
 ## Supply-Chain Verification
 
-Release-candidate artifacts are built on GitHub Actions with
-SLSA-style build provenance and Sigstore keyless signatures. To verify
-an artifact:
+The release-candidate workflow resolves the actual publication runtime graphs,
+checks SBOM completeness (including shaded Caffeine and published test fixtures),
+and scans them with a checksum-pinned Trivy binary. Unexcepted HIGH/CRITICAL
+findings and incomplete or failed scans reject acceptance. Any checked-in
+exception must name the exact vulnerability/artifact/version, owner, rationale and
+future expiration date; exceptions require maintainer review.
 
-```bash
-gh attestation verify <jar> --repo cramen/tier_cache
-cosign verify-blob --bundle <jar>.sigstore.json <jar> \
-  --certificate-identity-regexp '^https://github.com/cramen/tier_cache/.github/workflows/release-candidate.yml@.*' \
-  --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
-```
+The complete candidate evidence bundle is signed with Sigstore and receives
+GitHub build provenance. Its manifest binds binaries, classifiers, publication
+metadata, SBOMs and scan results to their exact SHA-256 bytes and source commit.
+Final-mode evidence is retained with an existing GitHub release; ordinary
+SNAPSHOT development and trial workflows remain allowed.
 
-Each CI build of `main` also publishes a CycloneDX SBOM as the `sbom`
-workflow artifact, and the nightly pipeline checks that the core jar
-builds reproducibly (byte-identical double build).
+See [release evidence](docs/release-evidence.md) for the precise scope, scanner
+self-test, exception policy, commands, signature verification and comparison with
+Central downloads. A separately rebuilt artifact is not covered by the candidate
+attestation unless its checksum matches. No historical release is retroactively
+claimed to have passed this new evidence gate.

@@ -105,27 +105,40 @@ jobs:
           fi
           echo "reproducible build OK: $HASH_A"
 
-  # CVE scan (supply-chain design D4): daily Trivy filesystem scan.
-  # Non-blocking by design (exit-code 0) - release gating comes later.
+  # Resolve the published runtime/classifier graphs; source-only scanning is insufficient.
   cve-scan:
     runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v7
-      - name: Trivy filesystem scan (HIGH,CRITICAL)
-        uses: aquasecurity/trivy-action@v0.36.0
         with:
-          scan-type: fs
-          scan-ref: .
-          severity: HIGH,CRITICAL
-          format: table
-          output: trivy-report.txt
-          exit-code: '0'
+          persist-credentials: false
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v6.3.0
+      - run: python3 -m unittest discover -s scripts/release -p 'test_*.py' -v
+      - run: ./gradlew releaseEvidenceInputs --max-workers=2
+      - run: python3 scripts/release/install_trivy.py "$RUNNER_TEMP/trivy"
+      - run: python3 scripts/release/evidence.py scan --trivy "$RUNNER_TEMP/trivy/trivy" --output build/release-scan --exceptions scripts/release/exceptions.json
       - name: Append report to job summary
-        run: cat trivy-report.txt >> "$GITHUB_STEP_SUMMARY"
+        if: always()
+        run: |
+          if [ -f build/release-scan/summary.txt ]; then cat build/release-scan/summary.txt >> "$GITHUB_STEP_SUMMARY"; fi
       - uses: actions/upload-artifact@v7
+        if: always()
         with:
-          name: trivy-report
-          path: trivy-report.txt
+          name: dependency-scan
+          path: |
+            build/release-inputs/
+            build/release-scan/*.json
+            build/release-scan/*.log
+            build/release-scan/*.txt
+            **/build/reports/cyclonedx/*-sbom.json
+          if-no-files-found: error
           retention-days: 90
 
   native-smoke:

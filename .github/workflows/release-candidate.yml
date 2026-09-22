@@ -1,87 +1,145 @@
 name: release-candidate
 
-# Manual trigger only: builds the publishable module jars, signs them with
-# Sigstore keyless (GitHub Actions OIDC identity, no stored keys), and creates
-# GitHub Artifact Attestations (SLSA-style build provenance).
 on:
   workflow_dispatch:
+    inputs:
+      source_ref:
+        description: 'Source commit/ref; final mode requires refs/tags/v<version>'
+        required: true
+        type: string
+      version:
+        description: 'Must equal the checked-out gradle.properties version'
+        required: true
+        type: string
+      mode:
+        description: 'Trial accepts development snapshots; final attaches evidence to an existing release'
+        required: true
+        default: trial
+        type: choice
+        options: [trial, final]
 
-permissions:
-  contents: read
-  id-token: write
-  attestations: write
+permissions: {}
 
 jobs:
-  build-sign-attest:
+  build-scan:
+    outputs:
+      source_commit: ${{ steps.source.outputs.commit }}
     runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.source_ref }}
+          fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '17'
       - uses: gradle/actions/setup-gradle@v6.3.0
-
-      # Tests are covered by ci.yml; this workflow only assembles the
-      # publishable artifact set. shadowJar is listed explicitly because the
-      # shaded jar is the main core artifact (the plain jar keeps the
-      # `unshaded` classifier).
-      - name: Build module jars
-        run: ./gradlew build -x test :tiercache-core:shadowJar
-
-      # Publishable set: the seven library module jars (core shaded + unshaded)
-      # plus the TCK compliance-suite jar (`tests` classifier), excluding
-      # jmh/test-fixtures jars, the plain TCK jar, and the demo app.
-      - name: Stage artifacts
+      - name: Check source and version identity
+        id: source
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+          INTENDED_VERSION: ${{ inputs.version }}
+          EVIDENCE_MODE: ${{ inputs.mode }}
         run: |
-          set -euo pipefail
-          mkdir -p dist
-          cp tiercache-core/build/libs/tiercache-core-*.jar dist/
-          rm -f dist/*-jmh.jar dist/*-test-fixtures.jar
-          for module in tiercache-invalidation tiercache-transport-redis tiercache-spring-boot-starter tiercache-micrometer tiercache-kotlin tiercache-reactor tiercache-micronaut; do
-            cp "$module/build/libs/$module"-*.jar dist/
-          done
-          cp tiercache-tck/build/libs/tiercache-tck-*-tests.jar dist/
-          ls -l dist/
+          python3 scripts/release/evidence.py identity --ref "$SOURCE_REF" --version "$INTENDED_VERSION" --mode "$EVIDENCE_MODE"
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Evidence regression tests
+        run: python3 -m unittest discover -s scripts/release -p 'test_*.py' -v
+      - name: Build fresh publication inputs and resolved SBOMs
+        run: ./gradlew clean releaseEvidenceInputs --no-build-cache --max-workers=2
+      - name: Install checksum-pinned scanner
+        run: python3 scripts/release/install_trivy.py "$RUNNER_TEMP/trivy"
+      - name: Scan and enforce acceptance
+        run: python3 scripts/release/evidence.py scan --trivy "$RUNNER_TEMP/trivy/trivy" --output build/release-scan --exceptions scripts/release/exceptions.json
+      - name: Stage exact current-run evidence
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+          INTENDED_VERSION: ${{ inputs.version }}
+          EVIDENCE_MODE: ${{ inputs.mode }}
+        run: python3 scripts/release/evidence.py stage --scan build/release-scan --output dist --ref "$SOURCE_REF" --version "$INTENDED_VERSION" --mode "$EVIDENCE_MODE"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: candidate-inputs
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Keep scan diagnostics even on rejection
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: dependency-scan
+          path: |
+            build/release-inputs/
+            build/release-scan/*.json
+            build/release-scan/*.log
+            build/release-scan/*.txt
+            **/build/reports/cyclonedx/*-sbom.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Scan summary
+        if: always()
+        run: |
+          if [ -f build/release-scan/summary.txt ]; then cat build/release-scan/summary.txt >> "$GITHUB_STEP_SUMMARY"; fi
 
-      # SLSA-style build provenance as GitHub Artifact Attestations.
+  sign-attest:
+    needs: build-scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.build-scan.outputs.source_commit }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: candidate-inputs
+          path: dist
+      - run: python3 scripts/release/evidence.py verify dist
+      - name: Package the complete manifest-covered bundle
+        run: |
+          mkdir signed
+          tar -czf signed/tiercache-evidence.tar.gz -C dist .
+      - uses: sigstore/cosign-installer@v4.1.2
+      - name: Sign all evidence bytes as one bundle
+        run: timeout 300 cosign sign-blob --yes --bundle signed/tiercache-evidence.sigstore.json signed/tiercache-evidence.tar.gz
       - uses: actions/attest-build-provenance@v4
         with:
-          subject-path: 'dist/*.jar'
-
-      - uses: sigstore/cosign-installer@v4.1.2
-
-      # Keyless signing via the runner's OIDC identity. Cosign v3 requires
-      # --bundle: each jar gets a <jar>.sigstore.json bundle holding the
-      # signature, certificate, and transparency-log proof.
-      - name: Sign jars (cosign keyless)
-        run: |
-          set -euo pipefail
-          cd dist
-          for jar in *.jar; do
-            cosign sign-blob --yes --bundle "$jar.sigstore.json" "$jar"
-          done
-
+          subject-path: signed/tiercache-evidence.tar.gz
       - uses: actions/upload-artifact@v7
         with:
           name: release-candidate
-          path: dist/
+          path: signed/
+          if-no-files-found: error
           retention-days: 90
 
-      - name: Print verification commands
+  retain-with-release:
+    if: inputs.mode == 'final'
+    needs: sign-attest
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-candidate
+          path: signed
+      # Requires an existing release (draft is allowed); creates no release,
+      # changes no published artifact, and does not upload to Maven Central.
+      - name: Attach immutable evidence to the existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          INTENDED_VERSION: ${{ inputs.version }}
         run: |
-          cat <<EOF
-          Artifacts: download the 'release-candidate' artifact from this run (jars + .sigstore.json bundles).
-
-          Verify a jar's signature (keyless, bound to this workflow's OIDC identity):
-
-            cosign verify-blob \\
-              --bundle <jar>.sigstore.json \\
-              --certificate-identity-regexp '^https://github.com/${{ github.repository }}/\\.github/workflows/release-candidate\\.yml@.*' \\
-              --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \\
-              <jar>
-
-          Verify a jar's build provenance (GitHub Artifact Attestations):
-
-            gh attestation verify <jar> --repo ${{ github.repository }}
-          EOF
+          gh release view "v$INTENDED_VERSION"
+          gh release upload "v$INTENDED_VERSION" signed/tiercache-evidence.tar.gz signed/tiercache-evidence.sigstore.json

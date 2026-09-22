@@ -18,6 +18,9 @@ plugins {
     kotlin("jvm") version "2.2.21" apply false
 }
 
+group = "io.github.cramen"
+version = providers.gradleProperty("version").get()
+
 // Whole-repo aggregate SBOM, named like the module ones so CI can collect a
 // flat directory of *-sbom.json files.
 tasks.named<CyclonedxAggregateTask>("cyclonedxBom") {
@@ -41,8 +44,14 @@ subprojects {
     // shaded into the core jar, so it is part of the shipped artifact.
     apply(plugin = "org.cyclonedx.bom")
     tasks.named<CyclonedxDirectTask>("cyclonedxDirectBom") {
+        // Demo applications are not shipped Maven artifacts.
+        if (project.path.startsWith(":examples")) enabled = false
         projectType.set(Component.Type.LIBRARY)
-        includeConfigs.set(listOf("runtimeClasspath"))
+        includeConfigs.set(when (project.name) {
+            "tiercache-core" -> listOf("runtimeClasspath", "testFixturesRuntimeClasspath")
+            "tiercache-tck" -> listOf("runtimeClasspath", "testRuntimeClasspath")
+            else -> listOf("runtimeClasspath")
+        })
     }
     tasks.named<CyclonedxAggregateTask>("cyclonedxBom") {
         projectType.set(Component.Type.LIBRARY)
@@ -104,3 +113,5 @@ subprojects {
 tasks.register("stageCompatibilityArtifacts") {
     dependsOn(consumerModules.map { ":$it:publishAllPublicationsToCompatibilityRepository" })
 }
+
+apply(from = "gradle/release-evidence.gradle")
