@@ -15,6 +15,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /** JMX registration and state exposure. */
+@org.junit.jupiter.api.parallel.ResourceLock("tiercache-platform-inspection")
 class TiercacheInspectionTest {
 
     @Test

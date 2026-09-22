@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import java.util.Locale;
 import static org.junit.jupiter.api.Assertions.*;
 
+@org.junit.jupiter.api.parallel.ResourceLock("java.util.Locale.default")
 class PublicationMetricsTest {
     @Test void batchesHaveFixedAsciiLabelsEvenUnderTurkishLocale() {
         Locale previous=Locale.getDefault();Locale.setDefault(Locale.forLanguageTag("tr-TR"));

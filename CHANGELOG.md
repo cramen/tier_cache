@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- JMX inspection now owns only its successful registration and consumes that ownership once on close. Skipped/failed registrations and repeated close cannot remove another factory's or a foreign MBean; concurrent lifecycle calls are ordered without changing the fixed ObjectName. All enum-derived Micrometer labels now use Locale.ROOT, preserving JMX hit ratios and metric identities under Turkish or changing default locales. Restart affected processes; existing malformed time series are not renamed in place.
+
+
 - Invalidation publication now observes native Redis completion without delaying writes or replacing committed write results with publication errors. Compatible transport/listener defaults distinguish acknowledged, failed, legacy-unconfirmed and Streams-not-required outcomes. A bounded observer worker exports `tiercache.invalidation.publish` batches with rate-limited sanitized diagnostics; SENT remains the submission-attempt counter. Late completion cannot restart closed observers; see docs/observability.md.
 
 

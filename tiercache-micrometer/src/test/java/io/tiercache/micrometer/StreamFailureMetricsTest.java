@@ -4,6 +4,7 @@ import io.tiercache.spi.CacheMetricsListener.StreamResult;
 import org.junit.jupiter.api.Test;
 import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
+@org.junit.jupiter.api.parallel.ResourceLock("java.util.Locale.default")
 class StreamFailureMetricsTest {
     @Test void streamFailuresUseFixedLocaleIndependentLowCardinalityLabels() {
         Locale previous = Locale.getDefault(); var registry = new SimpleMeterRegistry();

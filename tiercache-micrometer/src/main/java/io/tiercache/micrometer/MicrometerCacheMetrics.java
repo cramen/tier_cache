@@ -88,7 +88,7 @@ public final class MicrometerCacheMetrics
     @Override
     public void onRequest(String cache, Outcome outcome) {
         counter(requestCounters, cache, "requests", "result",
-                outcome.name().toLowerCase()).increment();
+                outcome.name().toLowerCase(java.util.Locale.ROOT)).increment();
         if (outcome == Outcome.LOAD) {
             lastStoreNanos.put(cache, System.nanoTime());
         }
@@ -97,7 +97,7 @@ public final class MicrometerCacheMetrics
     @Override
     public void onLatency(String cache, Level level, long nanos) {
         latencyTimers.computeIfAbsent(cache + ":" + level, k -> Timer.builder("tiercache.latency")
-                        .tags("cache", cache, "level", level.name().toLowerCase())
+                        .tags("cache", cache, "level", level.name().toLowerCase(java.util.Locale.ROOT))
                         .register(registry))
                 .record(nanos, TimeUnit.NANOSECONDS);
     }
@@ -105,7 +105,7 @@ public final class MicrometerCacheMetrics
     @Override
     public void onInvalidation(String cache, Direction direction) {
         counter(invalidationCounters, cache, "invalidation", "direction",
-                direction.name().toLowerCase()).increment();
+                direction.name().toLowerCase(java.util.Locale.ROOT)).increment();
     }
 
     private final Map<String, Counter> publicationCounters = new ConcurrentHashMap<>();

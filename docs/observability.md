@@ -101,6 +101,39 @@ call `register()`, and `close()` to unregister. There is deliberately no
 top-N-keys operation: per-key counting would tax the hot path, so key-level
 inspection is refused by design.
 
+### Ownership with multiple factories
+
+The fixed name `io.tiercache:type=Inspection` exposes at most one inspection per
+JVM; it does not aggregate multiple factories. The first successful registration
+owns that name. Another inspection that finds it occupied is a no-op and cannot
+unregister the owner when it closes. Repeating register on the owner preserves
+ownership; repeating close cannot remove a later factory's registration.
+
+Register and close are ordered per inspection. An explicit register after close
+can establish a new ownership period if the name is free; a skipped factory does
+not automatically take over when the name becomes vacant. An absent name during
+cleanup is benign. Other unregister failures are logged and ownership is consumed,
+so cleanup is not retried against a potential replacement. Such failures may
+require operator cleanup of the fixed name.
+
+This protects registrations managed through TiercacheInspection and pre-existing
+foreign MBeans. JMX offers no atomic compare-and-unregister here: arbitrary external
+replacement of an owned MBean by management tools is outside this ownership guarantee.
+The ObjectName, attributes, operations and hit-ratio denominators are unchanged.
+
+### Locale-independent metric identifiers
+
+Enum-derived result, level and direction tags use Locale.ROOT, independently of
+the JVM default locale. For example, `l1_hit`, `l2_hit`, `miss` and `received` keep
+the same spelling under Turkish locale and after a locale change. Application cache
+names retain their original spelling and case. Dashboards and JMX continue to use
+the existing lowercase ASCII identifiers.
+
+Restart affected processes with the fix if they previously emitted locale-specific
+spellings. Already-created malformed meters are not renamed or deleted in place;
+old time series can remain in the monitoring backend until normal retention removes
+them. This does not add new meters or change their meaning.
+
 ## Grafana dashboard
 
 `docs/grafana/tiercache-dashboard.json` is a self-contained dashboard
