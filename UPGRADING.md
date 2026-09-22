@@ -7,6 +7,21 @@ target versions.
 
 For the full list of additions and fixes, see [CHANGELOG.md](CHANGELOG.md).
 
+## Unreleased: value-bound local freshness
+
+Degradation freshness now lives with the retained L1 entry instead of an
+independently expiring metadata map. Freshness and allowed stale serving no longer
+end early when a version fence expires or is evicted. Access refresh preserves
+the original retention floor and cannot reinsert an entry removed by Caffeine.
+
+Existing LocalCache methods and defaults remain compatible. Custom providers
+must preserve opaque StoredEntry holders. Only providers combining a positive
+`degradationStaleTtl` with `l1ExpireAfterAccess` need to implement the new default
+capability and atomic identity-replacement methods; otherwise engine-cache
+creation rejects that combination. Built-in Caffeine already supports it.
+Redis frames and remote timestamps are unchanged. The window remains off by
+default and does not heal writes performed while Redis was unavailable.
+
 ## Unreleased: lock-provider and factory shutdown
 
 Client-backed lock providers now close the dedicated connections they create;

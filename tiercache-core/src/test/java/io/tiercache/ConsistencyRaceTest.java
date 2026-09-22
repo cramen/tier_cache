@@ -54,6 +54,15 @@ class ConsistencyRaceTest {
         }
 
         @Override
+        public boolean supportsAtomicReplace() { return true; }
+
+        @Override
+        public boolean replaceIfSame(String key, StoredEntry<String> expected,
+                StoredEntry<String> replacement, Duration ttl) {
+            return delegate.replaceIfSame(key, expected, replacement, ttl);
+        }
+
+        @Override
         public void put(String key, StoredEntry<String> entry, Duration ttl) {
             delegate.put(key, entry, ttl);
         }

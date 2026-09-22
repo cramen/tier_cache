@@ -8,7 +8,11 @@ import java.time.Duration;
  * <p>Implementations must be thread-safe. TTLs are per entry: each
  * {@link #put} carries the effective TTL computed by the core (base TTL with
  * jitter already applied). Entries are opaque {@link StoredEntry} holders —
- * implementations must store null-markers like any other entry.
+ * implementations must store null-markers like any other entry and retain
+ * the exact opaque holder, including its immutable local freshness state.
+ * Reconstructing entries from only value/version loses that state. Combining
+ * degradation stale serving and access expiry requires atomic replacement;
+ * unsupported providers are rejected when that engine cache is created.
  *
  * <p>Note: a two-level cache is eventually consistent by design.
  * Implementations must not claim or attempt to provide strong consistency.
@@ -68,4 +72,16 @@ public interface LocalCache<K, V> {
      * @since 0.1.0
      */
     boolean setIfAbsent(K key, StoredEntry<V> entry, Duration ttl);
+    /** Whether this provider supports atomic identity-checked entry and TTL replacement. */
+    default boolean supportsAtomicReplace() { return false; }
+
+    /**
+     * Replaces value and TTL only while the exact expected holder is present and unexpired.
+     * Compare by reference identity, never value equality. Must not insert an absent key.
+     * Required only for degradation stale serving combined with expire-after-access.
+     */
+    default boolean replaceIfSame(K key, StoredEntry<V> expected, StoredEntry<V> replacement, Duration ttl) {
+        throw new UnsupportedOperationException("LocalCache does not support atomic replacement");
+    }
+
 }

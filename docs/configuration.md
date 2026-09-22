@@ -252,6 +252,23 @@ close the breaker. Fresh accesses with `l1-expire-after-access` configured
 slide freshness and the stale horizon without ever shortening the
 store-time retention floor; stale accesses never extend anything.
 
+The authoritative deadlines live in an immutable local copy of the value or
+null marker, using the same monotonic clock as Caffeine expiry. They are removed
+with that entry, not by a separate ten-minute metadata expiry or fencing-map
+size cap. Size eviction can still remove the entire entry. A fresh access uses
+`logical = now + access TTL`, `stale until = logical + window`, and
+`retention until = max(store-time retention floor, stale until)`. Retention
+beyond the stale cutoff does not authorize serving the value after that cutoff.
+
+For a custom `LocalCache`, preserve each opaque `StoredEntry` unchanged. Combining
+a positive degradation window with access expiry additionally requires
+`supportsAtomicReplace()` and `replaceIfSame(...)`: identity-checked replacement
+of value and TTL without reinserting a removed/expired entry. Caffeine implements
+this operation. An unsupported provider fails at cache creation with the cache
+name and required capability; other configurations remain compatible. These
+local deadlines are never serialized into Redis frames.
+
+
 Trade-offs to weigh before enabling: entries live longer in L1 (memory
 bounded by `window / L1 TTL x working set`, still capped by `l1-max-size`),
 and the knob changes nothing in normal mode — it only serves staleness

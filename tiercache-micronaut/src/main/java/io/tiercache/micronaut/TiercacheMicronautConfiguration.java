@@ -150,8 +150,13 @@ public class TiercacheMicronautConfiguration {
             BeanProvider<CacheMetricsListener> metrics,
             BeanProvider<LettuceLockProvider> lockProvider) {
         Map<String, TiercacheCacheProperties> overridesByName = overridesByName(caches);
-        TierCacheFactory.Builder builder = TierCacheFactory.builder()
-                .defaults(properties.getDefaults().toSettings(io.tiercache.CacheSettings.defaults()));
+        io.tiercache.CacheSettings defaults;
+        try {
+            defaults = properties.getDefaults().toSettings(io.tiercache.CacheSettings.defaults());
+        } catch (IllegalArgumentException e) {
+            throw new io.tiercache.CacheConfigurationException("Cache '<global defaults>': " + e.getMessage());
+        }
+        TierCacheFactory.Builder builder = TierCacheFactory.builder().defaults(defaults);
         overridesByName.forEach((name, props) -> builder.cache(name, props.toOverride()));
         if (properties.getAsyncExecutorThreads() > 0) {
             builder.asyncExecutorThreads(properties.getAsyncExecutorThreads());

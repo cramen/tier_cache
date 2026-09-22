@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- L1 freshness now shares the lifetime of its value or null marker, independent of bounded invalidation fencing. Fresh access preserves the store-time retention floor and atomically replaces the current holder, preventing resurrection after L1 eviction. Custom L1 providers need the compatible atomic-replacement extension only for degradation stale serving combined with access expiry. Spring and Micronaut preserve explicit zero overrides and identify invalid cache/default settings.
+
+
 - Lock providers now dispose their owned connections exactly once across lazy initialization and shutdown races, without closing borrowed clients/connections. Derived providers stay lazy. Factory close gates auxiliary work, retires discarded refresh claims and preserves usable synchronous views with local coalescing. Watchdog shutdown releases acquired tokens once before loader fallback; closed-provider outcomes retire breaker permits without recording a Redis result. See docs/resource-lifecycle.md.
 
 

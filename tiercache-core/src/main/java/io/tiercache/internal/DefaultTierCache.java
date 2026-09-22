@@ -110,6 +110,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
     private final long staleBoundaryMillis;            // l2TtlMillis + staleTtl
     private final double xfetchBetaNanos;
     private final TtlJitter jitter;
+    private final java.util.function.LongSupplier localClock;
     /** EMA of loader durations in nanoseconds; updated on every load. */
     private final AtomicLong loaderDurationEmaNanos = new AtomicLong(EMA_UNINITIALIZED);
     private final Map<K, LoadClaim<K, V>> inflight = new ConcurrentHashMap<>();
@@ -283,6 +284,25 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
             VersionGenerator versionGenerator, InvalidationHandler invalidation,
             CircuitBreaker breaker, CacheMetricsListener metrics, Executor revalidationExecutor,
             TtlJitter jitter, java.util.function.BooleanSupplier auxiliaryOpen) {
+        this(cacheName, l1, l2, settings, singleflightEnabled, lockProvider, watchdog,
+                versionGenerator, invalidation, breaker, metrics, revalidationExecutor, jitter,
+                auxiliaryOpen, System::nanoTime);
+    }
+
+    /** Internal clock seam for deterministic local-lifetime testing. */
+    public DefaultTierCache(String cacheName, LocalCache<K, V> l1, RemoteCache<K, V> l2,
+            CacheSettings settings, boolean singleflightEnabled,
+            DistributedLockProvider lockProvider, ScheduledExecutorService watchdog,
+            VersionGenerator versionGenerator, InvalidationHandler invalidation,
+            CircuitBreaker breaker, CacheMetricsListener metrics, Executor revalidationExecutor,
+            TtlJitter jitter, java.util.function.BooleanSupplier auxiliaryOpen,
+            java.util.function.LongSupplier localClock) {
+        this.localClock = localClock;
+        if (!settings.degradationStaleTtl().isZero() && settings.l1ExpireAfterAccess() != null
+                && !l1.supportsAtomicReplace()) {
+            throw new IllegalArgumentException("Cache '" + cacheName
+                    + "': degradationStaleTtl with l1ExpireAfterAccess requires LocalCache atomic replacement");
+        }
         this.auxiliaryOpen = auxiliaryOpen;
         this.cacheName = cacheName;
         this.l1 = l1;
@@ -312,7 +332,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
                     cacheName);
         }
         this.l1Metas = new L1BarrierMap<>(L1_META_MAX, L1_META_EXPIRY,
-                l1Generation::incrementAndGet);
+                l1Generation::incrementAndGet, localClock);
         this.l1Locks = new Object[L1_STRIPES];
         for (int i = 0; i < L1_STRIPES; i++) {
             l1Locks[i] = new Object();
@@ -738,12 +758,10 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
             // One atomic step: lift the barrier AND install the payload (its
             // own version always passes — equality is not staleness).
             Duration ttl = jitter.apply(settings.l1ExpireAfterWrite(), settings.jitterAmplitude());
-            long logicalDeadline = System.nanoTime() + ttl.toNanos();
-            l1.put(typedKey, StoredEntry.ofValue((V) value, eventVersion),
+            Version barrier = maxVersion(eventVersion, highestSeen);
+            l1.put(typedKey, localCopy(StoredEntry.ofValue((V) value, eventVersion), ttl, barrier),
                     degradationStaleEnabled ? ttl.plus(degradationStaleTtl) : ttl);
-            l1Metas.put(typedKey, new L1BarrierMap.L1Meta(
-                    maxVersion(eventVersion, highestSeen), logicalDeadline,
-                    logicalDeadline + degradationStaleTtl.toNanos()));
+            l1Metas.put(typedKey, barrier);
         }
     }
 
@@ -809,20 +827,31 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
             if (generationAtStart != l1Generation.get()) {
                 return false;
             }
-            Version highestSeen = meta != null ? meta.highestSeen() : null;
-            if (entry.version() != null && highestSeen != null
-                    && entry.version().compareTo(highestSeen) < 0) {
+            StoredEntry<V> current = l1.get(key);
+            Version highestSeen = maxVersion(meta != null ? meta.highestSeen() : null,
+                    current != null ? current.version() : null);
+            if (current != null && current.localFreshness() != null) {
+                highestSeen = maxVersion(highestSeen, current.localFreshness().highestSeen());
+            }
+            if (generationAtStart != l1Generation.get()) return false;
+            if (highestSeen != null && (entry.version() == null
+                    || entry.version().compareTo(highestSeen) < 0)) {
                 return false;
             }
-            // Freshness deadlines are stamped with the ACTUAL jittered TTL;
-            // physical retention additionally covers the degradation window.
-            long logicalDeadline = System.nanoTime() + ttl.toNanos();
-            long staleServeUntil = logicalDeadline + degradationStaleTtl.toNanos();
-            l1.put(key, entry, degradationStaleEnabled ? ttl.plus(degradationStaleTtl) : ttl);
-            l1Metas.put(key, new L1BarrierMap.L1Meta(
-                    maxVersion(entry.version(), highestSeen), logicalDeadline, staleServeUntil));
+            Version barrier = maxVersion(entry.version(), highestSeen);
+            l1.put(key, localCopy(entry, ttl, barrier),
+                    degradationStaleEnabled ? ttl.plus(degradationStaleTtl) : ttl);
+            l1Metas.put(key, barrier);
             return true;
         }
+    }
+
+    private StoredEntry<V> localCopy(StoredEntry<V> entry, Duration ttl, Version barrier) {
+        if (!degradationStaleEnabled) return entry;
+        long logical = localClock.getAsLong() + ttl.toNanos();
+        long retention = logical + degradationStaleTtl.toNanos();
+        return entry.withLocalFreshness(new StoredEntry.LocalFreshness(
+                logical, retention, retention, retention, barrier));
     }
 
     /**
@@ -1456,37 +1485,30 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         synchronized (l1LockFor(key)) {
             // Coherent snapshot under the lock: the entry is re-read here,
             // so a completed concurrent write can never be overwritten by a
-            // stale caller-side read. The barrier metadata belongs to the
-            // same commit, so value and metadata always describe each other.
+            // stale caller-side read. Its immutable local descriptor belongs
+            // to this exact holder, independently of fencing-map eviction.
             entry = l1.get(key);
-            L1BarrierMap.L1Meta meta = l1Metas.get(key);
-            if (entry == null) {
-                // The value was evicted or removed concurrently: never hand
-                // out a null entry (a FRESH classification would NPE the
-                // caller). The protective barrier metadata stays untouched;
-                // the caller continues to the normal L2/loader path.
-                return new FreshnessSnapshot<>(null, L1Freshness.EXPIRED);
-            }
-            if (meta == null || meta.logicalDeadlineNanos() == 0L) {
-                return new FreshnessSnapshot<>(entry, L1Freshness.EXPIRED);
-            }
-            long now = System.nanoTime();
-            if (now <= meta.logicalDeadlineNanos()) {
-                java.time.Duration accessTtl = settings.l1ExpireAfterAccess();
-                if (accessTtl != null && entry != null && l1Metas.get(key) == meta) {
-                    // Fresh access: slide freshness, the stale horizon AND
-                    // the physical retention — identity-checked, so a
-                    // concurrently replaced value keeps its own deadlines.
+            if (entry == null) return new FreshnessSnapshot<>(null, L1Freshness.EXPIRED);
+            StoredEntry.LocalFreshness meta = entry.localFreshness();
+            if (meta == null) return new FreshnessSnapshot<>(entry, L1Freshness.EXPIRED);
+            long now = localClock.getAsLong();
+            if (now - meta.logicalDeadlineNanos() < 0) {
+                Duration accessTtl = settings.l1ExpireAfterAccess();
+                if (accessTtl != null) {
                     long logical = now + accessTtl.toNanos();
-                    l1Metas.put(key, new L1BarrierMap.L1Meta(meta.highestSeen(), logical,
-                            logical + degradationStaleTtl.toNanos()));
-                    l1.put(key, entry, accessTtl.plus(degradationStaleTtl));
+                    long staleUntil = logical + degradationStaleTtl.toNanos();
+                    long retention = now + Math.max(meta.storeRetentionFloorNanos() - now, staleUntil - now);
+                    StoredEntry<V> refreshed = entry.withLocalFreshness(new StoredEntry.LocalFreshness(
+                            logical, staleUntil, meta.storeRetentionFloorNanos(), retention, meta.highestSeen()));
+                    if (!l1.replaceIfSame(key, entry, refreshed, Duration.ofNanos(retention - now))) {
+                        return new FreshnessSnapshot<>(null, L1Freshness.EXPIRED);
+                    }
+                    entry = refreshed;
                 }
                 return new FreshnessSnapshot<>(entry, L1Freshness.FRESH);
             }
-            return new FreshnessSnapshot<>(entry,
-                    now <= meta.staleServeUntilNanos() ? L1Freshness.STALE_ALLOWED
-                            : L1Freshness.EXPIRED);
+            return new FreshnessSnapshot<>(entry, now - meta.staleServeUntilNanos() < 0
+                    ? L1Freshness.STALE_ALLOWED : L1Freshness.EXPIRED);
         }
     }
 

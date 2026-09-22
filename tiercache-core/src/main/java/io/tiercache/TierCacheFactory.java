@@ -89,7 +89,13 @@ public final class TierCacheFactory implements AutoCloseable {
         this.singleflightEnabled = builder.singleflightEnabled;
         this.coordinationEnabled = builder.coordinationEnabled;
         this.caches = new LinkedHashMap<>();
-        builder.overrides.forEach((name, override) -> caches.put(name, override.resolve(defaults)));
+        builder.overrides.forEach((name, override) -> {
+            try {
+                caches.put(name, override.resolve(defaults));
+            } catch (IllegalArgumentException e) {
+                throw new CacheConfigurationException("Cache '" + name + "': " + e.getMessage());
+            }
+        });
 
         // Fail-fast validation of every configured cache.
         CacheConfigValidator.validate("<global defaults>", defaults);

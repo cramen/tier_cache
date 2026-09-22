@@ -18,7 +18,9 @@ import io.tiercache.Version;
  * the write timestamp (millis since epoch) of the write that produced them,
  * so readers can classify freshness without extra round trips. Entries from
  * legacy frames (or from stores that do not track write time) have no write
- * timestamp.
+ * timestamp. Local L1 copies may additionally carry immutable monotonic
+ * freshness deadlines. They belong to that exact holder and are never part
+ * of the Redis value frame. Equality remains object identity.
  *
  * <p><b>Internal — not part of the supported API.</b> Exchanged between the
  * cache levels and the engine.
@@ -32,16 +34,36 @@ public final class StoredEntry<V> {
 
     private static final StoredEntry<?> NULL_MARKER = new StoredEntry<>(null, true, null, NO_WRITE_TIMESTAMP);
 
+    /** Immutable engine-local deadlines; never encoded into Redis frames. */
+    public record LocalFreshness(long logicalDeadlineNanos, long staleServeUntilNanos,
+            long storeRetentionFloorNanos, long retentionUntilNanos, Version highestSeen) { }
+
+    private final LocalFreshness localFreshness;
     private final V value;
     private final boolean nullMarker;
     private final Version version;
     private final long writeTimestampMillis;
 
     private StoredEntry(V value, boolean nullMarker, Version version, long writeTimestampMillis) {
+        this(value, nullMarker, version, writeTimestampMillis, null);
+    }
+
+    private StoredEntry(V value, boolean nullMarker, Version version, long writeTimestampMillis,
+            LocalFreshness localFreshness) {
+        this.localFreshness = localFreshness;
         this.value = value;
         this.nullMarker = nullMarker;
         this.version = version;
         this.writeTimestampMillis = writeTimestampMillis;
+    }
+
+    /** Returns engine-local state, or null for undecorated/remote entries. */
+    public LocalFreshness localFreshness() { return localFreshness; }
+
+    /** Creates an independent local copy, including for the shared null marker. */
+    public StoredEntry<V> withLocalFreshness(LocalFreshness freshness) {
+        return new StoredEntry<>(value, nullMarker, version, writeTimestampMillis,
+                java.util.Objects.requireNonNull(freshness));
     }
 
     /**
