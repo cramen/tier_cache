@@ -15,7 +15,13 @@ import java.util.UUID;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.locks.ReentrantLock;
+import java.util.HashSet;
+import java.util.Set;
+import io.tiercache.internal.LockProviderClosedException;
 
 /**
  * {@link DistributedLockProvider} over Redis/Valkey via Lettuce, used for
@@ -78,8 +84,10 @@ public final class LettuceLockProvider implements DistributedLockProvider, AutoC
     private final RedisClient client;                // non-null ⇒ connect lazily
     private final StatefulRedisConnection<String, String> providedConnection;
     private volatile RedisCommands<String, String> commands;
-    private final AtomicInteger pendingCompensations = new AtomicInteger();
-    private final Object schedulerLock = new Object();
+    private final ReentrantLock lifecycle = new ReentrantLock();
+    private final Set<Compensation> compensations = new HashSet<>();
+    private StatefulRedisConnection<String, String> ownedConnection;
+    private CompletableFuture<RedisCommands<String, String>> initializing;
     private volatile ScheduledExecutorService compensationScheduler;
     private volatile boolean closed;
 
@@ -110,175 +118,189 @@ public final class LettuceLockProvider implements DistributedLockProvider, AutoC
     }
 
     private RedisCommands<String, String> commands() {
-        RedisCommands<String, String> resolved = commands;
-        if (resolved == null) {
-            synchronized (schedulerLock) {
-                resolved = commands;
-                if (resolved == null) {
-                    resolved = (providedConnection != null ? providedConnection
-                            : client.connect()).sync();
-                    commands = resolved;
-                }
+        CompletableFuture<RedisCommands<String, String>> attempt;
+        boolean creator = false;
+        lifecycle.lock();
+        try {
+            if (closed) throw new LockProviderClosedException();
+            if (commands != null) return commands;
+            attempt = initializing;
+            if (attempt == null) {
+                initializing = attempt = new CompletableFuture<>();
+                creator = true;
+            }
+        } finally { lifecycle.unlock(); }
+        if (creator) {
+            StatefulRedisConnection<String, String> created = null;
+            try {
+                var connection = providedConnection;
+                if (connection == null) connection = created = client.connect();
+                var resolved = connection.sync();
+                boolean accepted;
+                lifecycle.lock();
+                try {
+                    accepted = !closed && initializing == attempt;
+                    if (accepted) {
+                        commands = resolved;
+                        ownedConnection = created;
+                        created = null; // ownership transferred to close
+                        initializing = null;
+                    }
+                } finally { lifecycle.unlock(); }
+                if (accepted) attempt.complete(resolved);
+                else attempt.completeExceptionally(new LockProviderClosedException());
+            } catch (RuntimeException | Error e) {
+                lifecycle.lock();
+                try { if (initializing == attempt) initializing = null; }
+                finally { lifecycle.unlock(); }
+                attempt.completeExceptionally(e);
+            } finally {
+                if (created != null) closeConnection(created);
             }
         }
-        return resolved;
-    }
-
-    @Override
-    public DistributedLock tryLock(String name, Duration lease) {
-        String token = UUID.randomUUID().toString();
-        String key = RedisKeyspace.lock(name);
-        try {
-            String result = commands().set(key, token, SetArgs.Builder.px(lease).nx());
-            return "OK".equals(result) ? new LettuceLock(key, token) : null;
-        } catch (RuntimeException e) {
-            // Ambiguous outcome: the command may have executed server-side.
-            scheduleCompensation(key, token, lease);
+        try { return attempt.join(); }
+        catch (CompletionException e) {
+            if (e.getCause() instanceof RuntimeException runtime) throw runtime;
+            if (e.getCause() instanceof Error error) throw error;
             throw e;
         }
     }
 
-    /**
-     * Schedules a best-effort compensating release for an ambiguous
-     * acquire: retried until DELETE=1 (terminal) or the window expires —
-     * never stopped by a zero delete. Overflow is dropped with a warning;
-     * a task that never gets an attempt within the window expires into the
-     * documented residual (an orphan self-expiring within one lease).
-     */
-    private void scheduleCompensation(String key, String token, Duration lease) {
-        if (closed) {
-            // No machinery is created and no retry is accepted after close;
-            // the caller still sees the original acquire exception.
-            return;
-        }
-        long windowMillis = Math.max(2 * lease.toMillis(), COMPENSATION_MIN_WINDOW.toMillis());
-        long deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(windowMillis);
-        if (pendingCompensations.incrementAndGet() > COMPENSATION_PENDING_CAP) {
-            pendingCompensations.decrementAndGet();
-            log.warn("Too many pending lock compensations; dropping cleanup for '{}'. "
-                    + "If the acquire executed, the orphan expires within its lease.", key);
-            return;
-        }
+    @Override
+    public DistributedLock tryLock(String name, Duration lease) {
+        var captured = commands();
+        String token = UUID.randomUUID().toString();
+        String key = RedisKeyspace.lock(name);
+        if (closed) throw new LockProviderClosedException(); // dispatch admission
+        String result;
         try {
-            scheduleCompensationAttempt(key, token, deadlineNanos);
-        } catch (java.util.concurrent.RejectedExecutionException e) {
-            // The scheduler shut down between the checks and the schedule:
-            // best-effort must never replace the original acquire failure.
-            pendingCompensations.decrementAndGet();
-            log.debug("Lock compensation scheduling raced provider close for '{}'", key, e);
-        }
-    }
-
-    private void scheduleCompensationAttempt(String key, String token, long deadlineNanos) {
-        try {
-            compensationScheduler().schedule(() -> attemptCompensation(key, token, deadlineNanos),
-                    COMPENSATION_RETRY_MILLIS, TimeUnit.MILLISECONDS);
-        } catch (java.util.concurrent.RejectedExecutionException e) {
-            // Closed between the checks and the (re)schedule: release the
-            // bookkeeping; best-effort stays silent.
-            pendingCompensations.decrementAndGet();
-            log.debug("Lock compensation scheduling raced provider close for '{}'", key, e);
-        }
-    }
-
-    private void attemptCompensation(String key, String token, long deadlineNanos) {
-        if (closed) {
-            pendingCompensations.decrementAndGet();
-            return;
-        }
-        Long deleted = null;
-        try {
-            deleted = commands().eval(RELEASE_SCRIPT, ScriptOutputType.INTEGER,
-                    new String[]{key}, token);
+            result = captured.set(key, token, SetArgs.Builder.px(lease).nx());
         } catch (RuntimeException e) {
-            // Server still unreachable: retry within the window.
+            scheduleCompensation(captured, key, token, lease);
+            throw e;
         }
-        if (deleted != null && deleted == 1L) {
-            pendingCompensations.decrementAndGet();
-            return; // terminal: our lock existed and was removed
-        }
-        if (System.nanoTime() >= deadlineNanos) {
-            pendingCompensations.decrementAndGet();
-            log.warn("Lock compensation window expired for '{}'. If the acquire executed "
-                    + "afterwards, the orphan expires within its lease.", key);
-            return;
-        }
-        scheduleCompensationAttempt(key, token, deadlineNanos);
-    }
-
-    private ScheduledExecutorService compensationScheduler() {
-        ScheduledExecutorService scheduler = compensationScheduler;
-        if (scheduler == null) {
-            synchronized (schedulerLock) {
-                scheduler = compensationScheduler;
-                if (scheduler == null && !closed) {
-                    scheduler = Executors.newScheduledThreadPool(COMPENSATION_THREADS, runnable -> {
-                        Thread thread = new Thread(runnable, "tiercache-lock-compensation");
-                        thread.setDaemon(true);
-                        return thread;
-                    });
-                    compensationScheduler = scheduler;
-                }
+        if (closed) {
+            if ("OK".equals(result)) {
+                try { captured.eval(RELEASE_SCRIPT, ScriptOutputType.INTEGER, new String[]{key}, token); }
+                catch (RuntimeException ignored) { /* Lease bounds failed shutdown cleanup. */ }
             }
+            throw new LockProviderClosedException();
         }
-        if (scheduler == null) {
-            throw new java.util.concurrent.RejectedExecutionException(
-                    "lock provider is closed");
-        }
-        return scheduler;
+        return "OK".equals(result) ? new LettuceLock(key, token, captured) : null;
     }
 
-    /**
-     * Stops the compensation machinery. Pending compensations are
-     * discarded; the scheduler is shut down. The Redis connection is NOT
-     * closed (the caller keeps its ownership).
-     *
-     * @since 1.4.0
-     */
+    private void scheduleCompensation(RedisCommands<String, String> captured,
+            String key, String token, Duration lease) {
+        long window = Math.max(2 * lease.toMillis(), COMPENSATION_MIN_WINDOW.toMillis());
+        var task = new Compensation(captured, key, token,
+                System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(window));
+        lifecycle.lock();
+        try {
+            if (closed) return;
+            if (compensations.size() >= COMPENSATION_PENDING_CAP) {
+                log.warn("Too many pending lock compensations; cleanup falls back to lease expiry");
+                return;
+            }
+            if (compensationScheduler == null) {
+                compensationScheduler = Executors.newScheduledThreadPool(COMPENSATION_THREADS, r -> {
+                    Thread t = new Thread(r, "tiercache-lock-compensation"); t.setDaemon(true); return t;
+                });
+            }
+            compensations.add(task);
+            task.scheduleLocked();
+        } finally { lifecycle.unlock(); }
+    }
+
+    private final class Compensation implements Runnable {
+        final RedisCommands<String, String> captured;
+        final String key, token;
+        final long deadline;
+        Compensation(RedisCommands<String, String> captured, String key, String token, long deadline) {
+            this.captured = captured; this.key = key; this.token = token; this.deadline = deadline;
+        }
+        void scheduleLocked() {
+            if (closed || !compensations.contains(this)) { compensations.remove(this); return; }
+            try { compensationScheduler.schedule(this, COMPENSATION_RETRY_MILLIS, TimeUnit.MILLISECONDS); }
+            catch (RejectedExecutionException e) { compensations.remove(this); }
+        }
+        @Override public void run() {
+            lifecycle.lock();
+            try {
+                if (closed || !compensations.contains(this)) return;
+                if (System.nanoTime() >= deadline) { compensations.remove(this); return; }
+            } finally { lifecycle.unlock(); }
+            Long deleted = null;
+            try { deleted = captured.eval(RELEASE_SCRIPT, ScriptOutputType.INTEGER, new String[]{key}, token); }
+            catch (RuntimeException ignored) { /* Retry ambiguous cleanup within the window. */ }
+            lifecycle.lock();
+            try {
+                if (closed || Long.valueOf(1).equals(deleted) || System.nanoTime() >= deadline) {
+                    compensations.remove(this);
+                } else scheduleLocked();
+            } finally { lifecycle.unlock(); }
+        }
+    }
+
+    /** Stops auxiliary work and closes only the connection created by this provider. */
     @Override
     public void close() {
         ScheduledExecutorService scheduler;
-        // The closed transition and the scheduler lookup happen under the
-        // same lifecycle lock as creation/publication: no scheduler can be
-        // published after a completed close.
-        synchronized (schedulerLock) {
+        StatefulRedisConnection<String, String> connection;
+        CompletableFuture<RedisCommands<String, String>> attempt;
+        lifecycle.lock();
+        try {
+            if (closed) return;
             closed = true;
             scheduler = compensationScheduler;
-        }
-        if (scheduler != null) {
-            scheduler.shutdownNow();
-        }
+            connection = ownedConnection;
+            ownedConnection = null;
+            commands = null;
+            attempt = initializing;
+            initializing = null;
+            compensations.clear();
+        } finally { lifecycle.unlock(); }
+        if (attempt != null) attempt.completeExceptionally(new LockProviderClosedException());
+        if (scheduler != null) scheduler.shutdownNow();
+        if (connection != null) closeConnection(connection);
+    }
+
+    private static void closeConnection(StatefulRedisConnection<String, String> connection) {
+        try { connection.close(); }
+        catch (RuntimeException e) { log.warn("Owned lock connection close failed ({})", e.getClass().getSimpleName()); }
     }
 
     /** Pending compensations (test/diagnostics seam). */
     int pendingCompensations() {
-        return pendingCompensations.get();
+        lifecycle.lock();
+        try { return compensations.size(); }
+        finally { lifecycle.unlock(); }
     }
 
-    /** True after {@link #close()} (test/diagnostics seam). */
-    boolean isClosed() {
-        return closed;
-    }
+    boolean isClosed() { return closed; }
 
     private final class LettuceLock implements DistributedLock {
         private final String fullName;
         private final String token;
 
-        LettuceLock(String fullName, String token) {
+        private final RedisCommands<String, String> captured;
+
+        LettuceLock(String fullName, String token, RedisCommands<String, String> captured) {
+            this.captured = captured;
             this.fullName = fullName;
             this.token = token;
         }
 
         @Override
         public boolean extend(Duration lease) {
-            Long extended = commands().eval(EXTEND_SCRIPT, ScriptOutputType.INTEGER,
+            if (closed) return false;
+            Long extended = captured.eval(EXTEND_SCRIPT, ScriptOutputType.INTEGER,
                     new String[]{fullName}, token, String.valueOf(lease.toMillis()));
             return extended != null && extended == 1L;
         }
 
         @Override
         public void release() {
-            commands().eval(RELEASE_SCRIPT, ScriptOutputType.INTEGER,
+            captured.eval(RELEASE_SCRIPT, ScriptOutputType.INTEGER,
                     new String[]{fullName}, token);
         }
     }

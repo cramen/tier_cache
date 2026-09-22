@@ -97,6 +97,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
     private final InvalidationHandler invalidation;    // null = single-node
     private final CircuitBreaker breaker;              // null = unguarded L2 (opt-out)
     private final CacheMetricsListener metrics;
+    private final java.util.function.BooleanSupplier auxiliaryOpen;
     private final Executor revalidationExecutor;       // null = no async revalidation
     private final Duration staleTtl;
     private final boolean staleWindowEnabled;
@@ -271,6 +272,18 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
             VersionGenerator versionGenerator, InvalidationHandler invalidation,
             CircuitBreaker breaker, CacheMetricsListener metrics, Executor revalidationExecutor,
             TtlJitter jitter) {
+        this(cacheName, l1, l2, settings, singleflightEnabled, lockProvider, watchdog,
+                versionGenerator, invalidation, breaker, metrics, revalidationExecutor, jitter, () -> true);
+    }
+
+    /** Internal factory wiring with an auxiliary admission gate. */
+    public DefaultTierCache(String cacheName, LocalCache<K, V> l1, RemoteCache<K, V> l2,
+            CacheSettings settings, boolean singleflightEnabled,
+            DistributedLockProvider lockProvider, ScheduledExecutorService watchdog,
+            VersionGenerator versionGenerator, InvalidationHandler invalidation,
+            CircuitBreaker breaker, CacheMetricsListener metrics, Executor revalidationExecutor,
+            TtlJitter jitter, java.util.function.BooleanSupplier auxiliaryOpen) {
+        this.auxiliaryOpen = auxiliaryOpen;
         this.cacheName = cacheName;
         this.l1 = l1;
         this.l2 = l2;
@@ -879,14 +892,14 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
     }
 
     private void publish(Object key, Version version, InvalidationMessage.Type type) {
-        if (invalidation != null && version != null) {
+        if (auxiliaryOpen.getAsBoolean() && invalidation != null && version != null) {
             invalidation.onLocalWrite(cacheName, key, version, type);
         }
     }
 
     /** Publish for a stored entry: UPDATE (with payload) in update mode, else INVALIDATE. */
     private void publishStore(K key, StoredEntry<V> entry, Version version) {
-        if (invalidation == null || version == null) {
+        if (!auxiliaryOpen.getAsBoolean() || invalidation == null || version == null) {
             return;
         }
         if (settings.invalidationMode() == InvalidationMode.UPDATE && !entry.isNullMarker()) {
@@ -961,7 +974,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
      */
     private void triggerRevalidation(K key, Function<? super K, ? extends V> loader,
             long servedWriteTimestamp) {
-        if (revalidationExecutor == null) {
+        if (!auxiliaryOpen.getAsBoolean() || revalidationExecutor == null) {
             return; // legacy wiring: stale keeps serving without revalidation
         }
         LoadClaim<K, V> claim = new LoadClaim<>(null);
@@ -970,8 +983,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         }
         try {
             metrics.onRevalidationTriggered(cacheName);
-            revalidationExecutor.execute(
-                    () -> runRevalidation(key, loader, servedWriteTimestamp, claim));
+            revalidationExecutor.execute(new RevalidationTask(key, loader, servedWriteTimestamp, claim));
         } catch (RuntimeException e) {
             // Executor rejected (saturated or shut down): complete the claim
             // first so waiters already joined on it fail fast instead of
@@ -982,6 +994,30 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
             log.warn("Revalidation for key '{}' in cache '{}' could not be submitted "
                     + "(executor saturated or shut down); the stale entry keeps serving "
                     + "and a later read will retry.", key, cacheName, e);
+        }
+    }
+
+    /** A queued task must retire its claim when shutdown discards it. */
+    public interface DiscardableTask extends Runnable { void discard(); }
+
+    private final class RevalidationTask implements DiscardableTask {
+        private final K key;
+        private final Function<? super K, ? extends V> loader;
+        private final long timestamp;
+        private final LoadClaim<K, V> claim;
+        private final java.util.concurrent.atomic.AtomicBoolean claimed = new java.util.concurrent.atomic.AtomicBoolean();
+        RevalidationTask(K key, Function<? super K, ? extends V> loader, long timestamp, LoadClaim<K, V> claim) {
+            this.key = key; this.loader = loader; this.timestamp = timestamp; this.claim = claim;
+        }
+        @Override public void run() {
+            if (!auxiliaryOpen.getAsBoolean()) { discard(); return; }
+            if (claimed.compareAndSet(false, true)) runRevalidation(key, loader, timestamp, claim);
+        }
+        @Override public void discard() {
+            if (claimed.compareAndSet(false, true)) {
+                inflight.remove(key, claim);
+                claim.result.complete(LoadClaim.Outcome.skippedRefresh());
+            }
         }
     }
 
@@ -1024,16 +1060,18 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
     private LoadClaim.Outcome<V> revalidate(K key, Function<? super K, ? extends V> loader,
             long servedWriteTimestamp) {
         long g0 = l1Generation.get();
-        if (lockProvider == null || watchdog == null || !l2Available()) {
+        if (!auxiliaryOpen.getAsBoolean() || lockProvider == null || watchdog == null || !l2Available()) {
             // No coordination possible: the in-flight claim already bounds
             // this to one load per key per instance.
             return LoadClaim.Outcome.result(loadAndStore(key, loader));
         }
-        DistributedLock lock = tryLockGuarded(cacheName + ":" + key);
+        DistributedLock lock;
+        try { lock = tryLockGuarded(cacheName + ":" + key); }
+        catch (LockProviderClosedException e) { return LoadClaim.Outcome.result(loadAndStore(key, loader)); }
         if (lock == null) {
             return LoadClaim.Outcome.skippedRefresh(); // no source absence was observed
         }
-        try {
+        try (LockScope scope = new LockScope(lock, key)) {
             StoredEntry<V> current = l2Get(key);
             if (current != null && current.hasWriteTimestamp()
                     && current.writeTimestampMillis() > servedWriteTimestamp) {
@@ -1041,9 +1079,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
                 warmL1(key, current, g0);
                 return LoadClaim.Outcome.result(current);
             }
-            return LoadClaim.Outcome.result(loadWithWatchdog(key, loader, lock));
-        } finally {
-            releaseGuarded(lock, key);
+            return LoadClaim.Outcome.result(loadWithWatchdog(key, loader, scope));
         }
     }
 
@@ -1074,7 +1110,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
 
     private StoredEntry<V> loadPath(K key, Function<? super K, ? extends V> loader,
             long overallDeadline) {
-        if (lockProvider == null || watchdog == null || !l2Available()) {
+        if (!auxiliaryOpen.getAsBoolean() || lockProvider == null || watchdog == null || !l2Available()) {
             // No coordination possible (or L2 down): per-instance load.
             return loadAndStore(key, loader);
         }
@@ -1092,7 +1128,9 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
                         + "winner failures).", key, cacheName);
                 return loadAndStore(key, loader);
             }
-            DistributedLock lock = tryLockGuarded(lockName);
+            DistributedLock lock;
+            try { lock = tryLockGuarded(lockName); }
+            catch (LockProviderClosedException e) { return loadAndStore(key, loader); }
             if (!l2Available()) {
                 // L2 failed between the availability check and lock
                 // acquisition: fall back to the per-instance load — after
@@ -1104,16 +1142,14 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
                 return loadAndStore(key, loader);
             }
             if (lock != null) {
-                try {
+                try (LockScope scope = new LockScope(lock, key)) {
                     // Mandatory double-check: the value may have
                     // appeared while we were acquiring the lock.
                     StoredEntry<V> entry = readThrough(key, g0);
                     if (entry != null) {
                         return entry;
                     }
-                    return loadWithWatchdog(key, loader, lock);
-                } finally {
-                    releaseGuarded(lock, key);
+                    return loadWithWatchdog(key, loader, scope);
                 }
             }
             long waitDeadline = Math.min(overallDeadline,
@@ -1128,6 +1164,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
 
     /** Lock acquisition through the breaker: fast-fail when open. */
     private DistributedLock tryLockGuarded(String lockName) {
+        if (!auxiliaryOpen.getAsBoolean()) throw new LockProviderClosedException();
         if (breaker != null && breaker.isOpen()) {
             return null;
         }
@@ -1159,17 +1196,36 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         return entry;
     }
 
-    private StoredEntry<V> loadWithWatchdog(K key, Function<? super K, ? extends V> loader,
-            DistributedLock lock) {
-        long periodMillis = LOCK_LEASE.toMillis() / 3;
-        ScheduledFuture<?> extension = watchdog.scheduleAtFixedRate(
-                () -> lock.extend(LOCK_LEASE),
-                periodMillis, periodMillis, TimeUnit.MILLISECONDS);
-        try {
-            return loadAndStore(key, loader);
-        } finally {
-            extension.cancel(false);
+    private final class LockScope implements AutoCloseable {
+        final DistributedLock lock;
+        final K key;
+        ScheduledFuture<?> extension;
+        boolean retired;
+        LockScope(DistributedLock lock, K key) { this.lock = lock; this.key = key; }
+        @Override public void close() {
+            if (retired) return;
+            retired = true;
+            if (extension != null) extension.cancel(false);
+            releaseGuarded(lock, key);
         }
+    }
+
+    private StoredEntry<V> loadWithWatchdog(K key, Function<? super K, ? extends V> loader,
+            LockScope scope) {
+        if (!auxiliaryOpen.getAsBoolean()) {
+            scope.close();
+            return loadAndStore(key, loader);
+        }
+        long periodMillis = LOCK_LEASE.toMillis() / 3;
+        try {
+            scope.extension = watchdog.scheduleAtFixedRate(
+                    () -> { if (auxiliaryOpen.getAsBoolean()) scope.lock.extend(LOCK_LEASE); },
+                    periodMillis, periodMillis, TimeUnit.MILLISECONDS);
+        } catch (java.util.concurrent.RejectedExecutionException e) {
+            scope.close();
+            if (auxiliaryOpen.getAsBoolean() && !watchdog.isShutdown()) throw e;
+        }
+        return loadAndStore(key, loader);
     }
 
     /** Bounded wait for the winner's value in L2. Null on timeout. */

@@ -225,7 +225,7 @@ public final class TierCacheFactory implements AutoCloseable {
             DefaultTierCache<K, V> cache = new DefaultTierCache<>(n, l1,
                     (RemoteCache<K, V>) l2For(n), settings, singleflightEnabled,
                     coordinationEnabled ? lockProvider : null, watchdog, versionGenerator, invalidation,
-                    breaker, metricsListener, revalidationExecutor, jitter);
+                    breaker, metricsListener, revalidationExecutor, jitter, () -> !closed);
             if (invalidation != null && !closed) {
                 invalidation.registerTarget(n, cache);
             }
@@ -330,9 +330,11 @@ public final class TierCacheFactory implements AutoCloseable {
      * through {@link #asyncCache(String)} are failed with
      * {@link java.util.concurrent.CancellationException}, the revalidation
      * executor and the watchdog scheduler are stopped and the invalidation
-     * engine is closed. Caches already obtained remain usable but lose
-     * lease extension for in-flight coordination, and async operations
-     * submitted afterwards are rejected.
+     * engine is closed. Already-obtained synchronous caches remain usable
+     * while their supplied L2 is usable, with local coalescing but without
+     * coordination, renewal, refresh, publication or recovery. Continued
+     * cluster coherence is not promised. Async operations submitted afterwards
+     * are rejected. Caller-supplied resources retain caller ownership.
      *
      * @since 0.1.0
      */
@@ -340,6 +342,7 @@ public final class TierCacheFactory implements AutoCloseable {
     public void close() {
         java.util.List<AsyncTierCache<?, ?>> views;
         synchronized (factoryLifecycleLock) {
+            if (closed) return;
             closed = true;
             views = new java.util.ArrayList<>(liveAsyncCaches.values());
         }
@@ -348,7 +351,9 @@ public final class TierCacheFactory implements AutoCloseable {
         // user callbacks.
         views.forEach(view ->
                 ((io.tiercache.internal.DefaultAsyncTierCache<?, ?>) view).closeOutstanding());
-        revalidationExecutor.shutdownNow();
+        for (Runnable task : revalidationExecutor.shutdownNow()) {
+            if (task instanceof DefaultTierCache.DiscardableTask discarded) discarded.discard();
+        }
         asyncExecutor.shutdownNow();
         if (watchdog != null) {
             watchdog.shutdownNow();

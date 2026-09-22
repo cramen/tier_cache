@@ -41,6 +41,9 @@ public final class BreakerLockProvider implements DistributedLockProvider, AutoC
             DistributedLock lock = delegate.tryLock(name, lease);
             permit.success();
             return lock;
+        } catch (LockProviderClosedException e) {
+            permit.cancel();
+            throw e;
         } catch (RuntimeException e) {
             permit.failure();
             return null;

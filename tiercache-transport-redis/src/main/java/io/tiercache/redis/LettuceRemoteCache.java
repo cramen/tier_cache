@@ -424,7 +424,7 @@ public final class LettuceRemoteCache<K, V> implements RemoteCache<K, V>, LockPr
     @Override
     public DistributedLockProvider lockProvider() {
         // Shares the client; the provider owns its String-codec connection.
-        return new LettuceLockProvider(client.connect());
+        return new LettuceLockProvider(client);
     }
 
     /** The connection used by this transport (for journal/wiring sharing). */

@@ -147,4 +147,32 @@ class LettuceLockProviderTest {
         pool.shutdown();
         assertEquals(1, wins.get());
     }
+    @Test
+    void derivedProvidersAreLazyIndependentAndOwnedByTheirFactories() throws Exception {
+        try (var remote = LettuceRemoteCache.<String,String>builder("redis://unused").client(client).build()) {
+            var a = io.tiercache.TierCacheFactory.builder().remoteCache(remote).build();
+            var b = io.tiercache.TierCacheFactory.builder().remoteCache(remote).build();
+            var field = io.tiercache.TierCacheFactory.class.getDeclaredField("lockProvider"); field.setAccessible(true);
+            var wrapper = io.tiercache.internal.BreakerLockProvider.class.getDeclaredField("delegate"); wrapper.setAccessible(true);
+            var pa = (LettuceLockProvider) wrapper.get(field.get(a));
+            var pb = (LettuceLockProvider) wrapper.get(field.get(b));
+            var connection = LettuceLockProvider.class.getDeclaredField("ownedConnection"); connection.setAccessible(true);
+            assertNull(connection.get(pa)); assertNull(connection.get(pb));
+            try {
+                pa.tryLock("owned-a",Duration.ofSeconds(10)).release(); pb.tryLock("owned-b",Duration.ofSeconds(10)).release();
+                var ca=(io.lettuce.core.api.StatefulRedisConnection<?,?>)connection.get(pa);
+                var cb=(io.lettuce.core.api.StatefulRedisConnection<?,?>)connection.get(pb);
+                a.close(); a.close(); assertFalse(ca.isOpen()); assertTrue(cb.isOpen());
+                pb.tryLock("still-live",Duration.ofSeconds(10)).release();
+                remote.put("alive",io.tiercache.spi.StoredEntry.ofValue("v"),Duration.ofMinutes(1));
+                assertEquals("v",remote.get("alive").value());
+                try(var borrowed=client.connect()) {
+                    var p=new LettuceLockProvider(borrowed);
+                    var old=p.tryLock("borrowed-live",Duration.ofSeconds(10)); p.close(); old.release();
+                    assertEquals("PONG",borrowed.sync().ping());
+                }
+            } finally {a.close();b.close();}
+        }
+    }
+
 }

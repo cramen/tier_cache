@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Lock providers now dispose their owned connections exactly once across lazy initialization and shutdown races, without closing borrowed clients/connections. Derived providers stay lazy. Factory close gates auxiliary work, retires discarded refresh claims and preserves usable synchronous views with local coalescing. Watchdog shutdown releases acquired tokens once before loader fallback; closed-provider outcomes retire breaker permits without recording a Redis result. See docs/resource-lifecycle.md.
+
+
 - Streams no longer strands the rest of a delivered batch after a corrupt row or failed ACK. Readers drain own pending work, claim only within their own group, retain per-row apply/ACK state and require a current safe reset baseline before settling corrupt/missing history. Shared stream/journal validation skips decoding an already-accounted opaque anchor, including poison at the reset tail. Failed clears now complete as bounded recovery failures rather than immediate obsolete-pass retries. Added bounded failure diagnostics and stream failure counters; see docs/streams-recovery.md for stable/random group lifecycle and internal SPI migration.
 
 - Journal recovery now uses two owned workers with bounded per-cache scheduling, pass budgets and exponential retries. Redis I/O and observer callbacks run outside cache-state and breaker monitors. Successful probes return without waiting for replay; CLOSED is gated by the same recovery epoch's verified replay or safe reset. Failed baseline reads still clear L1 but retain the cursor and remain pending. Shutdown cancels queued work and detaches retired coherence hooks. Added `tiercache.invalidation.recovery.pending{cache}` and real-Redis JFR coverage; see docs/recovery.md.

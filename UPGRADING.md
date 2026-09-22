@@ -7,6 +7,19 @@ target versions.
 
 For the full list of additions and fixes, see [CHANGELOG.md](CHANGELOG.md).
 
+## Unreleased: lock-provider and factory shutdown
+
+Client-backed lock providers now close the dedicated connections they create;
+caller-supplied clients and connections remain caller-owned. Derived providers
+are lazy and owned by their factory. Direct acquisition after provider close
+fails immediately instead of accidentally reopening coordination resources.
+
+Already-obtained synchronous caches remain usable with a usable supplied L2,
+but factory close disables coordination, refresh, invalidation publication and
+recovery. Continued cluster coherence is not promised. Async shutdown semantics,
+constructor signatures, stored data and lease/compensation settings are unchanged.
+See [resource ownership and shutdown](docs/resource-lifecycle.md).
+
 ## Unreleased: Redis keyspace v2 (breaking; major release required)
 
 The built-in Redis/Valkey transport now uses separate v2 data, tag, journal,

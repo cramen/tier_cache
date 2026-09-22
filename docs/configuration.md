@@ -361,3 +361,11 @@ a major release and a coordinated cold cutover; an ordinary mixed-version
 rolling upgrade is unsafe. See [exact layouts, clear limits, migration and
 rollback](redis-keyspace-v2.md). Clear removes only data in its own namespace,
 using a non-transactional scan; its journal append is a separate operation.
+
+## Resource lifecycle
+
+Factories own auxiliary workers and derived lock providers, while supplied L2,
+clients, connections and explicit providers retain their caller ownership.
+Close factories when their owning component stops. See [resource ownership and
+shutdown](resource-lifecycle.md) for lazy connection cleanup, surviving synchronous
+views, async cancellation and coordination limits during shutdown.
