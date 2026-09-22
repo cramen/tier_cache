@@ -39,6 +39,7 @@ All meters are created by
 | `tiercache.degraded` | Gauge | — | `1` while the L2 circuit breaker is open (L1-only mode), else `0`. |
 | `tiercache.breaker.state` | Gauge | — | Breaker machine state: `0` = closed, `1` = half-open (probing or awaiting coherence recovery), `2` = open. During half-open `tiercache.degraded` is already back at `0`. |
 | `tiercache.invalidation.recovery.pending` | Gauge | `cache` | `1` while triggered recovery or its follow-up/retry is pending, `0` when settled. Unregistered on close. Read alongside breaker state and logs; a failed-baseline clear does not reset it to success. |
+| `tiercache.invalidation.stream` | Counter | `cache`, `result` | Stream/journal failures: `decode_failed`, `apply_failed`, `ack_failed`, `resync_failed`. Counts failed attempts, not individual lost invalidations. |
 | `tiercache.journal.size` | Gauge | `cache` | Invalidation journal entries currently held for the cache. |
 | `tiercache.last.load.age` | Gauge | `cache` | Milliseconds since the last load event for the cache, tracked from store events, not per-entry metadata. |
 | `tiercache.null.entries` | Counter | `cache` | Null-markers stored under the `allow` null policy. |
@@ -137,3 +138,5 @@ Load the file into your Prometheus `rule_files` (or drop it into an
 Alertmanager/Grafana-managed rule provisioning directory).
 
 See [triggered recovery](recovery.md) for HALF_OPEN admission, baseline failure, bounded retries and shutdown semantics.
+
+Streams settlement and gap waits also contribute to the pending gauge. See [Streams diagnostics and PEL inspection](streams-recovery.md#diagnostics-and-operator-checks); Redis backlog is not bounded by the local batch size.

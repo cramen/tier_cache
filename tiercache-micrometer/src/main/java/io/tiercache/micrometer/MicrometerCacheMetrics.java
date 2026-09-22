@@ -108,6 +108,14 @@ public final class MicrometerCacheMetrics
                 direction.name().toLowerCase()).increment();
     }
 
+    private final Map<String, Counter> streamFailures = new ConcurrentHashMap<>();
+
+    @Override
+    public void onStreamFailure(String cache, StreamResult result) {
+        counter(streamFailures, cache, "invalidation.stream", "result",
+                result.name().toLowerCase(java.util.Locale.ROOT)).increment();
+    }
+
     @Override
     public void onNullEntry(String cache) {
         counter(nullEntries, cache, "tiercache.null.entries").increment();

@@ -252,8 +252,9 @@ class RedisStreamJournalTest {
             for (int i = 0; i < 2000 && !sawTrimmedCursor; i++) {
                 io.tiercache.spi.CheckedRange range = journal.checkedRead("torn", fixedCursor, 50);
                 if (range.startIntact()) {
-                    assertEquals(fixedCursor, range.rows().get(0).cursor(),
-                            "an intact read's head must be the cursor row itself");
+                    assertTrue(range.rows().stream().allMatch(row -> RedisStreamJournal.compareIds(fixedCursor, row.cursor()) < 0),
+                            "the raw-validated anchor is omitted; events start strictly after it");
+                    assertTrue(range.rows().size() <= 50);
                 } else if (!range.rows().isEmpty()) {
                     assertTrue(RedisStreamJournal.compareIds(fixedCursor, range.rows().get(0).cursor()) < 0,
                             "a non-intact read must not pose as a contiguous prefix");

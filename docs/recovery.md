@@ -110,3 +110,11 @@ not prove absence of monitor serialization.
 ```
 
 Recordings are retained in `tiercache-tck/build/reports/recovery-jdk*.jfr`.
+
+The Streams transport consumes per-cache reset proofs through the compatible
+gap handler. A proof must still belong to the current registration/reset
+and may cover only IDs at or below its baseline. See [Streams pending and
+ACK handling](streams-recovery.md). Its reader contributes a separate pending
+source while settlement/resync is outstanding, including without a capable
+handler. A failed clear is reported as failure with backoff and never grants
+safe-reset authorization.

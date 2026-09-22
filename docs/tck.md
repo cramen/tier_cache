@@ -108,3 +108,12 @@ checks library-attributed monitor pinning on JDK 21. Run it with
 `./gradlew :tiercache-tck:vtStressTest --tests '*RecoveryJfrTest'`; use
 `-PtiercacheVtJdk=25` for newer-JDK functional coverage. Recordings remain in
 `tiercache-tck/build/reports/recovery-jdk*.jfr`. See [recovery](recovery.md).
+
+### Streams pending and corruption
+
+`RedisStreamsRecoveryTest` and `ValkeyStreamsRecoveryTest` cover pending batch
+remainder, missing payloads on Redis 6.2/newer reply behavior, safe baseline
+and clear gates, ACK reply loss, same-group stable resume, other-group
+isolation, closed/superseded callbacks and corrupt replay anchors. Shared
+decoder tests verify sanitized failures and typed payload compatibility;
+metric tests verify fixed labels under non-English JVM locales.

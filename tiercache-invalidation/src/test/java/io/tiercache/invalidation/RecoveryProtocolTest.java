@@ -21,12 +21,13 @@ class RecoveryProtocolTest {
     static class Journal implements InvalidationJournal {
         final InMemoryJournal data = new InMemoryJournal(20000);
         final AtomicInteger reads = new AtomicInteger();
+        final AtomicInteger ends = new AtomicInteger();
         volatile TriRead read = (c, p, n) -> data.checkedRead(c, p, n);
         volatile Function<String, String> end = data::endCursor;
         public String append(String c, InvalidationMessage m) { return data.append(c, m); }
         public List<JournalRow> readRange(String c, String p) { return data.readRange(c, p); }
         public CheckedRange checkedRead(String c, String p, int n) { reads.incrementAndGet(); return read.read(c, p, n); }
-        public String endCursor(String c) { return end.apply(c); }
+        public String endCursor(String c) { ends.incrementAndGet(); return end.apply(c); }
         public boolean isTrimmed(String c, String p) { return data.isTrimmed(c, p); }
     }
     interface TriRead { CheckedRange read(String cache, String cursor, int count); }
@@ -250,14 +251,15 @@ class RecoveryProtocolTest {
             for (int delay : new int[]{1, 2, 4, 8, 16, 30, 30}) {
                 assertEquals(1, scheduler.queue.size());
                 assertEquals(TimeUnit.SECONDS.toNanos(delay), scheduler.queue.peek().due - scheduler.now.get());
-                int before = h.journal.reads.get();
+                int before = h.journal.ends.get();
                 for (int i = 0; i < 100; i++) h.service.onL2Recovery();
-                assertEquals(1, scheduler.queue.size()); assertEquals(before, h.journal.reads.get());
+                assertEquals(1, scheduler.queue.size()); assertEquals(before, h.journal.ends.get());
                 scheduler.advance(delay); scheduler.next();
-                assertEquals(before + 1, h.journal.reads.get()); assertTrue(h.pending.get().getAsBoolean());
+                assertEquals(before + 1, h.journal.ends.get()); assertTrue(h.pending.get().getAsBoolean());
             }
             h.journal.read = (c, p, n) -> h.journal.data.checkedRead(c, p, n);
             h.journal.end = h.journal.data::endCursor;
+            scheduler.advance(30); scheduler.drain(); // safe reset; its follow-up is also bounded
             scheduler.advance(30); scheduler.drain(); assertFalse(h.pending.get().getAsBoolean());
         }
     }

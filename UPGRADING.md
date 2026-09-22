@@ -43,6 +43,25 @@ hooks. Custom callers must await the completion stage when they require
 settled recovery; returning from the old void callback is no longer that
 boundary. See [the recovery contract](docs/recovery.md).
 
+## Unreleased: Streams pending recovery
+
+Streams now drains its own pending work before new rows and resumes only
+inside the receiver's own group. Poison/missing rows require a committed
+baseline-before-clear result before covered ACKs. Failed application and ACK
+attempts retain the delivered batch and use bounded retries. A reader without
+a capable gap handler remains pending rather than silently skipping the gap.
+
+Default random-identity groups are retired best-effort on graceful close;
+explicit stable-UUID groups persist for an **exclusive** restart. Registration
+clears the fresh/resumed target against a captured baseline, so covered old
+UPDATE payloads cannot warm a new L1. Do not run two live owners of one UUID.
+
+`CheckedRange` keeps its record signature but may omit a raw-validated cursor
+anchor. Consumers must use its integrity flag rather than requiring the first
+event to be the cursor row. Existing custom journals may retain a valid typed
+anchor. Corrupt unconsumed rows now raise sanitized typed failures. See
+[Streams recovery and operator procedures](docs/streams-recovery.md).
+
 ## 1.5.0 (unreleased)
 
 ### Custom transports: versioned tagged writes

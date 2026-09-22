@@ -51,8 +51,9 @@ public final class InvalidationService implements InvalidationHandler {
         AutoCloseable subscription, gauge;
         volatile boolean pending;
         int failures;
-        long retryAt;
-        RecoveryResult lastResult;
+        long retryAt, nextCorruptionLog;
+        RecoveryResult lastResult, safeResult;
+        long safeTargetGeneration;
         CompletableFuture<RecoveryResult> resetCompletion;
         CacheState(String cache) { this.cache = cache; }
     }
@@ -60,7 +61,9 @@ public final class InvalidationService implements InvalidationHandler {
     private record Snapshot(long generation, long token, String cursor, long targetGeneration,
                             InvalidationTarget target, long deliverySequence) { }
     private enum Kind { TICK_DONE, CAUGHT_UP, RESET_SAFE, NO_JOURNAL, FAILED, OBSOLETE }
-    private record Pass(Kind kind, String baseline, long generation) { }
+    private record Pass(Kind kind, String baseline, long generation, long targetGeneration) {
+        Pass(Kind kind, String baseline, long generation) { this(kind, baseline, generation, -1); }
+    }
 
     /** Creates an engine with no metrics binder. */
     public InvalidationService(InvalidationTransport transport, InvalidationJournal journal,
@@ -83,7 +86,28 @@ public final class InvalidationService implements InvalidationHandler {
         this.originInstanceId = Objects.requireNonNull(originInstanceId);
         this.listener = listener == null ? InvalidationListener.NOOP : listener;
         this.metrics = metrics == null ? CacheMetricsListener.NOOP : metrics;
+        transport.setMetricsListener(this.metrics);
+        transport.setGapHandler(new InvalidationGapHandler() {
+            public CompletionStage<RecoveryResult> reset(String cache) { return resetAsync(cache); }
+            public RecoveryResult registrationBaseline(String cache) {
+                CacheState state = states.get(cache);
+                if (state == null) return null;
+                synchronized (state) { return currentProof(state, state.safeResult) ? state.safeResult : null; }
+            }
+            public boolean isCurrent(String cache, RecoveryResult result) {
+                CacheState state = states.get(cache);
+                if (state == null) return false;
+                synchronized (state) { return currentProof(state, result); }
+            }
+        });
         transport.setReconnectListener(this::onReconnect);
+    }
+
+    private boolean currentProof(CacheState state, RecoveryResult result) {
+        return !closed && !state.retired && state.ready && result != null
+                && result == state.safeResult && result.status() == RecoveryResult.Status.RESET_SAFE
+                && state.generation == result.generation()
+                && state.target.recoveryGeneration() == state.safeTargetGeneration;
     }
 
     @Override
@@ -115,17 +139,21 @@ public final class InvalidationService implements InvalidationHandler {
     public void registerTarget(String cache, InvalidationTarget target) {
         CacheState state;
         long registration;
+        boolean resetRegistration = transport.requiresRegistrationReset();
+        AutoCloseable retiredSubscription;
         synchronized (lifecycle) {
             if (closed) return;
             state = states.computeIfAbsent(cache, CacheState::new);
             synchronized (state) {
-                if (state.ready && state.subscription != null) {
+                if (state.ready && state.subscription != null && !resetRegistration) {
                     state.target = target;
                     state.generation++;
                     state.lastResult = null;
                     if (state.pending) { state.replay = true; schedule(state); }
                     return;
                 }
+                retiredSubscription = state.subscription;
+                state.subscription = null;
                 state.target = target;
                 state.generation++;
                 registration = ++state.registration;
@@ -134,15 +162,22 @@ public final class InvalidationService implements InvalidationHandler {
             }
         }
         // Initial baseline and subscription are outside service/state monitors.
+        closeQuietly(retiredSubscription);
         String baseline = journal == null ? "0-0" : journal.endCursor(cache);
         synchronized (state) {
             if (closed || state.registration != registration) return;
+            if (resetRegistration) {
+                long next = target.resetRecovery(target.recoveryGeneration());
+                if (next < 0 || target.recoveryGeneration() != next) throw new IllegalStateException("Registration reset was superseded");
+            }
             state.cursor = baseline;
+            state.safeTargetGeneration = target.recoveryGeneration();
+            state.safeResult = journal == null ? null : new RecoveryResult(RecoveryResult.Status.RESET_SAFE, baseline, state.generation);
             state.applied.clear();
             state.confirmed.clear();
             state.ready = true;
         }
-        AutoCloseable subscription = transport.subscribe(cache, this::onMessage);
+        AutoCloseable subscription = transport.subscribe(cache, message -> onMessage(message, registration));
         AutoCloseable previous;
         boolean registerMetric = false;
         synchronized (state) {
@@ -157,7 +192,7 @@ public final class InvalidationService implements InvalidationHandler {
         if (registerMetric) {
             AutoCloseable gauge = null;
             try { gauge = metrics.registerRecovery(cache, () -> state.pending); }
-            catch (Throwable e) { log.warn("Recovery metric registration failed", e); }
+            catch (Throwable e) { log.warn("Recovery metric registration failed ({})", e.getClass().getSimpleName()); }
             boolean discard;
             synchronized (state) { discard = closed; if (!discard) state.gauge = gauge; }
             if (discard) closeQuietly(gauge);
@@ -187,12 +222,18 @@ public final class InvalidationService implements InvalidationHandler {
         observe(() -> metrics.onInvalidation(cache, CacheMetricsListener.Direction.SENT));
     }
 
-    private void onMessage(InvalidationMessage message) {
-        if (closed || message.originInstanceId().equals(originInstanceId)) return;
+    private void onMessage(InvalidationMessage message, long registration) {
+        if (closed) {
+            if (transport.requiresRegistrationReset()) throw new IllegalStateException("Invalidation service is closed");
+            return;
+        }
+        if (message.originInstanceId().equals(originInstanceId)) return;
         CacheState state = states.get(message.cache());
         if (state == null) return;
         synchronized (state) {
-            if (closed || !state.ready) return;
+            if (closed || !state.ready || state.registration != registration) {
+                throw new IllegalStateException("Invalidation registration was closed or superseded");
+            }
             applyLive(state.target, message);
             if (message.type() == InvalidationMessage.Type.EVICT_ALL) {
                 state.generation++;
@@ -225,7 +266,7 @@ public final class InvalidationService implements InvalidationHandler {
     private void notifyEvent(InvalidationMessage message, boolean replayed) {
         Object span = null;
         try { span = metrics.onInvalidationStart(message.cache()); }
-        catch (Throwable e) { log.warn("Invalidation observer failed", e); }
+        catch (Throwable e) { log.warn("Invalidation observer failed ({})", e.getClass().getSimpleName()); }
         observe(() -> metrics.onInvalidation(message.cache(), CacheMetricsListener.Direction.RECEIVED));
         observe(() -> eventListener.onEvent(message.cache(), message));
         Object handle = span;
@@ -307,7 +348,7 @@ public final class InvalidationService implements InvalidationHandler {
         Pass result;
         try { result = pass(state, replay, reset, resetOnFailure, generation); }
         catch (Throwable e) {
-            log.warn("Recovery pass failed for cache '{}'", state.cache, e);
+            log.warn("Recovery pass failed for cache '{}' ({})", state.cache, e.getClass().getSimpleName());
             result = new Pass(Kind.FAILED, null, generation);
         }
         CompletableFuture<RecoveryResult> resetWaiter = null;
@@ -315,13 +356,15 @@ public final class InvalidationService implements InvalidationHandler {
         synchronized (state) {
             state.running = false;
             if (closed || state.retired) return;
-            if (result.kind != Kind.OBSOLETE && state.generation != result.generation) {
+            if (result.kind != Kind.OBSOLETE && (state.generation != result.generation
+                    || (result.kind == Kind.RESET_SAFE && state.target.recoveryGeneration() != result.targetGeneration))) {
                 result = obsolete(state);
             }
             if (result.kind == Kind.FAILED) {
                 state.resyncRequired = true;
                 state.applied.clear();
                 state.replay = true;
+                if (reset || result.targetGeneration >= 0) state.reset = true;
                 state.failures = Math.min(6, state.failures + 1);
                 long seconds = Math.min(30, 1L << (state.failures - 1));
                 state.retryAt = clock.getAsLong() + TimeUnit.SECONDS.toNanos(seconds);
@@ -349,6 +392,10 @@ public final class InvalidationService implements InvalidationHandler {
             // Do not settle its completion using this obsolete pass's result.
             if (completion != null && state.generation == result.generation) {
                 state.lastResult = completion;
+                if (completion.status() == RecoveryResult.Status.RESET_SAFE) {
+                    state.safeResult = completion;
+                    state.safeTargetGeneration = result.targetGeneration;
+                }
                 resetWaiter = state.resetCompletion;
                 state.resetCompletion = null;
             } else completion = null;
@@ -370,6 +417,7 @@ public final class InvalidationService implements InvalidationHandler {
     }
     private Pass obsolete(CacheState state) {
         state.replay = true;
+        if (state.resetCompletion != null) state.reset = true;
         return new Pass(Kind.OBSOLETE, null, -1);
     }
 
@@ -386,6 +434,18 @@ public final class InvalidationService implements InvalidationHandler {
             try { range = journal.checkedRead(state.cache, snapshot.cursor, READ_BATCH); }
             catch (RuntimeException e) {
                 synchronized (state) { if (!valid(state, snapshot)) return obsolete(state); }
+                if (e instanceof JournalCorruptionException corrupt) {
+                    boolean report;
+                    synchronized (state) {
+                        long now = clock.getAsLong();
+                        report = state.nextCorruptionLog == 0 || now - state.nextCorruptionLog >= 0;
+                        if (report) state.nextCorruptionLog = now + TimeUnit.SECONDS.toNanos(30);
+                    }
+                    observe(() -> metrics.onStreamFailure(state.cache, CacheMetricsListener.StreamResult.DECODE_FAILED));
+                    if (report) observe(() -> log.warn("Journal corruption: cache={}, row={}, failure={}",
+                            state.cache, corrupt.rowId(), corrupt.getClass().getSimpleName()));
+                    return reset(state, expectedGeneration);
+                }
                 return resetOnFailure ? reset(state, expectedGeneration)
                         : new Pass(Kind.FAILED, null, expectedGeneration);
             }
@@ -440,13 +500,21 @@ public final class InvalidationService implements InvalidationHandler {
         boolean safe = journal == null;
         if (journal != null) {
             try { baseline = journal.endCursor(state.cache); safe = baseline != null; }
-            catch (RuntimeException e) { log.debug("Recovery baseline unavailable for '{}'", state.cache, e); }
+            catch (RuntimeException e) { log.debug("Recovery baseline unavailable for '{}' ({})", state.cache, e.getClass().getSimpleName()); }
         }
         long generation;
+        long targetGeneration;
         synchronized (state) {
             if (!valid(state, snapshot)) return obsolete(state);
-            long next = state.target.resetRecovery(snapshot.targetGeneration);
+            long next;
+            try { next = state.target.resetRecovery(snapshot.targetGeneration); }
+            catch (Throwable error) {
+                // The reservation already advanced generation. Report failure
+                // for that reservation, not the pass's obsolete starting epoch.
+                return new Pass(Kind.FAILED, null, state.generation, snapshot.targetGeneration);
+            }
             if (next < 0 || state.target.recoveryGeneration() != next) return obsolete(state);
+            targetGeneration = next;
             generation = ++state.generation;
             if (safe && journal != null) state.cursor = baseline;
             state.applied.clear();
@@ -464,7 +532,7 @@ public final class InvalidationService implements InvalidationHandler {
             observe(() -> listener.onJournalOverflow(state.cache));
             observe(() -> metrics.onInvalidation(state.cache, CacheMetricsListener.Direction.DROPPED));
         }
-        return new Pass(!safe ? Kind.FAILED : journal == null ? Kind.NO_JOURNAL : Kind.RESET_SAFE, baseline, generation);
+        return new Pass(!safe ? Kind.FAILED : journal == null ? Kind.NO_JOURNAL : Kind.RESET_SAFE, baseline, generation, targetGeneration);
     }
 
     private void checkAggregate() {
@@ -494,7 +562,7 @@ public final class InvalidationService implements InvalidationHandler {
 
     private static void observe(Runnable callback) {
         try { callback.run(); }
-        catch (Throwable e) { log.warn("Invalidation observer failed", e); }
+        catch (Throwable e) { log.warn("Invalidation observer failed ({})", e.getClass().getSimpleName()); }
     }
     private static void closeQuietly(AutoCloseable resource) {
         if (resource != null) observe(() -> {

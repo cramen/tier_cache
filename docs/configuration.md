@@ -127,7 +127,9 @@ transport is used; `tiercache.invalidation.enabled=false` opts out.
   Lowest propagation latency; a disconnected instance misses events and
   catches up via the journal on recovery.
 - `streams` — events go through Redis Streams. Select with
-  `tiercache.invalidation.profile=streams`.
+  `tiercache.invalidation.profile=streams`. Own pending rows are drained before
+  new rows; corrupt/missing history requires safe L1 reset before ACK. Its
+  retention is the same shared journal retention. See [Streams recovery](streams-recovery.md).
 
 Both profiles share the journal (`tiercache.invalidation.journal-capacity`,
 default 10000 entries per cache stream), which records recent invalidations

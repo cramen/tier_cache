@@ -63,6 +63,12 @@ public interface CacheMetricsListener {
         DROPPED
     }
 
+    /** Streams failure category; labels must never contain row IDs, keys or exception text. */
+    enum StreamResult { DECODE_FAILED, APPLY_FAILED, ACK_FAILED, RESYNC_FAILED }
+
+    /** Reports a failed stream operation, independently of publication/delivery counters. */
+    default void onStreamFailure(String cache, StreamResult result) { }
+
     /**
      * A listener that ignores every event; costs nothing on the hot path.
      *

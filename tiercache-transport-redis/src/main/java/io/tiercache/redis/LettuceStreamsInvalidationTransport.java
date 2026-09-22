@@ -1,284 +1,303 @@
 package io.tiercache.redis;
 
-import io.lettuce.core.RedisClient;
-import io.lettuce.core.StreamMessage;
-import io.lettuce.core.XAutoClaimArgs;
-import io.lettuce.core.XGroupCreateArgs;
-import io.lettuce.core.XReadArgs;
+import io.lettuce.core.*;
 import io.lettuce.core.api.StatefulRedisConnection;
 import io.lettuce.core.codec.ByteArrayCodec;
 import io.tiercache.InvalidationMessage;
-import io.tiercache.Version;
-import io.tiercache.spi.InvalidationTransport;
+import io.tiercache.spi.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.nio.charset.StandardCharsets;
-import java.util.List;
-import java.util.Map;
-import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.function.Consumer;
 
 /**
- * Durable invalidation transport profile: receivers consume the per-cache
- * journal stream through a consumer group PER INSTANCE (groups distribute,
- * they do not fan out — one group per instance is the broadcast shape).
- * The group cursor survives disconnects, so arbitrarily long partitions
- * (within stream retention) heal without a full L1 flush.
- *
- * <p><b>Internal — not part of the supported API.</b>
- *
- * @since 0.1.0
+ * Durable per-receiver Streams consumption. Pending rows are drained before
+ * new rows; unreadable history requires an authorized baseline-before-clear.
+ * Stable identities require one live owner. Internal transport API.
  */
 public final class LettuceStreamsInvalidationTransport implements InvalidationTransport {
-
-    /**
-     * Consumer-group keyspace: one group per instance per cache.
-     *
-     * @since 0.1.0
-     */
     public static final String GROUP_PREFIX = RedisKeyspace.GROUP;
-
+    private static final Logger log = LoggerFactory.getLogger(LettuceStreamsInvalidationTransport.class);
+    private static final int BATCH = 50;
+    private static final byte[] MAIN = "main".getBytes(StandardCharsets.US_ASCII);
     private final StatefulRedisConnection<byte[], byte[]> connection;
-    private final io.lettuce.core.api.sync.RedisCommands<byte[], byte[]> commands;
-    private final CacheSerializer<Object> keySerializer;
-    private final CacheSerializer<Object> valueSerializer;
+    private final CacheSerializer<Object> keySerializer, valueSerializer;
     private final UUID instanceId;
-    private final Map<String, java.util.function.Consumer<InvalidationMessage>> handlers = new ConcurrentHashMap<>();
-    private final Map<String, Thread> readers = new ConcurrentHashMap<>();
+    private final boolean stable;
+    private final Map<String, Reader> readers = new ConcurrentHashMap<>();
     private volatile boolean closed;
-    volatile Throwable lastReaderError; // test diagnostics
+    private volatile InvalidationGapHandler gaps;
+    private volatile CacheMetricsListener metrics = CacheMetricsListener.NOOP;
+    volatile Throwable lastReaderError; // sanitized test/diagnostic state
 
-    /**
-     * Creates a transport with a random instance identity (a fresh consumer
-     * group cursor per start).
-     *
-     * @param client          the Redis client to connect through
-     * @param keySerializer   serializer for message keys
-     * @param valueSerializer serializer for UPDATE payloads
-     * @since 0.1.0
-     */
-    public LettuceStreamsInvalidationTransport(RedisClient client,
-            CacheSerializer<Object> keySerializer, CacheSerializer<Object> valueSerializer) {
-        this(client, keySerializer, valueSerializer, UUID.randomUUID());
+    private final class Reader {
+        final String cache;
+        final byte[] stream, group;
+        final Consumer<InvalidationMessage> handler;
+        volatile boolean active = true, pending;
+        Thread thread;
+        RecoveryResult covered;
+        AutoCloseable gauge;
+        long nextLog;
+        Reader(String cache, Consumer<InvalidationMessage> handler) {
+            this.cache = cache; this.handler = handler;
+            stream = RedisKeyspace.journal(cache); group = RedisKeyspace.group(cache, instanceId);
+        }
     }
 
-    /**
-     * Stable instance identity: the same id reconnects to the same consumer
-     * group (durable cursor). Random per default (new instance).
-     *
-     * @param client          the Redis client to connect through
-     * @param keySerializer   serializer for message keys
-     * @param valueSerializer serializer for UPDATE payloads
-     * @param instanceId      the stable identity of this instance
-     * @since 0.1.0
-     */
-    public LettuceStreamsInvalidationTransport(RedisClient client,
-            CacheSerializer<Object> keySerializer, CacheSerializer<Object> valueSerializer,
-            UUID instanceId) {
-        this.instanceId = instanceId;
-        this.connection = client.connect(ByteArrayCodec.INSTANCE);
-        this.commands = connection.sync();
-        this.keySerializer = keySerializer;
-        this.valueSerializer = valueSerializer;
+    /** New volatile L1 identity; its group is retired best-effort on close. */
+    public LettuceStreamsInvalidationTransport(RedisClient client, CacheSerializer<Object> keys, CacheSerializer<Object> values) {
+        this(client.connect(ByteArrayCodec.INSTANCE), keys, values, UUID.randomUUID(), false);
     }
+    /** Stable identity. The caller guarantees exclusive ownership across process restarts. */
+    public LettuceStreamsInvalidationTransport(RedisClient client, CacheSerializer<Object> keys,
+            CacheSerializer<Object> values, UUID instanceId) {
+        this(client.connect(ByteArrayCodec.INSTANCE), keys, values, instanceId, true);
+    }
+    // Connection seam for real-server ACK/failure tests; transport owns the supplied connection.
+    LettuceStreamsInvalidationTransport(StatefulRedisConnection<byte[], byte[]> connection,
+            CacheSerializer<Object> keys, CacheSerializer<Object> values, UUID instanceId, boolean stable) {
+        this.connection = connection; keySerializer = keys; valueSerializer = values;
+        this.instanceId = Objects.requireNonNull(instanceId); this.stable = stable;
+    }
+    @Override public void publish(InvalidationMessage message) { /* the journal row is the durable event */ }
+    @Override public void setGapHandler(InvalidationGapHandler handler) { gaps = handler; }
+    @Override public void setMetricsListener(CacheMetricsListener listener) { metrics = listener == null ? CacheMetricsListener.NOOP : listener; }
+    @Override public boolean requiresRegistrationReset() { return true; }
 
     @Override
-    public void publish(InvalidationMessage message) {
-        // The journal row IS the durable event (written atomically with the
-        // data write by the L2 transport). Streams profile needs no channel.
-    }
-
-    @Override
-    public AutoCloseable subscribe(String cache, java.util.function.Consumer<InvalidationMessage> handler) {
-        // Create the consumer group eagerly: its cursor starts at creation
-        // time, so entries published immediately after subscription are
-        // delivered. Lazy creation in the read loop left a permanent gap for
-        // anything published between subscribe() and the loop's first pass.
-        ensureGroup(RedisStreamJournal.streamKeyBytes(cache), group(cache), cache);
-        handlers.put(cache, handler);
-        readers.computeIfAbsent(cache, this::startReader);
-        return () -> {
-            handlers.remove(cache);
-            Thread reader = readers.remove(cache);
-            if (reader != null) {
-                reader.interrupt();
-            }
-        };
-    }
-
-    private Thread startReader(String cache) {
-        Thread thread = new Thread(() -> readLoop(cache), "tiercache-streams-" + cache);
-        thread.setDaemon(true);
-        thread.start();
-        return thread;
-    }
-
-    private byte[] group(String cache) {
-        return RedisKeyspace.group(cache, instanceId);
-    }
-
-    private void readLoop(String cache) {
-        try {
-            readLoopInner(cache);
-        } catch (Throwable t) {
-            lastReaderError = t; // surfaced for diagnostics (JMX/logs)
-        }
-    }
-
-    private void readLoopInner(String cache) {
-        
-        byte[] stream = RedisStreamJournal.streamKeyBytes(cache);
-        byte[] group = group(cache);
-        byte[] consumerName = "main".getBytes(StandardCharsets.UTF_8);
-        // Short-poll instead of BLOCK: a blocked sync call can outlive the
-        // connection's command timeout and never return on some stacks.
-        XReadArgs args = XReadArgs.Builder.count(50);
-        boolean groupReady = false;
-        while (!closed && handlers.containsKey(cache)) {
-            try {
-                if (!groupReady) {
-                    ensureGroup(stream, group, cache);
-                    claimDeadPending(stream, cache, group, consumerName);
-                    groupReady = true;
-                }
-                List<StreamMessage<byte[], byte[]>> messages = commands.xreadgroup(
-                        io.lettuce.core.Consumer.<byte[]>from(group, consumerName), args,
-                        XReadArgs.StreamOffset.lastConsumed(stream));
-
-                if (messages == null || messages.isEmpty()) {
-                    sleepQuietly(50);
-                    continue;
-                }
-                for (StreamMessage<byte[], byte[]> message : messages) {
-                    apply(cache, message);
-                    commands.xack(stream, group, message.getId());
-                }
-            } catch (Throwable e) {
-                lastReaderError = e;
-                if (closed) {
-                    return;
-                }
-                sleepQuietly(200); // transient failure: retry
+    public AutoCloseable subscribe(String cache, Consumer<InvalidationMessage> handler) {
+        if (closed) throw new IllegalStateException("Streams transport is closed");
+        Reader reader = new Reader(cache, handler);
+        if (gaps != null) reader.covered = gaps.registrationBaseline(cache);
+        ensureGroup(reader, reader.covered == null ? "$" : reader.covered.baseline());
+        if (readers.putIfAbsent(cache, reader) != null) throw new IllegalStateException("Cache already subscribed: " + cache);
+        synchronized (reader) {
+            if (closed) reader.active = false;
+            if (reader.active) {
+                reader.thread = new Thread(() -> readLoop(reader), "tiercache-streams-" + cache);
+                reader.thread.setDaemon(true);
+                reader.thread.start();
             }
         }
+        AutoCloseable gauge = null;
+        try { gauge = metrics.registerRecovery(cache, () -> reader.pending); }
+        catch (Throwable e) { log.warn("Streams metric registration failed ({})", e.getClass().getSimpleName()); }
+        boolean discard;
+        synchronized (reader) { discard = !reader.active || closed; if (!discard) reader.gauge = gauge; }
+        if (discard) closeGauge(gauge);
+        if (!reader.active) retire(reader);
+        return () -> retire(reader);
     }
 
-    private void apply(String cache, StreamMessage<byte[], byte[]> entry) {
-        java.util.function.Consumer<InvalidationMessage> handler = handlers.get(cache);
-        if (handler == null) {
-            return;
-        }
-        Map<byte[], byte[]> body = entry.getBody();
-        byte[] type = field(body, "t");
-        byte[] key = field(body, "k");
-        byte[] version = field(body, "v");
-        byte[] payload = field(body, "p");
-        Version v = Version.fromWire(new String(version, StandardCharsets.UTF_8));
-        Object k = key.length > 0 ? keySerializer.fromBytes(key) : null;
-        Object p = payload != null && payload.length > 0 ? valueSerializer.fromBytes(payload) : null;
-        InvalidationMessage.Type t = InvalidationMessage.Type.values()[type[0]];
-        if (p != null && t == InvalidationMessage.Type.INVALIDATE) {
-            t = InvalidationMessage.Type.UPDATE;
-        }
-        handler.accept(new InvalidationMessage(cache, k, v, v.instanceId(), t, p));
-    }
-
-    private static byte[] field(Map<byte[], byte[]> body, String name) {
-        byte[] wanted = name.getBytes(StandardCharsets.UTF_8);
-        for (Map.Entry<byte[], byte[]> e : body.entrySet()) {
-            if (java.util.Arrays.equals(e.getKey(), wanted)) {
-                return e.getValue();
-            }
-        }
-        return new byte[0];
-    }
-
-    private void ensureGroup(byte[] stream, byte[] group, String cache) {
-        try {
-            commands.xgroupCreate(XReadArgs.StreamOffset.latest(stream), group,
-                    XGroupCreateArgs.Builder.mkstream());
-        } catch (RuntimeException e) {
-            if (!String.valueOf(e.getMessage()).contains("BUSYGROUP")) {
-                throw e; // real failure: the read loop retries
-            }
-            // BUSYGROUP: group exists — fine.
-        }
-        // Consumers are registered implicitly on first XREADGROUP; no
-        // explicit CREATECONSUMER needed (it fails on a missing key).
-    }
+    private boolean active(Reader reader) { return !closed && reader.active; }
 
     /**
-     * Claims pending entries from dead groups (zero registered consumers) of
-     * this cache, applies them, then destroys those groups. Conservative:
-     * live groups always have a registered consumer, so they are untouched.
+     * Read own pending IDs first. Before same-group XAUTOCLAIM, inspect missing
+     * payloads atomically: Redis 7+ may otherwise remove their PEL entries while
+     * claiming. This also handles the Redis 6.2 reply without deleted-ID fields.
      */
-    private void claimDeadPending(byte[] stream, String cache, byte[] group, byte[] consumerName) {
-        try {
-            List<Object> groups = commands.xinfoGroups(stream);
-            for (Object g : groups) {
-                List<Object> row = (List<Object>) g;
-                Map<String, Object> info = kvMap(row);
-                byte[] name = info.get("name") instanceof byte[]
-                        ? (byte[]) info.get("name") : str(info.get("name")).getBytes(StandardCharsets.UTF_8);
-                long consumers = num(info.get("consumers"));
-                long pending = num(info.get("pending"));
-                if (name == null || !new String(name, StandardCharsets.UTF_8).startsWith(RedisKeyspace.groupPrefix(cache))
-                        || java.util.Arrays.equals(name, group) || consumers > 0 || pending == 0) {
-                    continue;
-                }
-                // Dead group with unprocessed entries: claim and apply.
-                var claimed = commands.xautoclaim(stream, new XAutoClaimArgs<byte[]>()
-                        .minIdleTime(1)
-                        .startId("0-0")
-                        .count(1000)
-                        .consumer(io.lettuce.core.Consumer.<byte[]>from(group, consumerName)));
-                for (StreamMessage<byte[], byte[]> m : claimed.getMessages()) {
-                    apply(cache, m);
-                    commands.xack(stream, group, m.getId());
-                }
-                commands.xgroupDestroy(stream, name);
+    private static final String PENDING = """
+            redis.replicate_commands()
+            local own = redis.call('xreadgroup','GROUP',ARGV[1],ARGV[2],'COUNT',50,'STREAMS',KEYS[1],'0-0')
+            if own and #own > 0 and #own[1][2] > 0 then return own[1][2] end
+            local pending = redis.call('xpending',KEYS[1],ARGV[1],'-','+',50)
+            local missing = {}
+            for _, p in ipairs(pending) do
+                local row = redis.call('xrange',KEYS[1],p[1],p[1])
+                if #row == 0 then missing[#missing+1] = {p[1],{}} end
+            end
+            if #missing > 0 then return missing end
+            if #pending == 0 then return {} end
+            local claimed = redis.call('xautoclaim',KEYS[1],ARGV[1],ARGV[2],0,'0-0','COUNT',50)
+            return claimed[2]
+            """;
+
+    private List<StreamMessage<byte[], byte[]>> pending(Reader reader) {
+        List<Object> rows = connection.sync().eval(PENDING, ScriptOutputType.MULTI,
+                new byte[][]{reader.stream}, reader.group, MAIN);
+        List<StreamMessage<byte[], byte[]>> result = new ArrayList<>(rows.size());
+        for (Object raw : rows) {
+            List<?> row = (List<?>) raw;
+            String id = new String((byte[]) row.get(0), StandardCharsets.US_ASCII);
+            Map<byte[], byte[]> body = new LinkedHashMap<>();
+            if (row.get(1) instanceof List<?> fields) {
+                for (int i = 0; i + 1 < fields.size(); i += 2) body.put((byte[]) fields.get(i), (byte[]) fields.get(i + 1));
             }
-        } catch (RuntimeException e) {
-            // Janitor is best-effort; the stream trim bounds residue.
+            result.add(new StreamMessage<>(reader.stream, id, body));
         }
+        return result;
     }
 
-    private static Map<String, Object> kvMap(List<Object> row) {
-        Map<String, Object> map = new java.util.HashMap<>();
-        for (int i = 0; i + 1 < row.size(); i += 2) {
-            Object k = row.get(i);
-            map.put(k instanceof byte[] ? new String((byte[]) k, StandardCharsets.UTF_8) : String.valueOf(k),
-                    row.get(i + 1));
-        }
-        return map;
-    }
-
-    private static String str(Object o) {
-        return o instanceof byte[] ? new String((byte[]) o, StandardCharsets.UTF_8)
-                : o != null ? String.valueOf(o) : null;
-    }
-
-    private static long num(Object o) {
-        return o instanceof Number ? ((Number) o).longValue()
-                : o != null ? Long.parseLong(str(o)) : 0;
-    }
-
-    private static void sleepQuietly(long millis) {
+    private void readLoop(Reader reader) {
+        int connectionFailures = 0;
         try {
-            Thread.sleep(millis);
+            while (active(reader)) {
+                try {
+                    List<StreamMessage<byte[], byte[]>> batch = pending(reader);
+                    if (batch.isEmpty()) batch = connection.sync().xreadgroup(
+                            io.lettuce.core.Consumer.from(reader.group, MAIN), XReadArgs.Builder.count(BATCH),
+                            XReadArgs.StreamOffset.lastConsumed(reader.stream));
+                    connectionFailures = 0;
+                    if (batch == null || batch.isEmpty()) { reader.pending = false; pause(50); continue; }
+                    // Retain this batch and its current row until application/settlement
+                    // completes. Never abandon its remainder after Redis advanced >.
+                    for (var row : batch) {
+                        if (!active(reader)) return;
+                        process(reader, row);
+                    }
+                } catch (RuntimeException error) {
+                    if (!active(reader)) return;
+                    failure(reader, null, CacheMetricsListener.StreamResult.RESYNC_FAILED, error);
+                    reader.pending = true;
+                    if (String.valueOf(error.getMessage()).contains("NOGROUP")) {
+                        if (recover(reader, null)) ensureGroup(reader, reader.covered.baseline());
+                    }
+                    pause(backoff(++connectionFailures));
+                }
+            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
     }
 
-    @Override
-    public void close() {
+    private void process(Reader reader, StreamMessage<byte[], byte[]> row) throws InterruptedException {
+        String id = row.getId();
+        refreshBaseline(reader);
+        if (gaps != null && reader.covered == null && !recover(reader, id)) return;
+        if (covered(reader, id)) { acknowledge(reader, id, true); return; }
+        InvalidationMessage message;
+        try { message = StreamRowDecoder.decode(reader.cache, id, row.getBody(), keySerializer, valueSerializer); }
+        catch (StreamRowCorruptionException error) {
+            failure(reader, id, CacheMetricsListener.StreamResult.DECODE_FAILED, error);
+            if (recover(reader, id)) acknowledge(reader, id, true);
+            return;
+        }
+        boolean applied = false;
+        for (int attempt = 1; active(reader) && attempt <= 3; attempt++) {
+            try {
+                refreshBaseline(reader);
+                if (covered(reader, id)) { acknowledge(reader, id, true); return; }
+                // Dispatch is admitted before close, without executing arbitrary
+                // target/observer code under the transport state monitor.
+                synchronized (reader) { if (!active(reader)) return; }
+                reader.handler.accept(message); applied = true; break;
+            } catch (RuntimeException error) {
+                if (!active(reader)) return;
+                failure(reader, id, CacheMetricsListener.StreamResult.APPLY_FAILED, error);
+                if (attempt < 3) pause(attempt * 1000L);
+            }
+        }
+        if (applied) acknowledge(reader, id, false);
+        else if (active(reader) && recover(reader, id)) acknowledge(reader, id, true);
+    }
+
+    private void refreshBaseline(Reader reader) {
+        InvalidationGapHandler handler = gaps;
+        if (handler == null) return;
+        RecoveryResult latest = handler.registrationBaseline(reader.cache);
+        if (latest != null && handler.isCurrent(reader.cache, latest)) reader.covered = latest;
+        // A newer journal replay epoch alone does not require clearing L1.
+        // Only a row we intend to skip needs a still-current reset proof.
+    }
+
+    private boolean covered(Reader reader, String id) {
+        return reader.covered != null && StreamRowDecoder.compareIds(id, reader.covered.baseline()) <= 0;
+    }
+
+    private boolean recover(Reader reader, String row) throws InterruptedException {
+        reader.pending = true;
+        int failures = 0;
+        while (active(reader)) {
+            InvalidationGapHandler handler = gaps;
+            try {
+                if (handler == null) throw new IllegalStateException("No capable gap handler");
+                RecoveryResult result = handler.reset(reader.cache).toCompletableFuture().get();
+                if (!active(reader)) return false;
+                if (handler == gaps && result != null && result.status() == RecoveryResult.Status.RESET_SAFE
+                        && result.generation() >= 0 && StreamRowDecoder.validId(result.baseline())
+                        && handler.isCurrent(reader.cache, result)) {
+                    reader.covered = result;
+                    return true;
+                }
+                throw new IllegalStateException("Recovery did not establish a current safe baseline");
+            } catch (ExecutionException | RuntimeException error) {
+                if (!active(reader)) return false;
+                failure(reader, row, CacheMetricsListener.StreamResult.RESYNC_FAILED, error);
+                pause(backoff(++failures));
+            }
+        }
+        return false;
+    }
+
+    private void acknowledge(Reader reader, String id, boolean needsProof) throws InterruptedException {
+        int failures = 0;
+        while (active(reader)) {
+            if (needsProof && (gaps == null || !covered(reader, id) || !gaps.isCurrent(reader.cache, reader.covered))) {
+                if (!recover(reader, id)) return;
+                if (!covered(reader, id)) { // a reset must never cover a row after its baseline
+                    failure(reader, id, CacheMetricsListener.StreamResult.RESYNC_FAILED, new IllegalStateException("Row is after baseline"));
+                    pause(backoff(++failures)); continue;
+                }
+            }
+            try {
+                RedisFuture<Long> ack;
+                synchronized (reader) {
+                    if (!active(reader)) return;
+                    if (needsProof && !gaps.isCurrent(reader.cache, reader.covered)) continue;
+                    // Queue admission only. Waiting/network I/O is outside the gate.
+                    ack = connection.async().xack(reader.stream, reader.group, id);
+                }
+                ack.get(); reader.pending = false; return;
+            } catch (ExecutionException | RuntimeException error) {
+                if (!active(reader)) return;
+                failure(reader, id, CacheMetricsListener.StreamResult.ACK_FAILED, error);
+                reader.pending = true; pause(backoff(++failures));
+            }
+        }
+    }
+
+    private void ensureGroup(Reader reader, String cursor) {
+        try {
+            connection.sync().xgroupCreate(XReadArgs.StreamOffset.from(reader.stream, cursor), reader.group,
+                    XGroupCreateArgs.Builder.mkstream());
+        } catch (RuntimeException error) {
+            if (!String.valueOf(error.getMessage()).contains("BUSYGROUP")) throw error;
+        }
+    }
+
+    private void failure(Reader reader, String row, CacheMetricsListener.StreamResult result, Throwable error) {
+        lastReaderError = error instanceof StreamRowCorruptionException ? error
+                : new IllegalStateException("Streams " + result + ": " + error.getClass().getSimpleName());
+        try { metrics.onStreamFailure(reader.cache, result); }
+        catch (Throwable ignored) { /* an observer cannot alter dispatch or ACK state */ }
+        long now = System.nanoTime();
+        if (reader.nextLog == 0 || now - reader.nextLog >= 0) {
+            reader.nextLog = now + TimeUnit.SECONDS.toNanos(30);
+            log.warn("Streams recovery: cache={}, row={}, result={}, failure={}", reader.cache, row, result, error.getClass().getSimpleName());
+        }
+    }
+    private static long backoff(int failures) { return Math.min(30000, 1000L << Math.min(5, failures - 1)); }
+    private static void pause(long millis) throws InterruptedException { Thread.sleep(millis); }
+    private static void closeGauge(AutoCloseable gauge) {
+        if (gauge != null) try { gauge.close(); } catch (Throwable ignored) { }
+    }
+    private void retire(Reader reader) {
+        synchronized (reader) {
+            reader.active = false;
+            if (reader.thread != null) reader.thread.interrupt();
+        }
+        if (!readers.remove(reader.cache, reader)) return;
+        closeGauge(reader.gauge);
+        if (!stable) try { connection.sync().xgroupDestroy(reader.stream, reader.group); }
+        catch (RuntimeException error) { log.debug("Ephemeral Streams group cleanup failed for cache {} ({})", reader.cache, error.getClass().getSimpleName()); }
+    }
+    @Override public void close() {
         closed = true;
-        readers.values().forEach(Thread::interrupt);
-        readers.clear();
-        handlers.clear();
+        readers.values().forEach(this::retire);
         connection.close();
     }
 }
