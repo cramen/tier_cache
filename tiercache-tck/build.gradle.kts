@@ -122,7 +122,7 @@ tasks.register<Test>("vtStressTest") {
 }
 
 tasks.register<Test>("soakTest") {
-    description = "Soak gate: sustained churn against a real L2 container; memory and journal growth gates."
+    description = "Strict soak: separate post-GC heap/RSS <=5% growth, observed workers, bounded journal and JSON evidence."
     group = "verification"
     testClassesDirs = sourceSets.test.get().output.classesDirs
     classpath = sourceSets.test.get().runtimeClasspath
@@ -131,6 +131,10 @@ tasks.register<Test>("soakTest") {
     }
     systemProperty("tiercache.soak.duration",
         providers.systemProperty("tiercache.soak.duration").orElse("PT10M").get())
+    systemProperty("tiercache.soak.report", providers.systemProperty("tiercache.soak.report")
+        .orElse(layout.buildDirectory.file("reports/soak/report.json").map { it.asFile.absolutePath }).get())
+    outputs.upToDateWhen { false } // An explicit release-gate invocation must run the workload again.
+    outputs.cacheIf { false } // Runtime evidence cannot be reused from a build cache.
 }
 
 // Compliance-suite artifact (TCK publication design D5): the TCK's value is

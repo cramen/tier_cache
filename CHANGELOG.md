@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The strict soak gate now measures post-GC heap and process RSS independently, verifies explicit GC completion, and observes every worker Future, including captured Errors. Missing measurements, insufficient samples, cancelled/early/hung workers and independent memory growth above the unchanged 5% budget fail the gate. Linux/macOS readers and per-sample JSON evidence replace the combined heap-plus-virtual-memory proxy; see docs/tck.md.
+
+
 - JMX inspection now owns only its successful registration and consumes that ownership once on close. Skipped/failed registrations and repeated close cannot remove another factory's or a foreign MBean; concurrent lifecycle calls are ordered without changing the fixed ObjectName. All enum-derived Micrometer labels now use Locale.ROOT, preserving JMX hit ratios and metric identities under Turkish or changing default locales. Restart affected processes; existing malformed time series are not renamed in place.
 
 

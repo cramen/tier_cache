@@ -74,7 +74,7 @@ tasks.test {
 | `InvalidationRaceTest` | Concurrent put/evict races across instances converge every L1 to the L2 content (versioned writes, last-write-wins) — no resurrected or stale values after quiescence. |
 | `TagAndUpdateTest` | Tag and batch invalidation across instances, UPDATE-mode cross-instance warm-up, and oversized-payload fallback on a real server. |
 | `MetricsDiagnosabilityTest` | Every chaos scenario above is visible in the published metrics. |
-| `SoakTest` (tag `soak`) | Sustained churn against a real L2: post-GC memory growth ≤ 5%, journal size bounded. Not run by the default suite. |
+| `SoakTest` (tag `soak`) | Sustained churn against a real L2: Independent post-GC heap and process RSS growth ≤ 5%, observed workers, bounded journal and JSON evidence. Not run by the default suite. |
 
 ## Running the suite from the repository
 
@@ -90,7 +90,7 @@ All of the following are excluded from `check`; run them explicitly.
 
 | Command | What it does | Budget |
 |---|---|---|
-| `./gradlew :tiercache-tck:soakTest` | Churn soak against a real L2 container. Default duration PT10M; override with `-Dtiercache.soak.duration=PT24H` for the full profile. Not run in CI (hosted runners kill long jobs) — run it locally or on your own hardware before releases. | Memory growth ≤ 5%, journal size bounded |
+| `./gradlew :tiercache-tck:soakTest` | Churn soak against a real L2 container. Default duration PT10M; override with `-Dtiercache.soak.duration=PT24H` for the full profile. Not run in CI (hosted runners kill long jobs) — run it locally or on your own hardware before releases. | Each memory series ≤ 5%, complete workload, bounded journal |
 | `./gradlew :tiercache-tck:vtStressTest` | 100k virtual threads over the read path; fails on any `jdk.VirtualThreadPinned` event on library frames. Requires a JDK 21+ toolchain; skipped loudly otherwise. | Zero pinning events |
 | `./gradlew :tiercache-tck:jmhBenchmark` | Throughput benchmark against a Redis container: `mixedWorkload` (95% hot L1 hits / 5% cold cascade reads, reference profile), `cascadeRead` (pure cascade, worst-case reference), `l1Hit` (attribution control). Results in `tiercache-tck/build/results/jmh-benchmark/results.txt`. | No absolute budget — trend/regression measurement (throughput is environment-dependent) |
 | `./gradlew :tiercache-tck:propagationBenchmark` | Invalidation propagation latency harness (two Pub/Sub instances, 10k events by default; override with `-Dtiercache.propagation.events`). Results in `tiercache-tck/build/results/propagation/results.txt`. | p99 ≤ 5 ms publish-to-applied (single AZ) |
@@ -117,3 +117,49 @@ and clear gates, ACK reply loss, same-group stable resume, other-group
 isolation, closed/superseded callbacks and corrupt replay anchors. Shared
 decoder tests verify sanitized failures and typed payload compatibility;
 metric tests verify fixed labels under non-English JVM locales.
+
+## Strict soak measurements and evidence
+
+`./gradlew :tiercache-tck:soakTest` always performs a new run; an earlier Gradle
+up-to-date result cannot satisfy this gate. The default remains PT10M with eight
+workers and a 30-second sample interval. Use
+`-Dtiercache.soak.duration=PT24H` for the full profile. The strict minimum is PT1M30S:
+at least four total samples are needed to retain three after warm-up. Shorter or
+incomplete diagnostic runs cannot pass the release gate.
+
+Two independent memory series are measured in bytes:
+
+- Post-GC heap comes from heap-pool usage in a completed explicit `System.gc()`
+  notification. Completion must be observed within five seconds. A fixed sleep,
+  an unrelated young GC, or ignored explicit GC is not evidence of a collected
+  live set. Remove `-XX:+DisableExplicitGC` and use a collector exposing the required
+  completion notifications if preflight reports the measurement inconclusive.
+- Process RSS is read from Linux `/proc/self/status` (`VmRSS`) or macOS
+  `/bin/ps -o rss= -p <JVM pid>` with a fixed locale and two-second command timeout.
+  Both sources report KiB, converted to bytes. Missing, zero, negative, malformed,
+  timed-out or unsupported measurements fail the strict gate. Virtual/committed
+  memory is never substituted for RSS or added to live heap.
+
+Preflight validates measurement availability before starting Redis/workload traffic.
+The first `ceil(sample count × 0.20)` samples are discarded. Each remaining series
+uses its own fixed first steady-state baseline; its peak must be no more than 5%
+higher. Adjacent increments below 5% do not hide cumulative growth above the budget.
+The journal checks remain: peak ≤ twice configured capacity (4000 rows here), and
+second-half mean ≤ first-half mean + 25% of capacity (500 rows here). Approximate
+Redis trimming is unchanged.
+
+Every submitted worker Future is inspected, including failures captured by
+FutureTask. Workers must start, perform successful operations and reach the intended
+deadline. Errors, exceptions, early completion, cancellation or failure to terminate
+within 60 seconds fail the workload. Cleanup always cancels/interrupts remaining work
+and waits at most one additional second; uninterruptible work is reported, never
+converted into a successful run.
+
+The report is `tiercache-tck/build/reports/soak/report.json` by default; override with
+`-Dtiercache.soak.report=/absolute/path/report.json`. It is updated after every
+sample and finalized for PASS or FAIL, including acquisition/workload failures.
+It contains duration, JDK/collector, heap configuration, sources/units, independent
+memory/journal series, explicit-GC completion counts, per-worker operation counts,
+Future outcomes and fixed-baseline assessments. Keep the JSON alongside Gradle logs,
+not just the BUILD SUCCESSFUL line. A ten-minute pass is evidence for that observed
+run, not proof against every leak or a substitute for a day-long soak.
