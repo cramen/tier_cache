@@ -31,10 +31,19 @@ TierCache artifacts. They do not use Gradle project substitution or reuse the
 library's compilation graph. Each run imports its own enforced Boot BOM and saves
 the resulting runtime graph, including the actual Lettuce version.
 
-| Consumer BOM | Spring Framework | Resolved Lettuce | Test JVM |
-|---|---|---|---|
-| Boot 3.5.16 | 6.2.19 | 6.6.0.RELEASE | Java 17 |
-| Boot 4.1.1 | 7.0.9 | 7.5.2.RELEASE | Java 17 |
+| Consumer BOM | Spring Framework | Resolved Lettuce | Netty handler | Micrometer core | Test JVM |
+|---|---|---|---|---|---|
+| Boot 3.5.16 | 6.2.19 | 6.6.0.RELEASE | 4.1.135.Final | 1.15.12 | Java 17 |
+| Boot 4.1.1 | 7.0.9 | 7.5.2.RELEASE | 4.2.17.Final | 1.17.1 | Java 17 |
+
+The transport publishes the Netty 4.2.17.Final alignment BOM; the metrics module
+uses Micrometer 1.15.12. The Boot 3.5 fixture intentionally enforces its own BOM
+and therefore still resolves Netty 4.1.135.Final. Its functional PASS is **not** a
+clean dependency scan: that version is below the 4.1.137.Final fix for
+[CVE-2026-75595](https://github.com/netty/netty/security/advisories/GHSA-c4c3-7fpv-j4q5).
+Applications that enforce that BOM must apply a compatible patched Netty override
+or migrate their BOM and scan the resulting application graph. A library's
+ordinary platform constraints cannot override an application's enforced platform.
 
 The library itself compiles against Lettuce 7.7.0.RELEASE. A consumer BOM can select
 a different client: the table records what was actually tested, not what the

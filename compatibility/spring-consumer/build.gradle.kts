@@ -11,6 +11,8 @@ repositories {
     }
     mavenCentral()
 }
+// Local SNAPSHOT publications are rebuilt between compatibility runs.
+configurations.configureEach { resolutionStrategy.cacheChangingModulesFor(0, "seconds") }
 java { toolchain { languageVersion = JavaLanguageVersion.of(17) } }
 dependencies {
     testImplementation(enforcedPlatform("org.springframework.boot:spring-boot-dependencies:$bootVersion"))

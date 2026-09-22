@@ -16,6 +16,8 @@ dependencies {
     api(project(":tiercache-core"))
     api(project(":tiercache-invalidation"))
     api(libs.lettuce.core)
+    // Publish alignment as well as using it locally; all Netty modules share the patched line.
+    api(platform(libs.netty.bom))
 
     testImplementation(platform(libs.junit.bom))
     testImplementation(libs.junit.jupiter)

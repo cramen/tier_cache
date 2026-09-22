@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Raised the Micrometer baseline to 1.15.12 and aligned the Redis transport's Netty family through the published 4.2.17.Final BOM to address HIGH/CRITICAL dependency findings. Consumer-enforced BOMs can override these defaults; scan the application's resolved graph.
+
 - Release dependency evidence now compares resolved runtime/classifier inventories with module and aggregate SBOMs, including shaded Caffeine and core test fixtures. Trivy SBOM scans fail closed for incomplete evidence and unexcepted HIGH/CRITICAL findings. Candidate manifests bind exact publication bytes, SBOMs and scan reports to an explicit ref/version; complete bundles are signed/attested, with final evidence attached to an existing release. No automatic Central publication is added; see docs/release-evidence.md.
 
 - Added pinned Redis 6.2/7.4/8.x and Valkey contract profiles, isolated Spring Boot 3.5/4.1 published-artifact consumer checks, and a Docker Sentinel regression for planned promotion, abrupt primary loss and full outage. Evidence records dependency graphs, image identities, topology and observed value versions. Redis Cluster remains unsupported; see docs/compatibility.md.
