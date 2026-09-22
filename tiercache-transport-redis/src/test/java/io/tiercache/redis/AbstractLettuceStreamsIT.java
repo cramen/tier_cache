@@ -253,7 +253,7 @@ abstract class AbstractLettuceStreamsIT {
 class RedisStreamsIT extends AbstractLettuceStreamsIT {
     @Override
     DockerImageName image() {
-        return DockerImageName.parse("redis:6.2-alpine");
+        return ServerProfile.image();
     }
 }
 

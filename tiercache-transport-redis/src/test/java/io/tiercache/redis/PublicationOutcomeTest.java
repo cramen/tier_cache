@@ -15,7 +15,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class PublicationOutcomeTest {
     static InvalidationMessage message(){var id=UUID.randomUUID();return new InvalidationMessage("no-subscribers-"+id,"key",new Version(1,id),id,InvalidationMessage.Type.INVALIDATE);}
     @Test void nativeSuccessWithNoSubscribersAndClosedConnectionFailure() throws Exception {
-        try(var server=new GenericContainer<>(DockerImageName.parse("redis:6.2-alpine")).withExposedPorts(6379)) {
+        try(var server=new GenericContainer<>(ServerProfile.image()).withExposedPorts(6379)) {
             server.start();String uri="redis://"+server.getHost()+":"+server.getMappedPort(6379);
             try(var client=RedisClient.create(uri);var remote=LettuceRemoteCache.<Object,Object>builder(uri).client(client).build()) {
                 var transport=new LettucePubSubInvalidationTransport(client,new JdkCacheSerializer<>());

@@ -85,7 +85,7 @@ Reads cascade L1 → L2 → loader; concurrent loads of the same key share one l
 
 | Module | What it gives you |
 |---|---|
-| `tiercache-spring-boot-starter` | Spring Boot 3 auto-configuration — the one dependency most Spring apps need |
+| `tiercache-spring-boot-starter` | Spring Boot 3.5 / 4.1 consumer-tested auto-configuration — the one dependency most Spring apps need |
 | `tiercache-micronaut` | Micronaut CacheManager/SyncCache/AsyncCache adapter — the one dependency Micronaut apps need |
 | `tiercache-core` | The framework-independent cache engine: cascade, singleflight, rebuild coordination, degradation |
 | `tiercache-transport-redis` | Lettuce-backed Redis/Valkey L2 and invalidation transport |
@@ -97,7 +97,7 @@ Reads cascade L1 → L2 → loader; concurrent loads of the same key share one l
 ## Requirements
 
 - Java 17 or newer
-- Redis 6.2+ or Valkey (for L2 and cross-instance features)
+- Redis 6.2+ or Valkey (for L2 and cross-instance features). See the [tested platform matrix](docs/compatibility.md) for exact versions and Sentinel scope; Redis Cluster is unsupported by the stock transport.
 - Docker, to run the integration tests and TCK chaos suite locally
 
 ## Compatibility and versioning

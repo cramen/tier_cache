@@ -7,6 +7,6 @@ class ValkeyLettuceContractTest extends AbstractNamespaceContractTest {
 
     @Override
     DockerImageName image() {
-        return DockerImageName.parse("valkey/valkey:8.0-alpine");
+        return DockerImageName.parse(System.getProperty("tiercache.test.valkeyImage", "valkey/valkey:9.1.2-alpine"));
     }
 }

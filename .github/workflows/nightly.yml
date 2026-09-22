@@ -179,3 +179,23 @@ jobs:
           name: native-smoke-log
           path: native-smoke.log
           retention-days: 30
+
+  sentinel-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v6.3.0
+      - run: ./gradlew :tiercache-spring-boot-starter:sentinelRuntime
+      - run: docker pull eclipse-temurin:17-jre
+      - run: python3 compatibility/run-sentinel.py
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: sentinel-regression
+          path: build/compatibility-evidence/
+          if-no-files-found: error

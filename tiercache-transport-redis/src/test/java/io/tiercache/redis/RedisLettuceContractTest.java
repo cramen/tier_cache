@@ -7,6 +7,6 @@ class RedisLettuceContractTest extends AbstractNamespaceContractTest {
 
     @Override
     DockerImageName image() {
-        return DockerImageName.parse("redis:6.2-alpine");
+        return ServerProfile.image();
     }
 }

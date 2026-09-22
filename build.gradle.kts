@@ -85,3 +85,22 @@ subprojects {
         }
     }
 }
+
+// Isolated repository consumed by the compatibility builds; never publishes remotely.
+val consumerModules = setOf("tiercache-core", "tiercache-invalidation", "tiercache-transport-redis",
+    "tiercache-spring-boot-starter", "tiercache-micrometer")
+subprojects {
+    if (name in consumerModules) {
+        pluginManager.withPlugin("maven-publish") {
+            extensions.configure<org.gradle.api.publish.PublishingExtension> {
+                repositories.maven {
+                    name = "compatibility"
+                    url = rootProject.layout.buildDirectory.dir("compatibility-repository").get().asFile.toURI()
+                }
+            }
+        }
+    }
+}
+tasks.register("stageCompatibilityArtifacts") {
+    dependsOn(consumerModules.map { ":$it:publishAllPublicationsToCompatibilityRepository" })
+}

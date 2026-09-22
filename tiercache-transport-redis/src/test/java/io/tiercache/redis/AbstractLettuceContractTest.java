@@ -41,6 +41,10 @@ abstract class AbstractLettuceContractTest extends RemoteCacheContractTest {
     void startServer() {
         server = new GenericContainer<>(image()).withExposedPorts(REDIS_PORT);
         server.start();
+        System.out.println("SERVER_EVIDENCE image=" + server.getDockerImageName()
+                + " imageId=" + server.getContainerInfo().getImageId()
+                + " jdk=" + System.getProperty("java.version")
+                + " lettuce=" + RedisClient.class.getPackage().getImplementationVersion());
         client = RedisClient.create(
                 "redis://" + server.getHost() + ":" + server.getMappedPort(REDIS_PORT));
     }

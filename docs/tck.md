@@ -163,3 +163,12 @@ memory/journal series, explicit-GC completion counts, per-worker operation count
 Future outcomes and fixed-baseline assessments. Keep the JSON alongside Gradle logs,
 not just the BUILD SUCCESSFUL line. A ten-minute pass is evidence for that observed
 run, not proof against every leak or a substitute for a day-long soak.
+
+
+## Platform compatibility and Sentinel
+
+The [platform matrix](compatibility.md) describes the pinned standalone server
+contracts, isolated Boot 3.5/4.1 consumer builds and real starter-managed Sentinel
+failover regressions. Run commands and evidence locations are documented there.
+These checks complement the churn/chaos suite; they do not imply Redis Cluster
+support, instantaneous failover freshness or recovery of unstored invalidations.

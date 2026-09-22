@@ -20,7 +20,7 @@ Everything in this repository is **English only**: code, comments, commit messag
 
 ## Repository state
 
-Gradle (Kotlin DSL) multi-module build, Java 17 toolchain. Modules present: `tiercache-core` (cascade read path, singleflight, cluster-wide rebuild coordination, null caching, config validation, stale-while-revalidate/XFetch, shaded Caffeine L1, L1/L2/lock SPI), `tiercache-invalidation` (invalidation protocol: versioned messages, journal, replay, last-write-wins), `tiercache-transport-redis` (Lettuce-backed L2 + lock provider, Pub/Sub and Streams invalidation profiles, Redis 6.2+/Valkey contract-tested), `tiercache-spring-boot-starter` (Spring Boot 3.5.x auto-config, Cache SPI adapters, Spring Cache migration gate), `tiercache-micrometer` (Micrometer metrics + OTel tracing, JMX inspection), `tiercache-kotlin` (Kotlin coroutines API: `KTierCache` suspend facade, invalidation `Flow`, `tierCache { }` config DSL), `tiercache-reactor` (Reactor API: `ReactorTierCache` Mono facade, invalidation `Flux`), `tiercache-micronaut` (Micronaut CacheManager/SyncCache/AsyncCache adapter, `tiercache.*` config, conditional metrics), `tiercache-tck` (chaos harness: stampede full form, avalanche, penetration, degradation, reconnect storm), `examples/demo-spring` (quick-start demo).
+Gradle (Kotlin DSL) multi-module build, Java 17 toolchain. Modules present: `tiercache-core` (cascade read path, singleflight, cluster-wide rebuild coordination, null caching, config validation, stale-while-revalidate/XFetch, shaded Caffeine L1, L1/L2/lock SPI), `tiercache-invalidation` (invalidation protocol: versioned messages, journal, replay, last-write-wins), `tiercache-transport-redis` (Lettuce-backed L2 + lock provider, Pub/Sub and Streams invalidation profiles, Redis 6.2+/Valkey contract-tested), `tiercache-spring-boot-starter` (Spring Boot 3.5/4.1 consumer-tested auto-config, Cache SPI adapters, Spring Cache migration gate), `tiercache-micrometer` (Micrometer metrics + OTel tracing, JMX inspection), `tiercache-kotlin` (Kotlin coroutines API: `KTierCache` suspend facade, invalidation `Flow`, `tierCache { }` config DSL), `tiercache-reactor` (Reactor API: `ReactorTierCache` Mono facade, invalidation `Flux`), `tiercache-micronaut` (Micronaut CacheManager/SyncCache/AsyncCache adapter, `tiercache.*` config, conditional metrics), `tiercache-tck` (chaos harness: stampede full form, avalanche, penetration, degradation, reconnect storm), `examples/demo-spring` (quick-start demo).
 
 ## Build & test commands
 
@@ -124,7 +124,7 @@ Quality gates (enforced in CI once set up):
 - Branch coverage of `core` ≥ 90%; PIT mutation score ≥ 75% on invalidation/degradation paths.
 - JMH benchmarks as regression gates: L1-hit overhead ≤ +50% over raw Caffeine, zero steady-state allocations; > 10% regression blocks merge. Throughput benchmarks (mixed workload, cascade) are trend measurements without absolute budgets — absolute throughput is environment-dependent.
 - All observability metrics asserted by tests.
-- Test matrix: Redis 6.2+ and Valkey, standalone/Sentinel/Cluster, JDK 17/21/25.
+- Test matrix: pinned Redis 6.2/7.4/8.x and Valkey standalone contracts; Redis 7.4 Sentinel regressions with starter-managed connections; separate Boot 3.5/4.1 consumer BOMs on Java 17. JDK 17/21/25 build checks remain separate. Redis Cluster is unsupported by the stock transport. See docs/compatibility.md.
 
 ## Performance targets (for orientation)
 

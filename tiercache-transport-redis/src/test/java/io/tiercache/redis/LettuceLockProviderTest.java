@@ -33,7 +33,7 @@ class LettuceLockProviderTest {
 
     @BeforeAll
     static void startServer() {
-        server = new GenericContainer<>(DockerImageName.parse("redis:6.2-alpine"))
+        server = new GenericContainer<>(ServerProfile.image())
                 .withExposedPorts(6379);
         server.start();
         client = RedisClient.create(

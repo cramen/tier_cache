@@ -33,7 +33,7 @@ class LettuceRemoteCacheTest {
 
     @BeforeAll
     static void startServer() {
-        server = new GenericContainer<>(DockerImageName.parse("redis:6.2-alpine"))
+        server = new GenericContainer<>(ServerProfile.image())
                 .withExposedPorts(6379);
         server.start();
         redisUri = "redis://" + server.getHost() + ":" + server.getMappedPort(6379);
