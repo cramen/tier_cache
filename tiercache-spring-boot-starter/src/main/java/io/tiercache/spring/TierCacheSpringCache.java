@@ -1,12 +1,15 @@
 package io.tiercache.spring;
 
+import io.tiercache.AsyncTierCache;
 import io.tiercache.LookupResult;
 import io.tiercache.TierCache;
 import org.springframework.cache.support.AbstractValueAdaptingCache;
 import org.springframework.cache.support.NullValue;
+import org.springframework.cache.support.SimpleValueWrapper;
 
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Supplier;
 
 /**
  * Spring Cache adapter over a core {@link TierCache}, built on
@@ -16,9 +19,10 @@ import java.util.concurrent.CompletableFuture;
  *
  * <p>Load-bearing mappings: {@link #get(Object, Callable)} delegates to
  * {@code getOrCompute} — singleflight and cluster-wide rebuild
- * coordination apply under annotations by construction. {@link #retrieve(Object)}
- * implements the honest multilevel cascade. Null store values map onto the
- * null-marker policy: stored as a marker under {@code allow},
+ * coordination apply to synchronous {@code @Cacheable(sync = true)} calls.
+ * Both retrieve overloads use the factory-managed async view. Ordinary
+ * {@code sync = false} annotations keep Spring's separate read/invoke/write path.
+ * Null store values map onto the null-marker policy: stored as a marker under {@code allow},
  * skipped under {@code deny}.
  *
  * <p><strong>Internal:</strong> not part of the supported public API.
@@ -34,17 +38,29 @@ public class TierCacheSpringCache extends AbstractValueAdaptingCache {
 
     private final String name;
     private final TierCache<Object, Object> delegate;
+    private final AsyncTierCache<Object, Object> async;
 
     /**
-     * Creates an adapter over the given core cache.
+     * Creates a synchronous-only adapter. Both retrieve overloads return failed
+     * futures without a managed async view; use TierCacheManager or the constructor
+     * accepting both views for asynchronous retrieval.
      *
      * @param name     the cache name exposed to Spring's cache abstraction
      * @param delegate the core two-level cache backing this adapter
      */
     public TierCacheSpringCache(String name, TierCache<?, ?> delegate) {
+        this(name, delegate, null);
+    }
+
+    /**
+     * Creates a fully wired adapter with both views of the same factory cache.
+     * The adapter does not own or close either view or their executor.
+     */
+    public TierCacheSpringCache(String name, TierCache<?, ?> delegate, AsyncTierCache<?, ?> async) {
         super(true); // we convert nulls ourselves (NullValue <-> null-marker)
         this.name = name;
         this.delegate = (TierCache<Object, Object>) delegate;
+        this.async = (AsyncTierCache<Object, Object>) async;
     }
 
     /**
@@ -118,21 +134,36 @@ public class TierCacheSpringCache extends AbstractValueAdaptingCache {
     }
 
     /**
-     * Implements the multilevel {@code retrieve} contract: an already
-     * completed future carrying the honest cascade result (L1, then L2 with
-     * L1 warm-up).
-     *
-     * @param key the key to look up
-     * @return a completed future holding the value wrapper, or a completed
-     *         {@code null} future on a miss
+     * Asynchronous cascade lookup. A miss completes with null, a value hit
+     * with a wrapper, and a cached null with a non-null wrapper holding null.
+     * The factory's bounded async view performs all cache I/O.
      */
     @Override
     public CompletableFuture<ValueWrapper> retrieve(Object key) {
-        // Sync core for now; the future completes immediately with the
-        // honest cascade result (L1 -> L2 with warm-up -> empty).
-        Object storeValue = lookup(key);
-        return CompletableFuture.completedFuture(
-                storeValue != null ? toValueWrapper(storeValue) : null);
+        if (async == null) return missingAsyncView();
+        return async.lookupAsync(key).thenApply(result -> {
+            if (result instanceof LookupResult.Hit<Object> hit) {
+                return (ValueWrapper) new SimpleValueWrapper(hit.value());
+            }
+            if (result instanceof LookupResult.CachedNull<Object>) {
+                return (ValueWrapper) new SimpleValueWrapper(null);
+            }
+            return null;
+        }).toCompletableFuture();
+    }
+
+    /** Loads through the same engine claim as other async and synchronous callers. */
+    @Override
+    public <T> CompletableFuture<T> retrieve(Object key, Supplier<CompletableFuture<T>> valueLoader) {
+        if (async == null) return missingAsyncView();
+        return async.getOrComputeAsyncStage(key, ignored -> valueLoader.get())
+                .thenApply(value -> (T) value).toCompletableFuture();
+    }
+
+    private static <T> CompletableFuture<T> missingAsyncView() {
+        return CompletableFuture.failedFuture(new UnsupportedOperationException(
+                "Async retrieval requires a factory-managed AsyncTierCache; use TierCacheManager "
+                        + "or the TierCacheSpringCache constructor accepting both cache views"));
     }
 
     /**

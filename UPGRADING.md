@@ -7,6 +7,22 @@ target versions.
 
 For the full list of additions and fixes, see [CHANGELOG.md](CHANGELOG.md).
 
+## Unreleased: complete Spring async retrieval
+
+Managed Spring caches now use the factory's bounded async view for both retrieve
+methods introduced in Spring 6.1. Single-argument retrieval no longer blocks its
+caller on L2. Supplier retrieval supports synchronized CompletableFuture and Mono
+caching through existing engine coalescing, with unchanged null policy and async
+shutdown/rejection semantics. Ordinary sync=false annotations gain no coalescing
+promise; synchronous writes/evictions remain synchronous.
+
+The internal two-argument TierCacheSpringCache constructor remains usable for sync
+operations, but both retrieve overloads return failed futures without an async view.
+Direct async users must use TierCacheManager or the new constructor accepting both
+views. This changes its former blocking single-argument retrieval behavior.
+See [Spring async retrieval](docs/migration-from-spring-cache.md#asynchronous-retrieval)
+for wrappers, cached nulls, bounded execution and cancellation.
+
 ## Unreleased: value-bound local freshness
 
 Degradation freshness now lives with the retained L1 entry instead of an

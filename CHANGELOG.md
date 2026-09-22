@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Spring Cache now implements both asynchronous retrieve overloads through the owning factory's bounded async view. Lookups no longer perform L2 I/O on the retrieval caller thread; synchronized CompletableFuture/Mono loaders use existing coalescing, null policies and cancellation/rejection semantics. The legacy internal adapter constructor remains synchronous-only and returns explicit failed futures for retrieval; see UPGRADING.md.
+
+
 - L1 freshness now shares the lifetime of its value or null marker, independent of bounded invalidation fencing. Fresh access preserves the store-time retention floor and atomically replaces the current holder, preventing resurrection after L1 eviction. Custom L1 providers need the compatible atomic-replacement extension only for degradation stale serving combined with access expiry. Spring and Micronaut preserve explicit zero overrides and identify invalid cache/default settings.
 
 
