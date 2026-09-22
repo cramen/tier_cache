@@ -7,6 +7,20 @@ target versions.
 
 For the full list of additions and fixes, see [CHANGELOG.md](CHANGELOG.md).
 
+## Unreleased: invalidation journal capacity floor
+
+Enabled built-in journals now reject `tiercache.invalidation.journal-capacity`
+values <=64, including the exact boundary 64. Configure at least 65; the confirmed
+cursor row must survive alongside the next 64 delivered events. The default remains
+10000. Direct RedisStreamJournal construction and Spring/Micronaut wiring validate
+before journal commands or owned connection creation; disabled invalidation leaves
+its unused capacity setting alone. Values are rejected, never silently clamped.
+
+65 is only the protocol floor. Choose a larger window for bursts, disconnected
+receivers and scheduled recovery delays. Redis trimming remains approximate, and
+read failures or real history loss can still require a conservative L1 reset.
+See [journal sizing](docs/sizing-and-ttl.md#journal-capacity).
+
 ## Unreleased: complete Spring async retrieval
 
 Managed Spring caches now use the factory's bounded async view for both retrieve

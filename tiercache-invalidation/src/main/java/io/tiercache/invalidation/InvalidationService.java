@@ -248,7 +248,7 @@ public final class InvalidationService implements InvalidationHandler {
                     } else state.applied.putIfAbsent(message.version(), state.deliveries + 1);
                 }
                 if (state.resyncRequired || state.applied.size() > WINDOW_CAP) state.replay = true;
-                if (++state.deliveries % 64 == 0) state.tick = true;
+                if (++state.deliveries % JournalProtocol.CURSOR_CADENCE == 0) state.tick = true;
                 if (state.replay || state.tick) { state.pending = true; schedule(state); }
             }
         }

@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Built-in invalidation journals now reject capacities <=64 before connection use, with one shared 64-event cadence and minimum-capacity definition across Redis, Spring and Micronaut. The minimum is 65 (cursor row plus 64 later events), the default remains 10000, and disabled journals ignore unused capacity settings. This prevents avoidable cursor-baseline loss; sufficient outage retention still requires workload sizing.
+
+
 - Spring Cache now implements both asynchronous retrieve overloads through the owning factory's bounded async view. Lookups no longer perform L2 I/O on the retrieval caller thread; synchronized CompletableFuture/Mono loaders use existing coalescing, null policies and cancellation/rejection semantics. The legacy internal adapter constructor remains synchronous-only and returns explicit failed futures for retrieval; see UPGRADING.md.
 
 

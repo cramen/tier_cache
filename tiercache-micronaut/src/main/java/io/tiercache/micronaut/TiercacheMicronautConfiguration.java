@@ -1,5 +1,6 @@
 package io.tiercache.micronaut;
 
+import io.tiercache.invalidation.JournalProtocol;
 import io.lettuce.core.ClientOptions;
 import io.lettuce.core.RedisClient;
 import io.lettuce.core.SocketOptions;
@@ -77,6 +78,9 @@ public class TiercacheMicronautConfiguration {
     @Bean(preDestroy = "shutdown")
     @Requires(missingBeans = RemoteCache.class)
     RedisClient tiercacheRedisClient(TiercacheProperties properties) {
+        if (properties.getInvalidation().isEnabled()) {
+            JournalProtocol.requireCapacity(properties.getInvalidation().getJournalCapacity());
+        }
         if (properties.getRedisUri() == null || properties.getRedisUri().isBlank()) {
             throw new IllegalStateException(
                     "tiercache.redis-uri is required when tiercache.enabled=true "
@@ -97,6 +101,7 @@ public class TiercacheMicronautConfiguration {
     @Requires(property = "tiercache.invalidation.enabled", notEquals = "false")
     RedisStreamJournal tiercacheInvalidationJournal(RedisClient tiercacheRedisClient,
             TiercacheProperties properties) {
+        JournalProtocol.requireCapacity(properties.getInvalidation().getJournalCapacity());
         return new RedisStreamJournal(tiercacheRedisClient.connect(ByteArrayCodec.INSTANCE),
                 properties.getInvalidation().getJournalCapacity(), new JdkCacheSerializer<>());
     }

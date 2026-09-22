@@ -49,15 +49,15 @@ abstract class AbstractPubSubLossTest extends AbstractInvalidationChaosTest {
             String uri = uri(server);
             SimpleMeterRegistry registry = new SimpleMeterRegistry();
             MicrometerCacheMetrics metricsB = new MicrometerCacheMetrics(registry);
-            // Tiny journal window: 2 entries.
-            Side a = new Side(io.lettuce.core.RedisClient.create(uri), uri, 2);
-            Side b = new Side(io.lettuce.core.RedisClient.create(uri), uri, 2, metricsB, metricsB);
+            // Valid protocol floor; enough writes below to exceed approximate retention.
+            Side a = new Side(io.lettuce.core.RedisClient.create(uri), uri, 65);
+            Side b = new Side(io.lettuce.core.RedisClient.create(uri), uri, 65, metricsB, metricsB);
             try {
                 a.cache.put("keep", "v");
                 assertEquals("v", b.cache.get("keep")); // warm B's L1
 
                 b.transport.disconnect();
-                for (int i = 0; i < 5; i++) { // overflow the window
+                for (int i = 0; i < 300; i++) { // overflow even with approximate Redis MAXLEN
                     a.cache.put("flood-" + i, "v" + i);
                 }
                 Thread.sleep(300);
@@ -65,6 +65,11 @@ abstract class AbstractPubSubLossTest extends AbstractInvalidationChaosTest {
 
                 // Overflow -> asynchronously scheduled baseline-and-clear on reconnect.
                 b.transport.reconnect();
+                waitFor(() -> {
+                    var dropped = registry.find("tiercache.invalidation").tag("cache", CACHE)
+                            .tag("direction", "dropped").counter();
+                    return dropped != null && dropped.count() > 0;
+                });
                 // After the flush, reads re-resolve from L2: B agrees with L2.
                 waitFor(() -> java.util.Objects.equals(l2Truth(b, "keep"), b.cache.get("keep")));
                 assertEquals(l2Truth(b, "keep"), b.cache.get("keep"));

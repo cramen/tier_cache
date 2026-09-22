@@ -1,5 +1,6 @@
 package io.tiercache.redis;
 
+import io.tiercache.invalidation.JournalProtocol;
 import io.lettuce.core.Limit;
 import io.lettuce.core.Range;
 import io.lettuce.core.StreamMessage;
@@ -70,7 +71,7 @@ public final class RedisStreamJournal implements InvalidationJournal {
      *
      * @param connection    the connection to issue stream commands on
      * @param capacity      maximum entries kept per cache stream (approximate
-     *                      MAXLEN trimming)
+     *                      MAXLEN trimming), at least {@value JournalProtocol#MIN_CAPACITY}
      * @param keySerializer serializer for message keys
      * @since 0.1.0
      */
@@ -87,15 +88,15 @@ public final class RedisStreamJournal implements InvalidationJournal {
      *
      * @param connection      the connection to issue stream commands on
      * @param capacity        maximum entries kept per cache stream
-     *                        (approximate MAXLEN trimming)
+     *                        (approximate MAXLEN trimming), at least {@value JournalProtocol#MIN_CAPACITY}
      * @param keySerializer   serializer for message keys
      * @param valueSerializer serializer for UPDATE payloads
      * @since 1.2.1
      */
     public RedisStreamJournal(StatefulRedisConnection<byte[], byte[]> connection, int capacity,
             CacheSerializer<Object> keySerializer, CacheSerializer<Object> valueSerializer) {
+        this.capacity = JournalProtocol.requireCapacity(capacity);
         this.commands = connection.sync();
-        this.capacity = capacity;
         this.keySerializer = keySerializer;
         this.valueSerializer = valueSerializer;
     }

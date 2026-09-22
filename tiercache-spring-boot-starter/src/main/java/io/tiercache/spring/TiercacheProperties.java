@@ -1,5 +1,6 @@
 package io.tiercache.spring;
 
+import io.tiercache.invalidation.JournalProtocol;
 import io.tiercache.CacheOverride;
 import io.tiercache.CacheSettings;
 import io.tiercache.NullPolicy;
@@ -179,7 +180,7 @@ public class TiercacheProperties {
         private String profile = "pubsub";
 
         /** Max journal entries kept per cache stream. */
-        private int journalCapacity = 10_000;
+        private int journalCapacity = JournalProtocol.DEFAULT_CAPACITY;
 
         /**
          * Returns whether cross-instance invalidation is active.

@@ -140,11 +140,11 @@ class RedisStreamJournalTest {
 
     @Test
     void trimmedCursorIsDetected() {
-        RedisStreamJournal journal = new RedisStreamJournal(client.connect(ByteArrayCodec.INSTANCE), 3,
+        RedisStreamJournal journal = new RedisStreamJournal(client.connect(ByteArrayCodec.INSTANCE), 65,
                 new JdkCacheSerializer<>());
         UUID origin = UUID.randomUUID();
         // Approximate MAXLEN trims lazily, so drive the stream far past the
-        // window: 200 appends to a capacity-3 journal guarantee real trims.
+        // window: 200 appends to a capacity-65 journal guarantee real trims.
         for (int i = 1; i <= 200; i++) {
             journal.append("trimmed", new InvalidationMessage("trimmed", "k" + i,
                     new Version(i, origin), origin, InvalidationMessage.Type.INVALIDATE));
@@ -195,14 +195,14 @@ class RedisStreamJournalTest {
      */
     @Test
     void trimCounterIncrementsOnTheLuaWritePaths() {
-        RedisStreamJournal journal = new RedisStreamJournal(client.connect(ByteArrayCodec.INSTANCE), 3,
+        RedisStreamJournal journal = new RedisStreamJournal(client.connect(ByteArrayCodec.INSTANCE), 65,
                 new JdkCacheSerializer<>());
         LettuceRemoteCache<String, String> cache = LettuceRemoteCache.<String, String>builder(redisUri)
                 .cacheName("jctr")
                 .journal(journal)
                 .build();
         io.tiercache.VersionGenerator versions = new io.tiercache.VersionGenerator();
-        for (int i = 0; i < 200; i++) { // capacity 3: trims are guaranteed
+        for (int i = 0; i < 200; i++) { // capacity 65: trims are guaranteed
             cache.put("k" + i, StoredEntry.ofValue("v", versions.next()), Duration.ofMinutes(1));
         }
         var probe = client.connect(ByteArrayCodec.INSTANCE);
@@ -224,7 +224,7 @@ class RedisStreamJournalTest {
      */
     @Test
     void checkedReadNeverReturnsATornPrefix() throws Exception {
-        RedisStreamJournal journal = new RedisStreamJournal(client.connect(ByteArrayCodec.INSTANCE), 10,
+        RedisStreamJournal journal = new RedisStreamJournal(client.connect(ByteArrayCodec.INSTANCE), 65,
                 new JdkCacheSerializer<>());
         UUID origin = UUID.randomUUID();
         String cursor = null;
