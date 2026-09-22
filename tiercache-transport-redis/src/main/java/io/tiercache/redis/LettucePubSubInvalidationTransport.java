@@ -111,24 +111,31 @@ public final class LettucePubSubInvalidationTransport implements InvalidationTra
     }
 
     @Override
-    public void publish(InvalidationMessage message) {
-        byte[] keyBytes = message.key() != null ? keySerializer.toBytes(message.key()) : null;
-        InvalidationMessage toSend = message;
-        if (message.type() == InvalidationMessage.Type.UPDATE) {
-            byte[] payloadBytes = valueSerializer.toBytes(message.payload());
-            if (payloadBytes.length > payloadCapBytes) {
-                // Oversized payload: degrade to plain INVALIDATE.
-                toSend = new InvalidationMessage(message.cache(), message.key(),
-                        message.version(), message.originInstanceId(),
-                        InvalidationMessage.Type.INVALIDATE);
-            } else {
-                toSend = new InvalidationMessage(message.cache(), message.key(),
-                        message.version(), message.originInstanceId(),
-                        message.type(), payloadBytes);
+    public void publish(InvalidationMessage message) { publishAsync(message); }
+
+    @Override
+    public java.util.concurrent.CompletionStage<io.tiercache.spi.PublicationOutcome> publishAsync(InvalidationMessage message) {
+        try {
+            byte[] keyBytes = message.key() != null ? keySerializer.toBytes(message.key()) : null;
+            InvalidationMessage toSend = message;
+            if (message.type() == InvalidationMessage.Type.UPDATE) {
+                byte[] payloadBytes = valueSerializer.toBytes(message.payload());
+                if (payloadBytes.length > payloadCapBytes) {
+                    // Oversized payload: degrade to plain INVALIDATE.
+                    toSend = new InvalidationMessage(message.cache(), message.key(),
+                            message.version(), message.originInstanceId(),
+                            InvalidationMessage.Type.INVALIDATE);
+                } else {
+                    toSend = new InvalidationMessage(message.cache(), message.key(),
+                            message.version(), message.originInstanceId(),
+                            message.type(), payloadBytes);
+                }
             }
+            return connection.async().publish(channelName(message.cache()),
+                    MessageCodec.encode(toSend, keyBytes)).thenApply(ignored -> io.tiercache.spi.PublicationOutcome.ACKNOWLEDGED);
+        } catch (RuntimeException e) {
+            return java.util.concurrent.CompletableFuture.failedFuture(e);
         }
-        connection.async().publish(channelName(message.cache()),
-                MessageCodec.encode(toSend, keyBytes));
     }
 
     @Override

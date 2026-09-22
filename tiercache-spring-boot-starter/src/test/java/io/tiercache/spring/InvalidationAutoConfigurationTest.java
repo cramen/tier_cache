@@ -79,6 +79,11 @@ class InvalidationAutoConfigurationTest {
                     .incrementAndGet();
         }
 
+        final java.util.concurrent.atomic.AtomicLong acknowledged = new java.util.concurrent.atomic.AtomicLong();
+        @Override public void onPublication(String cache, io.tiercache.spi.PublicationOutcome outcome, long count) {
+            if (outcome == io.tiercache.spi.PublicationOutcome.ACKNOWLEDGED) acknowledged.addAndGet(count);
+        }
+
         int count(Direction direction) {
             var counter = counts.get(direction);
             return counter == null ? 0 : counter.get();
@@ -129,6 +134,7 @@ class InvalidationAutoConfigurationTest {
                                     awaitTrue(() -> listenerA.count(
                                                     io.tiercache.spi.CacheMetricsListener.Direction.SENT) >= 1,
                                             "A's listener must count SENT");
+                                    awaitTrue(() -> listenerA.acknowledged.get() == 1, "A's listener must count actual publication acknowledgement");
                                     awaitTrue(() -> listenerB.count(
                                                     io.tiercache.spi.CacheMetricsListener.Direction.RECEIVED) >= 1,
                                             "B's listener must count RECEIVED");
@@ -162,6 +168,11 @@ class InvalidationAutoConfigurationTest {
                         assertThat(counter).as("invalidation SENT must reach the auto-configured "
                                 + "Micrometer listener").isNotNull();
                         assertThat(counter.count()).isGreaterThanOrEqualTo(1.0);
+                        awaitTrue(() -> {
+                            var acknowledged = registry.find("tiercache.invalidation.publish")
+                                    .tags("cache", "m", "outcome", "acknowledged").counter();
+                            return acknowledged != null && acknowledged.count() == 1;
+                        }, "publication completion must reach the configured registry");
                     });
         }
     }

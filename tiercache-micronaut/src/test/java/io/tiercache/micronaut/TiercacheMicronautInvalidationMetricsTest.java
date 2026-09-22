@@ -69,6 +69,11 @@ class TiercacheMicronautInvalidationMetricsTest {
             counts.computeIfAbsent(direction, d -> new AtomicInteger()).incrementAndGet();
         }
 
+        final java.util.concurrent.atomic.AtomicLong acknowledged = new java.util.concurrent.atomic.AtomicLong();
+        @Override public void onPublication(String cache, io.tiercache.spi.PublicationOutcome outcome, long count) {
+            if (outcome == io.tiercache.spi.PublicationOutcome.ACKNOWLEDGED) acknowledged.addAndGet(count);
+        }
+
         int count(Direction direction) {
             var counter = counts.get(direction);
             return counter == null ? 0 : counter.get();
@@ -84,18 +89,19 @@ class TiercacheMicronautInvalidationMetricsTest {
     }
 
     @Test
-    void customListenerReceivesInvalidationMetrics() {
+    void customListenerReceivesInvalidationMetrics() throws Exception {
         try (ApplicationContext context = ApplicationContext.run(config(), "custom-listener-test")) {
             RecordingListener listener = context.getBean(RecordingListener.class);
             context.getBean(TierCacheFactory.class).getCache("m").put("k", "v");
             assertThat(listener.count(CacheMetricsListener.Direction.SENT))
                     .as("the custom listener must count invalidation SENT (pre-fix: NOOP)")
                     .isGreaterThanOrEqualTo(1);
+            awaitPublication(() -> listener.acknowledged.get() == 1);
         }
     }
 
     @Test
-    void autoCreatedListenerCountsInvalidations() {
+    void autoCreatedListenerCountsInvalidations() throws Exception {
         try (ApplicationContext context = ApplicationContext.run(config(), "registry-listener-test")) {
             SimpleMeterRegistry registry = context.getBean(SimpleMeterRegistry.class);
             context.getBean(TierCacheFactory.class).getCache("m").put("k", "v");
@@ -103,6 +109,11 @@ class TiercacheMicronautInvalidationMetricsTest {
             assertThat(counter).as("invalidation SENT must reach the auto-created listener")
                     .isNotNull();
             assertThat(counter.count()).isGreaterThanOrEqualTo(1.0);
+            awaitPublication(() -> {
+                var acknowledged = registry.find("tiercache.invalidation.publish")
+                        .tags("cache", "m", "outcome", "acknowledged").counter();
+                return acknowledged != null && acknowledged.count() == 1;
+            });
         }
     }
 
@@ -115,4 +126,10 @@ class TiercacheMicronautInvalidationMetricsTest {
             assertThat(context.containsBean(TierCacheFactory.class)).isTrue();
         }
     }
+    private static void awaitPublication(java.util.function.BooleanSupplier condition) throws Exception {
+        long until = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
+        while (!condition.getAsBoolean() && System.nanoTime() < until) Thread.sleep(5);
+        org.junit.jupiter.api.Assertions.assertTrue(condition.getAsBoolean());
+    }
+
 }

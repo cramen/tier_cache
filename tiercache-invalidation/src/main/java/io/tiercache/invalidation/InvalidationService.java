@@ -27,6 +27,7 @@ public final class InvalidationService implements InvalidationHandler {
     private final UUID originInstanceId;
     private final InvalidationListener listener;
     private final CacheMetricsListener metrics;
+    private final PublicationObserver publications;
     private final java.util.function.LongSupplier clock;
     private volatile InvalidationEventListener eventListener = InvalidationEventListener.NOOP;
     private final Map<String, CacheState> states = new ConcurrentHashMap<>();
@@ -86,6 +87,7 @@ public final class InvalidationService implements InvalidationHandler {
         this.originInstanceId = Objects.requireNonNull(originInstanceId);
         this.listener = listener == null ? InvalidationListener.NOOP : listener;
         this.metrics = metrics == null ? CacheMetricsListener.NOOP : metrics;
+        this.publications = new PublicationObserver(this.metrics, clock);
         transport.setMetricsListener(this.metrics);
         transport.setGapHandler(new InvalidationGapHandler() {
             public CompletionStage<RecoveryResult> reset(String cache) { return resetAsync(cache); }
@@ -144,6 +146,7 @@ public final class InvalidationService implements InvalidationHandler {
         synchronized (lifecycle) {
             if (closed) return;
             state = states.computeIfAbsent(cache, CacheState::new);
+            publications.register(cache);
             synchronized (state) {
                 if (state.ready && state.subscription != null && !resetRegistration) {
                     state.target = target;
@@ -203,6 +206,9 @@ public final class InvalidationService implements InvalidationHandler {
     @Override
     public void onLocalWrite(String cache, Object key, Version version, InvalidationMessage.Type type) {
         if (closed) return;
+        InvalidationMessage message = new InvalidationMessage(cache, key, version, originInstanceId, type);
+        PublicationObserver.Attempt attempt = publications.admit(cache);
+        if (attempt == null) return;
         if (type == InvalidationMessage.Type.EVICT_ALL) {
             CacheState state = states.get(cache);
             if (state != null) synchronized (state) {
@@ -210,16 +216,28 @@ public final class InvalidationService implements InvalidationHandler {
                 if (state.pending) { state.replay = true; state.lastResult = null; schedule(state); }
             }
         }
-        transport.publish(new InvalidationMessage(cache, key, version, originInstanceId, type));
-        observe(() -> metrics.onInvalidation(cache, CacheMetricsListener.Direction.SENT));
+        publish(message, attempt);
     }
 
     @Override
     public void onLocalUpdate(String cache, Object key, Object value, Version version) {
         if (closed) return;
-        transport.publish(new InvalidationMessage(cache, key, version, originInstanceId,
-                InvalidationMessage.Type.UPDATE, value));
-        observe(() -> metrics.onInvalidation(cache, CacheMetricsListener.Direction.SENT));
+        InvalidationMessage message = new InvalidationMessage(cache, key, version, originInstanceId,
+                InvalidationMessage.Type.UPDATE, value);
+        PublicationObserver.Attempt attempt = publications.admit(cache);
+        if (attempt == null) return;
+        publish(message, attempt);
+    }
+
+    private void publish(InvalidationMessage message, PublicationObserver.Attempt attempt) {
+        observe(() -> metrics.onInvalidation(message.cache(), CacheMetricsListener.Direction.SENT));
+        try {
+            transport.publishAsync(message).whenComplete(attempt::complete);
+        } catch (Throwable failure) {
+            // Publication follows the data commit; a submission/serialization error
+            // must not turn that successful write into a reported business failure.
+            attempt.complete(null, failure);
+        }
     }
 
     private void onMessage(InvalidationMessage message, long registration) {
@@ -578,6 +596,7 @@ public final class InvalidationService implements InvalidationHandler {
         synchronized (lifecycle) {
             if (closed) return;
             closed = true;
+            publications.stopAdmission();
             recovery = aggregate;
             aggregate = null;
             aggregateTargets = Set.of();
@@ -598,6 +617,7 @@ public final class InvalidationService implements InvalidationHandler {
         ScheduledExecutorService owned;
         synchronized (executorGate) { owned = ownsExecutor ? executor : null; }
         if (owned != null) owned.shutdownNow();
+        publications.close();
         closeQuietly(transport);
     }
 }

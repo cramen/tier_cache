@@ -42,3 +42,12 @@ groups:
           severity: warning
         annotations:
           summary: "SWR revalidations failing for > 10 minutes"
+
+      # Failed PUBLISH is observable but may still represent an ambiguous command.
+      - alert: TiercachePublicationFailures
+        expr: sum by (cache) (rate(tiercache_invalidation_publish_total{outcome="failed"}[5m])) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Invalidation publication failures; inspect Redis connectivity and recovery"

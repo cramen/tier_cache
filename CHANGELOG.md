@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Invalidation publication now observes native Redis completion without delaying writes or replacing committed write results with publication errors. Compatible transport/listener defaults distinguish acknowledged, failed, legacy-unconfirmed and Streams-not-required outcomes. A bounded observer worker exports `tiercache.invalidation.publish` batches with rate-limited sanitized diagnostics; SENT remains the submission-attempt counter. Late completion cannot restart closed observers; see docs/observability.md.
+
+
 - Built-in invalidation journals now reject capacities <=64 before connection use, with one shared 64-event cadence and minimum-capacity definition across Redis, Spring and Micronaut. The minimum is 65 (cursor row plus 64 later events), the default remains 10000, and disabled journals ignore unused capacity settings. This prevents avoidable cursor-baseline loss; sufficient outage retention still requires workload sizing.
 
 

@@ -64,6 +64,10 @@ public final class LettuceStreamsInvalidationTransport implements InvalidationTr
         this.instanceId = Objects.requireNonNull(instanceId); this.stable = stable;
     }
     @Override public void publish(InvalidationMessage message) { /* the journal row is the durable event */ }
+    @Override public java.util.concurrent.CompletionStage<io.tiercache.spi.PublicationOutcome> publishAsync(InvalidationMessage message) {
+        return java.util.concurrent.CompletableFuture.completedFuture(io.tiercache.spi.PublicationOutcome.NOT_REQUIRED);
+    }
+
     @Override public void setGapHandler(InvalidationGapHandler handler) { gaps = handler; }
     @Override public void setMetricsListener(CacheMetricsListener listener) { metrics = listener == null ? CacheMetricsListener.NOOP : listener; }
     @Override public boolean requiresRegistrationReset() { return true; }

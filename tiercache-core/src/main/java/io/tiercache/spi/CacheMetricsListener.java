@@ -63,6 +63,9 @@ public interface CacheMetricsListener {
         DROPPED
     }
 
+    /** Batched terminal publication outcomes, dispatched outside transport I/O threads. */
+    default void onPublication(String cache, PublicationOutcome outcome, long count) { }
+
     /** Streams failure category; labels must never contain row IDs, keys or exception text. */
     enum StreamResult { DECODE_FAILED, APPLY_FAILED, ACK_FAILED, RESYNC_FAILED }
 

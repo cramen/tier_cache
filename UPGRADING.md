@@ -7,6 +7,23 @@ target versions.
 
 For the full list of additions and fixes, see [CHANGELOG.md](CHANGELOG.md).
 
+## Unreleased: observable invalidation publication
+
+The void transport method remains available; legacy implementations adapt to
+UNCONFIRMED through the new default publishAsync method. Native Pub/Sub completion
+supplies actual Redis acknowledgement or a failed stage, while Streams reports
+NOT_REQUIRED. Existing metrics listeners remain compatible through a default
+batched publication callback. No mandatory Micrometer dependency was added.
+
+SENT records attempted submission, not successful delivery. Use the new
+`tiercache.invalidation.publish` outcome counters and dashboard panels. Terminal
+callbacks run on a bounded observer worker; counts may appear after the cache call
+returns. Observer errors and failed publication do not replace committed write
+results. Direct void Pub/Sub callers should use publishAsync to observe submission
+errors as well as late failures. No automatic republish or stronger delivery
+recovery guarantee is introduced. Close drains available observations for at most
+one second, with best-effort export after backend shutdown.
+
 ## Unreleased: invalidation journal capacity floor
 
 Enabled built-in journals now reject `tiercache.invalidation.journal-capacity`

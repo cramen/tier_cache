@@ -108,6 +108,14 @@ public final class MicrometerCacheMetrics
                 direction.name().toLowerCase()).increment();
     }
 
+    private final Map<String, Counter> publicationCounters = new ConcurrentHashMap<>();
+
+    @Override
+    public void onPublication(String cache, io.tiercache.spi.PublicationOutcome outcome, long count) {
+        counter(publicationCounters, cache, "invalidation.publish", "outcome",
+                outcome.name().toLowerCase(java.util.Locale.ROOT)).increment(count);
+    }
+
     private final Map<String, Counter> streamFailures = new ConcurrentHashMap<>();
 
     @Override
