@@ -6,13 +6,11 @@ attributes into configuration. Cache method bodies do not change.
 
 ## Why migrate
 
-JetCache is effectively frozen: the upstream project shows no active
-maintenance (the last releases date to the 2.7.x line), and known gaps —
-limited observability, no first-class degradation handling — will not be
-addressed. Tiercache covers the same ground (in-process + Redis two-level
-cascade behind annotations) and adds the failure-mode protections,
-fail-fast config validation, and metrics a two-level cache needs in
-production. See [README](../README.md) for the feature list.
+Tiercache provides an in-process + Redis two-level cache through standard
+Spring Cache annotations, with built-in failure-mode protections,
+fail-fast configuration validation, and metrics. Migration can be useful
+when these features match your application's requirements. See
+[README](../README.md) for the feature list.
 
 ## Annotation mapping
 

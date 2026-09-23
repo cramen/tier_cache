@@ -155,7 +155,7 @@ Work should land in roadmap order — do not build phase 2+ features before the 
 ## Competitive context (why decisions look this way)
 
 - **Spring Cache** has no multi-level support — `CompositeCacheManager` never warms L1 on L2 hit; this defect must be impossible by construction here.
-- **JetCache** is frozen; **Redisson** paywalls near-cache eviction and per-entry TTL (PRO); **Hazelcast** is a platform, not a library over existing Redis; **caffeinated-redis** lacks stampede protection, degradation handling, and null semantics. Our differentiators: completeness of failure-mode protection, observability, zero-config migration, and infrastructural reliability.
+- **Redisson** paywalls near-cache eviction and per-entry TTL (PRO); **Hazelcast** is a platform, not a library over existing Redis; **caffeinated-redis** lacks stampede protection, degradation handling, and null semantics. Our differentiators: completeness of failure-mode protection, observability, zero-config migration, and infrastructural reliability.
 - Framework market is fragmented (Spring Boot ~42%, Micronaut ~39%) — hence framework-independent core + thin adapters. Post-GA candidates: Micronaut/Quarkus modules via the same SPI, without bloating core.
 
 # Coding guide

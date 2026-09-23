@@ -17,6 +17,7 @@ out/
 .classpath
 .project
 .settings/
+.agents
 
 # OS
 .DS_Store
