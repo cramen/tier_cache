@@ -106,10 +106,10 @@ public final class SentinelProbe {
                 do {
                     ca.getOrCompute("recover-a-"+System.nanoTime(), k -> "probe");
                     cb.getOrCompute("recover-b-"+System.nanoTime(), k -> "probe");
-                    if (!fa.isDegraded() && !fb.isDegraded()) break;
+                    if (fa.breakerState() == BreakerState.CLOSED && fb.breakerState() == BreakerState.CLOSED) break;
                     Thread.sleep(100);
                 } while (System.nanoTime()<deadline);
-                assertFalse(fa.isDegraded()); assertFalse(fb.isDegraded());
+                assertEquals(BreakerState.CLOSED, fa.breakerState()); assertEquals(BreakerState.CLOSED, fb.breakerState());
                 assertEquals(changedRowsBefore, journal.readRange("sentinel", "0-0").stream()
                     .filter(row -> "changed".equals(row.message().key())).count(), "offline eviction was not journaled");
                 String observed=cb.get("changed");
@@ -123,7 +123,7 @@ public final class SentinelProbe {
                     observed=cb.get("changed");
                     // Both breakers must complete recovery before asserting a new distributed write.
                     ca.getOrCompute("recovery-probe-"+System.nanoTime(), k -> "probe");
-                    if ("v2".equals(observed) && mb.replayed.get()>0 && !fb.isDegraded() && !fa.isDegraded()) break;
+                    if ("v2".equals(observed) && mb.replayed.get()>0 && fb.breakerState() == BreakerState.CLOSED && fa.breakerState() == BreakerState.CLOSED) break;
                     Thread.sleep(100);
                 } while(System.nanoTime()<deadline);
                 assertEquals("v2",observed);
@@ -131,7 +131,7 @@ public final class SentinelProbe {
                 int hits = mb.l1Hits.get();
                 assertEquals("stable",cb.get("unaffected"));
                 assertEquals(hits+1, mb.l1Hits.get(), "verified-history recovery preserves unaffected L1 entries");
-                assertFalse(fb.isDegraded()); assertFalse(fa.isDegraded());
+                assertEquals(BreakerState.CLOSED, fb.breakerState()); assertEquals(BreakerState.CLOSED, fa.breakerState());
                 // New writes, locks (getOrCompute), journal and cross-instance delivery after promotion.
                 ca.put("after", "v2");
                 assertEquals("v2", cb.get("after"));
