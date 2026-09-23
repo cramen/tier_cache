@@ -381,8 +381,8 @@ retain their literal identities. Malformed Unicode fails before mutation.
 Data and control keys occupy separate `tiercache:v2:*` families. The logical
 journal identity remains `users` in both framework examples.
 
-There is no legacy/v2 compatibility switch. This unreleased format requires
-a major release and a coordinated cold cutover; an ordinary mixed-version
+There is no legacy/v2 compatibility switch. Version 2.0.0 requires
+a coordinated cold cutover; an ordinary mixed-version
 rolling upgrade is unsafe. See [exact layouts, clear limits, migration and
 rollback](redis-keyspace-v2.md). Clear removes only data in its own namespace,
 using a non-transactional scan; its journal append is a separate operation.

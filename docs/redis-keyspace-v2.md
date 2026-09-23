@@ -8,12 +8,9 @@ use different cache data, journals, channels and locks. They cannot safely
 serve shared cached data during an ordinary rolling upgrade.
 
 The published [compatibility policy](../README.md#compatibility-and-versioning)
-reserves incompatible documented behavior for a **major release**. Therefore
-this change must ship in a major release with these migration instructions;
-it is not a compatible 1.x patch or minor update. The current development
-snapshot coordinate does not override that requirement. Exact release
-numbering and publication remain a release-owner decision; this change does
-not assign or publish a release version.
+reserves incompatible documented behavior for a **major release**. This change
+ships in **2.0.0** and requires the migration below; it is not a compatible
+1.x patch or minor update.
 
 ## Exact addresses
 

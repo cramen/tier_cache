@@ -7,7 +7,7 @@ target versions.
 
 For the full list of additions and fixes, see [CHANGELOG.md](CHANGELOG.md).
 
-## Unreleased: observable invalidation publication
+## 2.0.0: observable invalidation publication
 
 The void transport method remains available; legacy implementations adapt to
 UNCONFIRMED through the new default publishAsync method. Native Pub/Sub completion
@@ -24,7 +24,7 @@ errors as well as late failures. No automatic republish or stronger delivery
 recovery guarantee is introduced. Close drains available observations for at most
 one second, with best-effort export after backend shutdown.
 
-## Unreleased: invalidation journal capacity floor
+## 2.0.0: invalidation journal capacity floor
 
 Enabled built-in journals now reject `tiercache.invalidation.journal-capacity`
 values <=64, including the exact boundary 64. Configure at least 65; the confirmed
@@ -38,7 +38,7 @@ receivers and scheduled recovery delays. Redis trimming remains approximate, and
 read failures or real history loss can still require a conservative L1 reset.
 See [journal sizing](docs/sizing-and-ttl.md#journal-capacity).
 
-## Unreleased: complete Spring async retrieval
+## 2.0.0: complete Spring async retrieval
 
 Managed Spring caches now use the factory's bounded async view for both retrieve
 methods introduced in Spring 6.1. Single-argument retrieval no longer blocks its
@@ -54,7 +54,7 @@ views. This changes its former blocking single-argument retrieval behavior.
 See [Spring async retrieval](docs/migration-from-spring-cache.md#asynchronous-retrieval)
 for wrappers, cached nulls, bounded execution and cancellation.
 
-## Unreleased: value-bound local freshness
+## 2.0.0: value-bound local freshness
 
 Degradation freshness now lives with the retained L1 entry instead of an
 independently expiring metadata map. Freshness and allowed stale serving no longer
@@ -69,7 +69,7 @@ creation rejects that combination. Built-in Caffeine already supports it.
 Redis frames and remote timestamps are unchanged. The window remains off by
 default and does not heal writes performed while Redis was unavailable.
 
-## Unreleased: lock-provider and factory shutdown
+## 2.0.0: lock-provider and factory shutdown
 
 Client-backed lock providers now close the dedicated connections they create;
 caller-supplied clients and connections remain caller-owned. Derived providers
@@ -82,7 +82,7 @@ recovery. Continued cluster coherence is not promised. Async shutdown semantics,
 constructor signatures, stored data and lease/compensation settings are unchanged.
 See [resource ownership and shutdown](docs/resource-lifecycle.md).
 
-## Unreleased: Redis keyspace v2 (breaking; major release required)
+## 2.0.0: Redis keyspace v2 (breaking)
 
 The built-in Redis/Valkey transport now uses separate v2 data, tag, journal,
 channel, group and lock addresses. This fixes cross-cache deletion by clear
@@ -90,9 +90,8 @@ for hierarchical names (`user` / `user:roles`) and glob-containing names
 (`a?` / `a1`). Java cache APIs and value frames are unchanged, but active
 old/new instances are **not rolling-compatible**.
 
-The published compatibility policy requires a major release for this
-operational break. Do not publish it as a compatible 1.x patch/minor upgrade;
-the current development snapshot is not a release-version decision.
+Version 2.0.0 carries this operational break under the published major-release
+compatibility policy. It is not a compatible 1.x patch/minor upgrade.
 
 Follow the [v2 migration guide](docs/redis-keyspace-v2.md): quiesce traffic or
 source mutations, drain and stop all old requests/loaders/publishers, start
@@ -101,7 +100,7 @@ V2 never reads, copies, subscribes to or deletes legacy state. Rollback also
 requires a drained cutover and clean isolated cache storage. Whole-cache
 clear remains a non-transactional scan followed by a separate journal append.
 
-## Unreleased: asynchronous invalidation recovery
+## 2.0.0: asynchronous invalidation recovery
 
 Replay no longer runs under state monitors or inline in the successful probe
 or reconnect callback. The breaker stays HALF_OPEN until its recovery epoch
@@ -118,7 +117,7 @@ hooks. Custom callers must await the completion stage when they require
 settled recovery; returning from the old void callback is no longer that
 boundary. See [the recovery contract](docs/recovery.md).
 
-## Unreleased: Streams pending recovery
+## 2.0.0: Streams pending recovery
 
 Streams now drains its own pending work before new rows and resumes only
 inside the receiver's own group. Poison/missing rows require a committed
@@ -137,7 +136,7 @@ event to be the cursor row. Existing custom journals may retain a valid typed
 anchor. Corrupt unconsumed rows now raise sanitized typed failures. See
 [Streams recovery and operator procedures](docs/streams-recovery.md).
 
-## 1.5.0 (unreleased)
+## 2.0.0: custom transport migration
 
 ### Custom transports: versioned tagged writes
 

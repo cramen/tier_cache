@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-09-23
+
 ### Changed
 
 - Documentation clarification (2026-09-23): historical claims below that whole-cache clear and journal append are atomic, that reconnect never flushes L1, or that every failure is diagnosable from metrics alone are superseded. SCAN clear and EVICT_ALL append are separate; unverifiable history (including read failure) can require fallback clear, while unstored events cannot be replayed. See docs/configuration.md, docs/recovery.md and docs/troubleshooting.md. This clarification does not retroactively claim that older releases passed current gates.
@@ -17,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Added pinned Redis 6.2/7.4/8.x and Valkey contract profiles, isolated Spring Boot 3.5/4.1 published-artifact consumer checks, and a Docker Sentinel regression for planned promotion, abrupt primary loss and full outage. Evidence records dependency graphs, image identities, topology and observed value versions. Redis Cluster remains unsupported; see docs/compatibility.md.
 
-- **BREAKING — major release required:** the built-in Redis keyspace moves to v2. Complete cache names are encoded without delimiter/glob ambiguity, and data, tags, journals, channels, consumer groups and rebuild locks have separate address families. Clearing one cache can no longer delete another cache's data or library control state. Old/new active deployments require a coordinated cold cutover; no legacy reads, event bridge or automatic cleanup are provided. See UPGRADING.md and docs/redis-keyspace-v2.md. Value frames and application serializers are unchanged; whole-cache clear is still non-transactional.
+- **BREAKING:** the built-in Redis keyspace moves to v2. Complete cache names are encoded without delimiter/glob ambiguity, and data, tags, journals, channels, consumer groups and rebuild locks have separate address families. Clearing one cache can no longer delete another cache's data or library control state. Old/new active deployments require a coordinated cold cutover; no legacy reads, event bridge or automatic cleanup are provided. See UPGRADING.md and docs/redis-keyspace-v2.md. Value frames and application serializers are unchanged; whole-cache clear is still non-transactional.
 
 ### Fixed
 

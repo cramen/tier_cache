@@ -25,7 +25,7 @@ The cache is eventually consistent by design; no strong-consistency guarantees a
 
 ```kotlin
 // build.gradle.kts
-implementation("io.github.cramen:tiercache-spring-boot-starter:1.4.0")
+implementation("io.github.cramen:tiercache-spring-boot-starter:2.0.0")
 ```
 
 ```yaml
@@ -41,7 +41,7 @@ The starter replaces the standard cache manager: `@Cacheable` / `@CachePut` / `@
 
 ```kotlin
 // build.gradle.kts
-implementation("io.github.cramen:tiercache-micronaut:1.4.0")
+implementation("io.github.cramen:tiercache-micronaut:2.0.0")
 ```
 
 ```yaml
@@ -57,8 +57,8 @@ The module replaces Micronaut's `DefaultCacheManager`: `@Cacheable` / `@CachePut
 
 ```kotlin
 // build.gradle.kts
-implementation("io.github.cramen:tiercache-core:1.4.0")
-implementation("io.github.cramen:tiercache-transport-redis:1.4.0")
+implementation("io.github.cramen:tiercache-core:2.0.0")
+implementation("io.github.cramen:tiercache-transport-redis:2.0.0")
 ```
 
 ```java
@@ -102,10 +102,10 @@ Reads cascade L1 → L2 → loader; concurrent loads of the same key share one l
 
 ## Compatibility and versioning
 
-The unreleased Redis keyspace v2 is a breaking operational change and must
-ship in a major release. It requires a coordinated cold-cache cutover;
+TierCache 2.0 introduces Redis keyspace v2, a breaking operational change.
+It requires a coordinated cold-cache cutover;
 old/new instances are not rolling-compatible. See the
-[v2 migration guide](docs/redis-keyspace-v2.md) before deploying a development build.
+[v2 migration guide](docs/redis-keyspace-v2.md) before upgrading from 1.x.
 
 All published Maven artifacts follow **semantic versioning**: patch releases for backwards-compatible fixes, minor releases for backwards-compatible additions, major releases for breaking changes.
 
