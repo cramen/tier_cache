@@ -205,6 +205,7 @@ abstract class StreamsRecoveryTest {
                 commands.xdel(stream, missing);
                 String baseline = journal.append(cache, new InvalidationMessage(cache, "tail", v, v.instanceId(), InvalidationMessage.Type.INVALIDATE));
                 var future = new CompletableFuture<RecoveryResult>(); var asked = new CountDownLatch(1);
+                var delivered = new CountDownLatch(1);
                 var initial = new RecoveryResult(RecoveryResult.Status.RESET_SAFE, "0-0", 1);
                 var current = new AtomicReference<>(initial);
                 try (var transport = new LettuceStreamsInvalidationTransport(client, CODEC, CODEC, id)) {
@@ -213,10 +214,17 @@ abstract class StreamsRecoveryTest {
                         public RecoveryResult registrationBaseline(String c) { return initial; }
                         public boolean isCurrent(String c, RecoveryResult r) { return r == current.get(); }
                     });
-                    transport.subscribe(cache, message -> { });
+                    transport.subscribe(cache, message -> {
+                        if ("after-reset".equals(message.key())) delivered.countDown();
+                    });
                     assertTrue(asked.await(5, TimeUnit.SECONDS));
                     assertEquals(1, commands.xpending(stream, group).getCount(), "claim must not silently delete the missing PEL entry");
                     var safe = new RecoveryResult(RecoveryResult.Status.RESET_SAFE, baseline, 2); current.set(safe); future.complete(safe);
+                    // A zero PEL can be transient before the reader fetches the tail.
+                    // Require delivery past the reset baseline before checking drainage.
+                    journal.append(cache, new InvalidationMessage(cache, "after-reset",
+                            new Version(2, v.instanceId()), v.instanceId(), InvalidationMessage.Type.INVALIDATE));
+                    assertTrue(delivered.await(15, TimeUnit.SECONDS));
                     await(() -> commands.xpending(stream, group).getCount() == 0);
                 }
             }

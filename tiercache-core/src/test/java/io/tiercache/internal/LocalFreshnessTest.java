@@ -72,8 +72,10 @@ class LocalFreshnessTest {
         UUID origin=UUID.randomUUID();
         for(int i=0;i<1000;i++) r.cache.evictL1IfNewer("absent-"+i,new Version(i+1,origin));
         var rawField=L1BarrierMap.class.getDeclaredField("barriers");rawField.setAccessible(true);
-        var raw=(com.github.benmanes.caffeine.cache.Cache<?,?>)rawField.get(fences);raw.cleanUp();
-        assertTrue(raw.estimatedSize()<=2);assertTrue(generation.get()>before);
+        // PIT may load the shaded core artifact; use its declared cache interface.
+        var raw=rawField.get(fences);var cacheType=rawField.getType();
+        cacheType.getMethod("cleanUp").invoke(raw);
+        assertTrue((Long)cacheType.getMethod("estimatedSize").invoke(raw)<=2);assertTrue(generation.get()>before);
         r.breaker.onFailure();assertEquals("value",r.cache.getOrCompute("x",LocalFreshnessTest::noLoad));
         var commit=DefaultTierCache.class.getDeclaredMethod("commitL1",Object.class,StoredEntry.class,Duration.class,long.class);commit.setAccessible(true);
         assertEquals(false,commit.invoke(r.cache,"x",StoredEntry.ofValue("obsolete",new Version(1,origin)),Duration.ofMinutes(30),generation.get()));

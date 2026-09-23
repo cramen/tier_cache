@@ -60,7 +60,11 @@ def scenario(mode):
                 +f'sentinel announce-ip sentinel{i}\nsentinel announce-port 26379\n'
                 +'sentinel monitor mymaster node0 6379 2\nsentinel down-after-milliseconds mymaster 1500\n'
                 +'sentinel failover-timeout mymaster 10000\nsentinel parallel-syncs mymaster 1\n')
-            sentinels.append(start('sentinel'+str(i),['-v',str(confdir)+':/config',IMAGE,'redis-server','/config/sentinel.conf','--sentinel']))
+            # Sentinel rewrites its config. Copy the read-only host template into
+            # container-owned /data so Linux host/container UIDs need not match.
+            sentinels.append(start('sentinel'+str(i),['-v',str(confdir)+':/config:ro',IMAGE,'sh','-c',
+                'cp /config/sentinel.conf /data/sentinel.conf && '
+                'exec /usr/local/bin/docker-entrypoint.sh redis-server /data/sentinel.conf --sentinel']))
         until('all sentinels agree',lambda:topology()==0)
         until('quorum discovered',lambda:all(cli(s,'-p','26379','SENTINEL','ckquorum','mymaster').startswith('OK') for s in sentinels))
         event('ready',master=0,image=IMAGE,imageId=command(['docker','image','inspect',IMAGE,'--format','{{.Id}}']),
