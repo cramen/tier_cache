@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Bounded Sentinel regressions. Only fixture-owned Docker resources are removed."""
-import json, subprocess, time, uuid
+import ipaddress, json, subprocess, time, uuid
 from fixture_config import ROOT, PROFILES
 IMAGE=PROFILES['redis74']
 def command(args, timeout=30):
@@ -29,9 +29,10 @@ def scenario(mode):
         item=dict(time=time.time(),kind=kind,**kw);events.append(item)
         (output/'events.json').write_text(json.dumps(events,indent=2))
         print(item,flush=True)
-    def start(alias,args):
+    def start(alias,args,ip=None):
         name=token+'-'+alias;names.append(name)
-        command(['docker','run','-d','--name',name,'--network',token,'--network-alias',alias,*args])
+        address=['--ip',ip] if ip else []
+        command(['docker','run','-d','--name',name,'--network',token,'--network-alias',alias,*address,*args])
         return name
     def cli(name,*args):return command(['docker','exec',name,'redis-cli','--raw',*args],timeout=5)
     def topology():
@@ -44,13 +45,22 @@ def scenario(mode):
                 if cli(n,'ROLE').splitlines()[0]=='master':return i
         return None
     try:
-        command(['docker','network','create',token]);event('network',name=token)
+        network_ids=command(['docker','network','ls','-q']).splitlines()
+        existing=json.loads(command(['docker','network','inspect',*network_ids])) if network_ids else []
+        used=[ipaddress.ip_network(c['Subnet']) for n in existing for c in n.get('IPAM',{}).get('Config',[])
+              if c.get('Subnet') and ':' not in c['Subnet']]
+        candidates=[ipaddress.ip_network(f'10.254.{i}.0/24') for i in range(256)]
+        network=next(n for n in candidates if not any(n.overlaps(u) for u in used))
+        command(['docker','network','create','--subnet',str(network),token]);event('network',name=token,subnet=str(network))
+        node_ips=[str(network.network_address+10+i) for i in range(3)]
+        # Docker removes a stopped container's DNS name. Stable IPs let Sentinel
+        # detect primary loss without blocking on DNS for the killed container.
         nodes=[]
         for i in range(3):
-            args=[IMAGE,'redis-server','--appendonly','yes','--protected-mode','no','--replica-announce-ip',f'node{i}',
+            args=[IMAGE,'redis-server','--appendonly','yes','--protected-mode','no','--replica-announce-ip',node_ips[i],
                   '--replica-announce-port','6379']
-            if i:args+=['--replicaof','node0','6379']
-            nodes.append(start('node'+str(i),args))
+            if i:args+=['--replicaof',node_ips[0],'6379']
+            nodes.append(start('node'+str(i),args,node_ips[i]))
         until('two replicas online',lambda:'connected_slaves:2' in cli(nodes[0],'INFO','replication'))
         sentinels=[]
         for i in range(3):
@@ -58,7 +68,7 @@ def scenario(mode):
             conf=confdir/'sentinel.conf'
             conf.write_text('port 26379\nprotected-mode no\nsentinel resolve-hostnames yes\nsentinel announce-hostnames yes\n'
                 +f'sentinel announce-ip sentinel{i}\nsentinel announce-port 26379\n'
-                +'sentinel monitor mymaster node0 6379 2\nsentinel down-after-milliseconds mymaster 1500\n'
+                +f'sentinel monitor mymaster {node_ips[0]} 6379 2\nsentinel down-after-milliseconds mymaster 1500\n'
                 +'sentinel failover-timeout mymaster 10000\nsentinel parallel-syncs mymaster 1\n')
             # Sentinel rewrites its config. Copy the read-only host template into
             # container-owned /data so Linux host/container UIDs need not match.
