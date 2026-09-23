@@ -47,7 +47,7 @@ def scenario(mode):
     try:
         network_ids=command(['docker','network','ls','-q']).splitlines()
         existing=json.loads(command(['docker','network','inspect',*network_ids])) if network_ids else []
-        used=[ipaddress.ip_network(c['Subnet']) for n in existing for c in n.get('IPAM',{}).get('Config',[])
+        used=[ipaddress.ip_network(c['Subnet']) for n in existing for c in (n.get('IPAM',{}).get('Config') or [])
               if c.get('Subnet') and ':' not in c['Subnet']]
         candidates=[ipaddress.ip_network(f'10.254.{i}.0/24') for i in range(256)]
         network=next(n for n in candidates if not any(n.overlaps(u) for u in used))
