@@ -42,10 +42,10 @@ All meters are created by
 | `tiercache.invalidation.stream` | Counter | `cache`, `result` | Stream/journal failures: `decode_failed`, `apply_failed`, `ack_failed`, `resync_failed`. Counts failed attempts, not individual lost invalidations. |
 | `tiercache.invalidation.publish` | Counter | `cache`, `outcome` | Terminal publication results: `acknowledged`, `failed`, `unconfirmed`, `not_required`. Counts complete asynchronously in batches; acknowledgement means Redis accepted PUBLISH, not that receivers applied it. |
 | `tiercache.journal.size` | Gauge | `cache` | Invalidation journal entries currently held for the cache. |
-| `tiercache.last.load.age` | Gauge | `cache` | Milliseconds since the last load event for the cache, tracked from store events, not per-entry metadata. |
+| `tiercache.last.load.age` | Gauge | `cache` | Milliseconds since the last load event for the cache, tracked from `LOAD` outcomes, not every put or per-entry metadata. |
 | `tiercache.null.entries` | Counter | `cache` | Null-markers stored under the `allow` null policy. |
 | `tiercache.l2.stale.hits` | Counter | `cache` | L2 entries served stale (past logical TTL, inside the stale window). |
-| `tiercache.l2.revalidation.triggers` | Counter | `cache` | Asynchronous revalidations claimed and submitted (stale-while-revalidate and XFetch). |
+| `tiercache.l2.revalidation.triggers` | Counter | `cache` | Refresh claims before executor submission (stale-while-revalidate and XFetch); rejected submission also increments failures. |
 | `tiercache.l2.revalidation.completions` | Counter | `cache` | Revalidations that finished without error. |
 | `tiercache.l2.revalidation.failures` | Counter | `cache` | Revalidations that failed; the stale entry keeps serving until its window ends. |
 
@@ -143,16 +143,16 @@ Panels:
 
 | Panel | Query (Prometheus) |
 |---|---|
-| Request outcomes | `sum by (result) (rate(tiercache_requests_total[$5m]))` |
-| L2 latency (p99) | `histogram_quantile(0.99, sum by (le, cache) (rate(tiercache_latency_seconds_bucket{level="l2"}[$5m])))` |
-| Invalidation flow | `sum by (direction) (rate(tiercache_invalidation_total[$5m]))` |
+| Request outcomes | `sum by (result) (rate(tiercache_requests_total[5m]))` |
+| L2 latency (p99) | `histogram_quantile(0.99, sum by (le, cache) (rate(tiercache_latency_seconds_bucket{level="l2"}[5m])))` |
+| Invalidation flow | `sum by (direction) (rate(tiercache_invalidation_total[5m]))` |
 | Degraded | `max(tiercache_degraded)` |
 | Breaker state | `max(tiercache_breaker_state)` |
 | Journal size | `tiercache_journal_size` |
 | Last load age (ms) | `tiercache_last_load_age` |
-| Null entries | `sum by (cache) (rate(tiercache_null_entries_total[$5m]))` |
-| L2 stale hits | `sum by (cache) (rate(tiercache_l2_stale_hits_total[$5m]))` |
-| Revalidation triggers / completions / failures | `sum by (cache) (rate(tiercache_l2_revalidation_{triggers,completions,failures}_total[$5m]))` |
+| Null entries | `sum by (cache) (rate(tiercache_null_entries_total[5m]))` |
+| L2 stale hits | `sum by (cache) (rate(tiercache_l2_stale_hits_total[5m]))` |
+| Revalidation triggers / completions / failures | Three separate queries: `rate(tiercache_l2_revalidation_triggers_total[5m])`, `rate(tiercache_l2_revalidation_completions_total[5m])`, `rate(tiercache_l2_revalidation_failures_total[5m])` |
 
 Every query maps onto a meter in the [catalog above](#metrics-catalog).
 
@@ -163,14 +163,15 @@ with five alerts:
 
 | Alert | Severity | Fires when |
 |---|---|---|
-| `TiercacheMissGrowth` | warning | The miss rate more than doubled over 30 minutes while total traffic stayed flat (a hot-key or eviction problem, not a traffic spike). |
+| `TiercacheMissGrowth` | warning | The 10-minute miss rate exceeds twice its value 30 minutes earlier, while the total request rate is below 1.2 times its earlier value; this is a signal to investigate, not a diagnosis. |
 | `TiercacheDroppedInvalidations` | critical | A journal-backed L1 flush occurred in the last 5 minutes (`direction="dropped"`). Inspect logs to distinguish trimmed/unavailable history from a replay-read failure; the signal does not by itself prove messages were lost. |
 | `TiercacheDegraded` | critical | `tiercache_degraded` has been above 0 for 5 minutes: the cache is running L1-only and cross-instance guarantees are degraded. |
-| `TiercacheRevalidationFailures` | warning | Stale-while-revalidate revalidations have been failing for over 10 minutes: stale entries are served but never refreshed. |
+| `TiercacheRevalidationFailures` | warning | Stale-while-revalidate the failure rate stays positive for 10 minutes; successful refreshes may coexist with failures. |
 | `TiercachePublicationFailures` | warning | Publication failures persist for one minute. Inspect Redis connectivity and recovery; this is not proof that every failed command was undelivered. |
 
-Load the file into your Prometheus `rule_files` (or drop it into an
-Alertmanager/Grafana-managed rule provisioning directory).
+Load the file into your Prometheus `rule_files` or a compatible Prometheus-rule
+provisioning system. Alertmanager routes notifications; it does not evaluate
+these expressions.
 
 See [triggered recovery](recovery.md) for HALF_OPEN admission, baseline failure, bounded retries and shutdown semantics.
 
@@ -221,3 +222,29 @@ For Pub/Sub, compare the failed rate to the acknowledged-plus-failed rate. Keep
 unconfirmed and not-required series visible separately; they are capability/profile
 outcomes, not network errors. The dashboard includes these series and a failure
 fraction panel. Investigate failures alongside pending recovery and connection logs.
+
+
+## Coverage and diagnosis boundaries
+
+Request and activity counters are created as events occur, including for caches
+created on demand. The standard starters register `journal.size`,
+`last.load.age` and the JMX cache-name list for **configured** cache names; a
+runtime-created name need not appear there. Programmatic wiring supplies that
+list explicitly. Recovery-pending gauges follow active recovery registrations,
+including runtime-created caches, and are removed when those registrations close.
+Factory-level degraded/breaker gauges have no cache tag and do not aggregate
+multiple independent factories with the same meter identity.
+
+`last.load.age` is zero before a LOAD outcome has been observed; it is not an
+entry freshness gauge. `null.entries` is cumulative stores, not current occupancy.
+A revalidation completion does not by itself prove a new value was stored (a
+coordinated refresh may skip). Revalidation failures do not cover all foreground
+loader failures: inspect the application's error/latency signals as well.
+Neither zero publication failures nor Redis acknowledgement proves every
+subscriber applied every event. L1 hits have neither a timer nor a tracing span.
+
+Use the [troubleshooting runbook](troubleshooting.md) with these counters and
+logs. The sample dashboard's histogram query requires your registry to publish
+histogram buckets; the binder does not enable them itself. The sample miss alert
+uses its written rate/traffic expression, not a statistical proof of constant
+traffic or a diagnosis of the underlying cause.

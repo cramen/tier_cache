@@ -14,16 +14,18 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: "Cache misses growing at stable traffic"
+          summary: "Cache miss rate growing without a comparable increase in total traffic"
+          runbook_url: "https://github.com/cramen/tier_cache/blob/main/docs/troubleshooting.md#increased-source-load"
 
-      # Any dropped invalidation is a staleness incident.
+      # A fallback clear signals unverifiable history, not a count of lost messages.
       - alert: TiercacheDroppedInvalidations
         expr: sum(rate(tiercache_invalidation_total{direction="dropped"}[5m])) > 0
         for: 1m
         labels:
           severity: critical
         annotations:
-          summary: "Invalidation events dropped (journal window overflow)"
+          summary: "L1 fallback clear: inspect trimmed or unverifiable journal history"
+          runbook_url: "https://github.com/cramen/tier_cache/blob/main/docs/troubleshooting.md#dropped-invalidations-and-fallback-clears"
 
       # Degraded mode longer than 5 minutes.
       - alert: TiercacheDegraded
@@ -33,8 +35,9 @@ groups:
           severity: critical
         annotations:
           summary: "Cache in L1-only degraded mode > 5 minutes"
+          runbook_url: "https://github.com/cramen/tier_cache/blob/main/docs/troubleshooting.md#degraded-or-pending-recovery"
 
-      # Sustained revalidation failures: stale entries are served but never refreshed.
+      # A sustained positive failure rate can coexist with successful refreshes.
       - alert: TiercacheRevalidationFailures
         expr: sum(rate(tiercache_l2_revalidation_failures_total[5m])) > 0
         for: 10m
@@ -42,6 +45,7 @@ groups:
           severity: warning
         annotations:
           summary: "SWR revalidations failing for > 10 minutes"
+          runbook_url: "https://github.com/cramen/tier_cache/blob/main/docs/troubleshooting.md#loader-and-refresh-failures"
 
       # Failed PUBLISH is observable but may still represent an ambiguous command.
       - alert: TiercachePublicationFailures
@@ -51,3 +55,4 @@ groups:
           severity: warning
         annotations:
           summary: "Invalidation publication failures; inspect Redis connectivity and recovery"
+          runbook_url: "https://github.com/cramen/tier_cache/blob/main/docs/troubleshooting.md#publication-failures"

@@ -47,3 +47,10 @@ self-test, exception policy, commands, signature verification and comparison wit
 Central downloads. A separately rebuilt artifact is not covered by the candidate
 attestation unless its checksum matches. No historical release is retroactively
 claimed to have passed this new evidence gate.
+
+
+The [recorded trial](docs/release-evidence.md#recorded-trial-evidence--2026-09-22)
+is dated evidence for a specific commit, not acceptance of a future release.
+Application BOMs can override library versions; functional compatibility checks
+in the [platform matrix](docs/compatibility.md) do not replace scanning the final
+application dependency graph.

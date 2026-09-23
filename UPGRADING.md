@@ -351,3 +351,22 @@ Modules:
 - `tiercache-tck` — public chaos-test suite (Testcontainers) and benchmarks.
 
 Baseline requirements: JDK 17+, Redis 6.2+ or Valkey.
+
+
+## Documentation clarification — 2026-09-23
+
+Whole-cache SCAN clear and its following EVICT_ALL journal append are separate,
+non-transactional steps; neither clear nor tag/batch eviction fences concurrent
+writes. Verified replay preserves unaffected L1 entries, but missing/unverifiable
+history, including read failure inside nominal retention, can require a clear.
+A failed fallback baseline still clears conservatively while retaining the cursor
+and pending recovery. A silent gap needs a recovery trigger; journal existence
+alone does not heal it. Changes that never reached Redis cannot be reconstructed.
+
+Budget source staleness using [TTL and outage conditions](docs/sizing-and-ttl.md),
+not an unconditional one-L1-TTL bound. A fallback across a fleet can cause extra
+source traffic. Keep Spring `sync=true` for loader coalescing; null and stale
+serving remain opt-in. See [diagnosis](docs/troubleshooting.md), the
+[tested platform matrix](docs/compatibility.md) and [release evidence](docs/release-evidence.md).
+These are scope clarifications, not a new format or API migration; the separately
+documented Redis v2 cold cutover and major-version requirement still apply.

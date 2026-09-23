@@ -1,8 +1,9 @@
 # TierCache TCK (compliance suite)
 
 `tiercache-tck` is the public chaos-test suite. It runs the cache against real
-Redis/Valkey containers and proves the failure-mode protections the library
-promises. The suite classes live in the module's test source set; they ship as
+Redis/Valkey containers and checks the shipped Lettuce-based stack under specific failure scenarios.
+It is not a generic certification suite for arbitrary custom transports or
+serializers; those need their own SPI contract and integration tests. The suite classes live in the module's test source set; they ship as
 a dedicated jar with the `tests` classifier:
 
 ```
@@ -73,7 +74,7 @@ tasks.test {
 | `PubSubLossTest` | A disconnected receiver heals missed invalidations via journal replay on reconnect within the journal window; beyond the window it flushes L1 entirely. |
 | `InvalidationRaceTest` | Concurrent put/evict races across instances converge every L1 to the L2 content (versioned writes, last-write-wins) — no resurrected or stale values after quiescence. |
 | `TagAndUpdateTest` | Tag and batch invalidation across instances, UPDATE-mode cross-instance warm-up, and oversized-payload fallback on a real server. |
-| `MetricsDiagnosabilityTest` | Every chaos scenario above is visible in the published metrics. |
+| `MetricsDiagnosabilityTest` | Selected scenario outcomes are asserted through published metrics; this does not cover every failure or replace diagnostic logs. |
 | `SoakTest` (tag `soak`) | Sustained churn against a real L2: Independent post-GC heap and process RSS growth ≤ 5%, observed workers, bounded journal and JSON evidence. Not run by the default suite. |
 
 ## Running the suite from the repository

@@ -12,7 +12,7 @@ The cache is eventually consistent by design; no strong-consistency guarantees a
 - **Two-level read cascade** — L1 (shaded Caffeine, zero-allocation hit path) → L2 (Redis/Valkey) → your loader. An L2 hit always warms L1, so the next read of the same key is served in-process.
 - **Correct by default** — singleflight per instance plus cluster-wide rebuild coordination (distributed lock with watchdog lease extension and mandatory double-check), TTL jitter, fail-fast TTL-ordering validation, atomic `putIfAbsent` — all on without configuration; disabling requires an explicit opt-in and is logged as a risk. Null caching is opt-in (`null-policy: allow`) with a tri-state `lookup` to distinguish miss from cached-null.
 - **Cross-instance invalidation** — versioned events with last-write-wins ordering, a bounded journal with replay on reconnect, and two transport profiles: lightweight Pub/Sub or durable Redis Streams.
-- **Honest degradation** — a circuit breaker switches the cache to L1-only when Redis fails; business code never sees infrastructure exceptions. Recovery replays recorded invalidations when journal history is readable and intact. Missing or unverifiable history, a replay-read failure, or a missing journal can trigger a full L1 flush and a source-load burst. Writes that never reached Redis cannot be reconstructed by replay; see [recovery semantics](docs/configuration.md#circuit-breaker-and-degradation) for the fallback signals and limits.
+- **Honest degradation** — a circuit breaker switches protected cache operations to local fallback when Redis fails. Loader errors, invalid configuration and async executor rejection remain visible. Recovery replays recorded invalidations when journal history is readable and intact. Missing or unverifiable history, a replay-read failure, or a missing journal can trigger a full L1 flush and a source-load burst. Writes that never reached Redis cannot be reconstructed by replay; see [recovery semantics](docs/configuration.md#circuit-breaker-and-degradation) for the fallback signals and limits.
 - **Stale serving** — stale-while-revalidate and XFetch early refresh keep hot keys fast while values refresh in the background.
 - **Observability as a feature** — Micrometer metrics for cache outcomes, degradation and invalidation, OpenTelemetry tracing, JMX inspection, and a reference Grafana dashboard with alert rules in [`docs/grafana/`](docs/grafana/). Some cleanup failures are log-only; see the [observability catalog](docs/observability.md).
 - **Kotlin coroutines** — `suspend` API, invalidation `Flow`, and a `tierCache { }` config DSL in `tiercache-kotlin`. A suspending loader runs on the caller's coroutine dispatcher, so a blocking loader blocks that dispatcher — offload blocking work with `withContext(Dispatchers.IO)`.
@@ -134,6 +134,8 @@ Everything else — builders, transport internals, metrics helpers, and any type
 - [Migration from Spring Cache](docs/migration-from-spring-cache.md)
 - [Migration from Redisson](docs/migration-from-redisson.md)
 - [Migration from JetCache](docs/migration-from-jetcache.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [Release verification evidence](docs/release-evidence.md)
 - [Sizing and TTL guidance](docs/sizing-and-ttl.md)
 - [Observability: metrics, tracing, dashboards](docs/observability.md)
 - [Running the TCK chaos suite](docs/tck.md)

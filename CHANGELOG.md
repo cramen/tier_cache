@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Documentation clarification (2026-09-23): historical claims below that whole-cache clear and journal append are atomic, that reconnect never flushes L1, or that every failure is diagnosable from metrics alone are superseded. SCAN clear and EVICT_ALL append are separate; unverifiable history (including read failure) can require fallback clear, while unstored events cannot be replayed. See docs/configuration.md, docs/recovery.md and docs/troubleshooting.md. This clarification does not retroactively claim that older releases passed current gates.
+
 - Raised the Micrometer baseline to 1.15.12 and aligned the Redis transport's Netty family through the published 4.2.17.Final BOM to address HIGH/CRITICAL dependency findings. Consumer-enforced BOMs can override these defaults; scan the application's resolved graph.
 
 - Release dependency evidence now compares resolved runtime/classifier inventories with module and aggregate SBOMs, including shaded Caffeine and core test fixtures. Trivy SBOM scans fail closed for incomplete evidence and unexcepted HIGH/CRITICAL findings. Candidate manifests bind exact publication bytes, SBOMs and scan reports to an explicit ref/version; complete bundles are signed/attested, with final evidence attached to an existing release. No automatic Central publication is added; see docs/release-evidence.md.

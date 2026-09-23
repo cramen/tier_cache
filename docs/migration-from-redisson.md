@@ -5,7 +5,7 @@ This guide covers moving a Redisson near-cache (`RLocalCachedMap` with
 distributed-objects toolkit; Tiercache is a cache library. Tiercache replaces
 the **local-cached map** use case only. If you also use Redisson for locks,
 queues, topics, or other distributed objects, keep Redisson for those — see
-[What Tiercache does not replace](#what-tiercache-does-not-replace).
+[What Tiercache does not replace](#honest-gaps).
 
 Redisson API names below follow the public Redisson documentation; check the
 javadoc of your exact Redisson version for details.

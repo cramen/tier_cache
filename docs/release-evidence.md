@@ -149,3 +149,19 @@ cover separately rebuilt Central artifacts, even if version strings match.
 Checksums bind bytes, signatures authenticate evidence, provenance describes the
 build invocation, and the CVE scan evaluates a particular dependency graph against
 a dated database. None alone proves the others or guarantees no future CVEs.
+
+
+## Recorded trial evidence — 2026-09-22
+
+[Trial run 35773803950](https://github.com/cramen/tier_cache/actions/runs/35773803950)
+on commit `ad364b4893ccc9d435abd6b194665e5d4da6fd22` passed clean build,
+SBOM completeness, the scanner self-test, dependency acceptance, staging,
+Cosign signing and GitHub attestation. Independent attestation verification and
+all 90 manifest-file checks passed, including 49 publication files and ten SBOMs.
+The dated scan had no HIGH/CRITICAL findings, four MEDIUM findings and no exceptions.
+
+This was a `1.5.0-SNAPSHOT` trial. Release attachment was skipped and no Central
+publication occurred. It does not certify later commits, final-mode release upload,
+or a consumer graph changed by an enforced BOM. See [tested consumers and their
+Netty override boundary](compatibility.md#spring-consumers). Generate fresh evidence
+for the actual release candidate; the Redis v2 major-release requirement remains.
