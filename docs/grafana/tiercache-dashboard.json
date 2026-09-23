@@ -98,6 +98,22 @@
       "targets": [
         {"expr": "sum by (cache) (rate(tiercache_l2_revalidation_failures_total[$5m]))", "legendFormat": "{{cache}}"}
       ]
+    },
+    {
+      "id": 13,
+      "title": "Publication outcomes",
+      "type": "timeseries",
+      "targets": [
+        {"expr": "sum by (cache, outcome) (rate(tiercache_invalidation_publish_total[5m]))", "legendFormat": "{{cache}} {{outcome}}"}
+      ]
+    },
+    {
+      "id": 14,
+      "title": "Pub/Sub publication failure fraction",
+      "type": "timeseries",
+      "targets": [
+        {"expr": "sum by (cache) (rate(tiercache_invalidation_publish_total{outcome=\"failed\"}[5m])) / clamp_min(sum by (cache) (rate(tiercache_invalidation_publish_total{outcome=~\"acknowledged|failed\"}[5m])), 1e-9)", "legendFormat": "{{cache}}"}
+      ]
     }
   ]
 }

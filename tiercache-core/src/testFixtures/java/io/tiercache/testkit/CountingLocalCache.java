@@ -46,4 +46,12 @@ public final class CountingLocalCache<K, V> implements LocalCache<K, V> {
     public boolean setIfAbsent(K key, StoredEntry<V> entry, Duration ttl) {
         return store.putIfAbsent(key, entry) == null;
     }
+    @Override
+    public boolean supportsAtomicReplace() { return true; }
+
+    @Override
+    public boolean replaceIfSame(K key, StoredEntry<V> expected, StoredEntry<V> replacement, Duration ttl) {
+        return store.replace(key, expected, replacement);
+    }
+
 }

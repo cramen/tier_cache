@@ -34,6 +34,8 @@ class LockProviderShutdownTest {
                 DockerImageName.parse("redis:6.2-alpine")).withExposedPorts(6379)) {
             redis.start();
             String uri = "redis://" + redis.getHost() + ":" + redis.getMappedPort(6379);
+            var owned = new java.util.concurrent.atomic.AtomicReference<io.lettuce.core.api.StatefulRedisConnection<?, ?>>();
+            var managed = new java.util.concurrent.atomic.AtomicReference<LettuceLockProvider>();
             runner.withPropertyValues("tiercache.enabled=true", "tiercache.redis-uri=" + uri)
                     .run(context -> {
                         assertThat(context).hasNotFailed();
@@ -41,6 +43,11 @@ class LockProviderShutdownTest {
                         LettuceLockProvider provider = context.getBean(LettuceLockProvider.class);
 
                         // Force an ambiguous acquire so the scheduler spins up.
+                        provider.tryLock("preflight", Duration.ofSeconds(5)).release();
+                        var field = LettuceLockProvider.class.getDeclaredField("ownedConnection");
+                        field.setAccessible(true);
+                        owned.set((io.lettuce.core.api.StatefulRedisConnection<?, ?>) field.get(provider));
+                        managed.set(provider);
                         redis.getDockerClient().pauseContainerCmd(redis.getContainerId()).exec();
                         try {
                             org.junit.jupiter.api.Assertions.assertThrows(Exception.class,
@@ -57,6 +64,10 @@ class LockProviderShutdownTest {
                                     .unpauseContainerCmd(redis.getContainerId()).exec();
                         }
                     });
+            assertThat(owned.get().isOpen()).isFalse();
+            managed.get().close(); // Repeated framework/provider cleanup is harmless.
+            org.junit.jupiter.api.Assertions.assertThrows(io.tiercache.internal.LockProviderClosedException.class,
+                    () -> managed.get().tryLock("closed", Duration.ofSeconds(5)));
             // After the context is closed, the scheduler must be gone.
             long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
             while (compensationThreads() > 0 && System.nanoTime() < deadline) {

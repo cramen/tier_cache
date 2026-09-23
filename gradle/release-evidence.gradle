@@ -1,0 +1,60 @@
+import groovy.json.JsonOutput
+import org.gradle.api.publish.maven.MavenPublication
+import java.security.MessageDigest
+
+// Enumerate publication artifacts and resolved configurations, not build/libs globs.
+gradle.projectsEvaluated {
+    def modules = subprojects.findAll { it.plugins.hasPlugin('maven-publish') }
+    tasks.register('releaseEvidenceInputs') {
+        group = 'verification'
+        description = 'Build publication files, SBOMs and an independent resolved-artifact inventory.'
+        dependsOn rootProject.tasks.named('cyclonedxBom')
+        modules.each { module ->
+            dependsOn module.tasks.named('cyclonedxBom')
+            module.publishing.publications.withType(MavenPublication).each { pub ->
+                dependsOn pub.artifacts
+                dependsOn module.tasks.named("generatePomFileFor${pub.name.capitalize()}Publication")
+                dependsOn module.tasks.named("generateMetadataFileFor${pub.name.capitalize()}Publication")
+            }
+        }
+        outputs.upToDateWhen { false }
+        doLast {
+            def sha = { File f -> MessageDigest.getInstance('SHA-256').digest(f.bytes).encodeHex().toString() }
+            def relative = { File f -> rootProject.relativePath(f) }
+            def inventory = [schemaVersion: 1, group: rootProject.group.toString(),
+                name: rootProject.name, version: rootProject.version.toString(), modules: []]
+            modules.sort { it.name }.each { module ->
+                def names = ['runtimeClasspath']
+                if (module.name == 'tiercache-core') names += 'testFixturesRuntimeClasspath'
+                if (module.name == 'tiercache-tck') names += 'testRuntimeClasspath'
+                def configs = names.collectEntries { name ->
+                    def resolved = module.configurations.getByName(name).resolvedConfiguration.resolvedArtifacts
+                    [(name): resolved.collect { a ->
+                        [group: a.moduleVersion.id.group, name: a.moduleVersion.id.name,
+                         version: a.moduleVersion.id.version, classifier: a.classifier ?: '',
+                         extension: a.extension, sha256: sha(a.file)]
+                    }.sort { "${it.group}:${it.name}:${it.version}:${it.classifier}" }]
+                }
+                def publications = module.publishing.publications.withType(MavenPublication).collect { pub ->
+                    def files = pub.artifacts.findAll { it.extension == 'jar' }.collect { a ->
+                        if (!a.file.isFile()) throw new GradleException("Missing publication file: ${a.file}")
+                        [path: relative(a.file), classifier: a.classifier ?: '', extension: a.extension, sha256: sha(a.file)]
+                    }
+                    ['pom': "pom-default.xml", 'module': "module.json"].each { extension, filename ->
+                        def file = module.layout.buildDirectory.file("publications/${pub.name}/${filename}").get().asFile
+                        if (!file.isFile()) throw new GradleException("Missing publication metadata: $file")
+                        files += [path: relative(file), classifier: '', extension: extension, sha256: sha(file)]
+                    }
+                    [group: pub.groupId, name: pub.artifactId, version: pub.version,
+                     files: files.sort { "${it.extension}:${it.classifier}" }]
+                }
+                inventory.modules += [name: module.name, configurations: configs, publications: publications,
+                    sbom: relative(module.layout.buildDirectory.file("reports/cyclonedx/${module.name}-sbom.json").get().asFile)]
+            }
+            inventory.aggregateSbom = "build/reports/cyclonedx/${rootProject.name}-sbom.json"
+            def output = layout.buildDirectory.file('release-inputs/inventory.json').get().asFile
+            output.parentFile.mkdirs()
+            output.text = JsonOutput.prettyPrint(JsonOutput.toJson(inventory)) + '\n'
+        }
+    }
+}

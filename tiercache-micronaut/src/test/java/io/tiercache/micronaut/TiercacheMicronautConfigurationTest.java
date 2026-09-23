@@ -180,8 +180,8 @@ class TiercacheMicronautConfigurationTest {
                 try (RedisClient probe = RedisClient.create(uri);
                         io.lettuce.core.api.StatefulRedisConnection<String, String> conn =
                                 probe.connect()) {
-                    assertThat(conn.sync().keys("micronaut:demo:*")).isNotEmpty();
-                    assertThat(conn.sync().keys("micronaut:greetings:*")).isEmpty();
+                    assertThat(conn.sync().keys(new String(io.tiercache.redis.RedisKeyspace.dataPrefix("micronaut:demo"), java.nio.charset.StandardCharsets.US_ASCII) + "*")).isNotEmpty();
+                    assertThat(conn.sync().keys(new String(io.tiercache.redis.RedisKeyspace.dataPrefix("micronaut:greetings"), java.nio.charset.StandardCharsets.US_ASCII) + "*")).isEmpty();
                 }
             }
 

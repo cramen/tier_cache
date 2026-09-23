@@ -4,6 +4,7 @@ import io.tiercache.internal.DefaultTierCache;
 import io.tiercache.spi.LocalCache;
 import io.tiercache.spi.RemoteCache;
 import io.tiercache.spi.StoredEntry;
+import io.tiercache.spi.TaggedWriteOutcome;
 import io.tiercache.testkit.CountingLocalCache;
 import io.tiercache.testkit.InMemoryRemoteCache;
 import org.junit.jupiter.api.Test;
@@ -90,8 +91,13 @@ class LoadStoreRaceTest {
         }
 
         @Override
-        public void putTagged(String key, StoredEntry<String> entry, Duration ttl, String[] tags) {
-            delegate.putTagged(key, entry, ttl, tags);
+        public boolean supportsTaggedWriteOutcomes() {
+            return true;
+        }
+
+        @Override
+        public TaggedWriteOutcome putTaggedIfNewer(String key, StoredEntry<String> entry, Duration ttl, String[] tags) {
+            return delegate.putTaggedIfNewer(key, entry, ttl, tags);
         }
     }
 

@@ -18,6 +18,9 @@ plugins {
     kotlin("jvm") version "2.2.21" apply false
 }
 
+group = "io.github.cramen"
+version = providers.gradleProperty("version").get()
+
 // Whole-repo aggregate SBOM, named like the module ones so CI can collect a
 // flat directory of *-sbom.json files.
 tasks.named<CyclonedxAggregateTask>("cyclonedxBom") {
@@ -41,8 +44,14 @@ subprojects {
     // shaded into the core jar, so it is part of the shipped artifact.
     apply(plugin = "org.cyclonedx.bom")
     tasks.named<CyclonedxDirectTask>("cyclonedxDirectBom") {
+        // Demo applications are not shipped Maven artifacts.
+        if (project.path.startsWith(":examples")) enabled = false
         projectType.set(Component.Type.LIBRARY)
-        includeConfigs.set(listOf("runtimeClasspath"))
+        includeConfigs.set(when (project.name) {
+            "tiercache-core" -> listOf("runtimeClasspath", "testFixturesRuntimeClasspath")
+            "tiercache-tck" -> listOf("runtimeClasspath", "testRuntimeClasspath")
+            else -> listOf("runtimeClasspath")
+        })
     }
     tasks.named<CyclonedxAggregateTask>("cyclonedxBom") {
         projectType.set(Component.Type.LIBRARY)
@@ -85,3 +94,24 @@ subprojects {
         }
     }
 }
+
+// Isolated repository consumed by the compatibility builds; never publishes remotely.
+val consumerModules = setOf("tiercache-core", "tiercache-invalidation", "tiercache-transport-redis",
+    "tiercache-spring-boot-starter", "tiercache-micrometer")
+subprojects {
+    if (name in consumerModules) {
+        pluginManager.withPlugin("maven-publish") {
+            extensions.configure<org.gradle.api.publish.PublishingExtension> {
+                repositories.maven {
+                    name = "compatibility"
+                    url = rootProject.layout.buildDirectory.dir("compatibility-repository").get().asFile.toURI()
+                }
+            }
+        }
+    }
+}
+tasks.register("stageCompatibilityArtifacts") {
+    dependsOn(consumerModules.map { ":$it:publishAllPublicationsToCompatibilityRepository" })
+}
+
+apply(from = "gradle/release-evidence.gradle")

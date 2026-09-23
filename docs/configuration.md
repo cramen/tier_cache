@@ -36,7 +36,7 @@ Programmatic configuration mirrors this exactly: `CacheOverride` fields left
 | `tiercache.metrics.enabled` | `true` | Binds the metrics listener when a Micrometer `MeterRegistry` bean exists. `false` opts out. Note: this is a conditional property of the metrics auto-configuration, not a bound field of `TiercacheProperties`. See [observability](observability.md). |
 | `tiercache.invalidation.enabled` | `true` | Wires the cross-instance invalidation engine (journal + transport) when the default Redis transport is used. `false` opts out: caches become single-node, nothing is published or subscribed. |
 | `tiercache.invalidation.profile` | `pubsub` | Invalidation transport profile: `pubsub` (default) or `streams`. See [Invalidation profiles](#invalidation-profiles). |
-| `tiercache.invalidation.journal-capacity` | `10000` | Maximum journal entries kept per cache stream. The journal backs replay of missed invalidations after reconnects. |
+| `tiercache.invalidation.journal-capacity` | `10000` | Approximate retained-row target per cache stream. Enabled built-in journals require at least `65`; `<=64` fails initialization before connection use. Size for event rate and recovery lag, not merely this protocol floor. |
 | `tiercache.async-executor-threads` | `max(4, availableProcessors)` | Maximum threads serving `AsyncTierCache` operations (the bounded async executor). When the pool and its bounded queue (10,000) are saturated, submissions fail their `CompletionStage` with `RejectedExecutionException` rather than growing threads without bound. Raise when IO-bound async loaders starve throughput; background SWR/XFetch revalidation runs on its own small bounded pool and never competes for these threads. |
 
 ## Per-cache knobs
@@ -62,15 +62,14 @@ property name. Properties are shown relative to a level prefix — use
 | `xfetch-beta` | `xfetchBeta` | `1s` | duration | XFetch tuning factor. Must be positive when XFetch is enabled. Smaller values refresh earlier/more aggressively. |
 | `degradation-stale-ttl` | `degradationStaleTtl` | `0` (disabled) | duration | Extra L1 retention window served stale while the L2 circuit breaker rejects calls (OPEN, or HALF_OPEN with no probe permit). Must be `>= 0`. See [Degradation stale window](#degradation-stale-window). |
 
-Per-cache programmatic equivalents: `CacheOverride` exposes the same eleven
-knobs as nullable builder-style setters (`l1MaxSize(long)`,
+Per-cache programmatic equivalents: `CacheOverride` exposes the settings from the table above
+through nullable builder-style setters (`l1MaxSize(long)`,
 `l1ExpireAfterWrite(Duration)`, …). `null` means "inherit the defaults".
 
 ## TTL ordering invariant
 
-An L1 entry must never outlive its L2 counterpart, otherwise L1 could serve
-data after the L2 entry expired. Enforced at startup for every cache
-(`CacheConfigValidator`):
+The configured fresh L1 duration must not exceed the configured L2 duration.
+Startup validation checks this relationship for every cache (`CacheConfigValidator`):
 
 - `l1-expire-after-write <= l2-ttl`
 - `l1-expire-after-access <= l2-ttl` (when set)
@@ -79,7 +78,10 @@ data after the L2 entry expired. Enforced at startup for every cache
 A violation throws `CacheConfigurationException` naming the cache, both
 values, and the fix. Jitter never breaks this invariant because it only
 shortens TTLs (see below), so the effective L1 TTL equals the configured
-value in the worst case.
+value in the worst case. This compares configured durations, not the remaining
+TTL of a particular Redis entry. Warming L1 from L2 starts a new local lifetime;
+it can outlast that Redis entry. Access expiry and opt-in stale retention need
+separate budgeting. See [end-to-end staleness](sizing-and-ttl.md#l1-ttl-vs-l2-ttl).
 
 ## TTL jitter
 
@@ -127,11 +129,14 @@ transport is used; `tiercache.invalidation.enabled=false` opts out.
   Lowest propagation latency; a disconnected instance misses events and
   catches up via the journal on recovery.
 - `streams` — events go through Redis Streams. Select with
-  `tiercache.invalidation.profile=streams`.
+  `tiercache.invalidation.profile=streams`. Own pending rows are drained before
+  new rows; corrupt/missing history requires safe L1 reset before ACK. Its
+  retention is the same shared journal retention. See [Streams recovery](streams-recovery.md).
 
 Both profiles share the journal (`tiercache.invalidation.journal-capacity`,
 default 10000 entries per cache stream), which records recent invalidations
-so a recovering instance replays what it missed instead of flushing L1.
+so a recovering instance can replay verified retained history. Unverifiable
+history may require a per-cache L1 clear; see [recovery behavior](recovery.md).
 
 ## Invalidation modes
 
@@ -144,9 +149,12 @@ Per cache, `invalidation-mode` selects what an invalidation event carries:
   larger than `payload-cap-bytes` (default 64 KiB, minimum 1024) fall back to
   plain `invalidate` events automatically.
 
-Note: with the starter, the Redis transport's UPDATE-mode payload cap is
-taken from the **defaults level** (`tiercache.defaults.payload-cap-bytes`),
-even when the mode is overridden per cache.
+Both standard starters honor the **resolved per-cache** mode and payload cap.
+An omitted `tiercache.caches.<name>.payload-cap-bytes` inherits
+`tiercache.defaults.payload-cap-bytes`; an explicit override replaces it.
+For example, defaults of 65536 and a `catalog` override of 8192 allow larger
+UPDATE payloads in other caches while `catalog` falls back to INVALIDATE above
+8192 serialized payload bytes. The cap is not a Java object-size estimate.
 
 ## Stale window semantics
 
@@ -164,8 +172,14 @@ An L2 hit is classified by write age:
   **without** warming L1 (so an in-flight refresh is never overwritten by
   the stale copy), and one asynchronous revalidation per key per instance is
   triggered through the same coordinated load path as a miss. Revalidation
-  failures never reach readers; the stale entry keeps serving until its
-  window ends.
+  failures do not replace an already served stale result; the stale entry
+  keeps serving until its window ends. A foreground hard miss joining that
+  refresh receives its actual result or failure. If the refresh skips a
+  busy distributed lock, foreground demand continues through ordinary
+  bounded coordination/loading instead of treating the skip as a missing
+  value. This transition preserves the original coordination deadline and
+  existing loader-retry budget; a genuine loader null still follows the
+  configured null policy.
 - **past the window** — treated as a hard miss.
 
 `stale-ttl` must be `>= 0` (fail-fast validation). Stale hits and
@@ -206,8 +220,13 @@ window (after at least 5 calls). While open, the cache runs **L1-only**: no
 infrastructure exceptions escape into business code, and cross-instance
 atomicity (`putIfAbsent`, rebuild coordination) degrades to per-instance —
 surfaced via the `tiercache.degraded=1` metric and a log line. After 5
-seconds the breaker half-opens and admits up to 3 probe calls; it closes
-when all probes succeed and reopens on any probe failure.
+seconds the breaker half-opens and admits up to 3 probe calls. With a recovery
+handler it remains HALF_OPEN after successful probes until asynchronous
+replay or a safe reset completes. Probes return their results without waiting
+for replay; additional L2 calls are rejected while recovery is pending. Any
+probe failure reopens the breaker. This protection concerns runtime L2 calls
+with the breaker enabled. It does not suppress application loader failures,
+invalid configuration, startup connection failures or async executor rejection.
 
 On recovery, the engine attempts journal replay **before** reporting
 recovery. Successful replay retains entries it does not invalidate. If the
@@ -216,9 +235,15 @@ replay read — the affected cache's L1 is flushed. This can happen even
 within the journal's capacity window and can cause a source-load burst.
 The fallback emits a log, `tiercache.invalidation{direction="dropped"}` and
 the `onJournalOverflow` callback; despite its name, that callback also
-reports failed replay verification. A hand-built engine without a journal
-instead logs and flushes every registered L1; that path has no journal
-overflow metric or callback.
+reports failed replay verification. A configured invalidation handler without a journal
+instead logs and flushes its registered L1 caches; that path has no journal
+overflow metric or callback. A factory without an invalidation handler has no
+coherence-recovery hook and cannot claim journal-backed recovery.
+
+Recovery uses two owned workers per factory, coalesced per cache, with bounded
+passes and 1–30 second exponential failure retries. A failed baseline read
+still clears L1 but retains the confirmed cursor and leaves recovery pending;
+it cannot close the breaker. See [completion, shutdown, metrics and limits](recovery.md).
 
 ## Degradation stale window
 
@@ -234,6 +259,23 @@ but retained entry is served stale **without a loader call** and counted as
 close the breaker. Fresh accesses with `l1-expire-after-access` configured
 slide freshness and the stale horizon without ever shortening the
 store-time retention floor; stale accesses never extend anything.
+
+The authoritative deadlines live in an immutable local copy of the value or
+null marker, using the same monotonic clock as Caffeine expiry. They are removed
+with that entry, not by a separate ten-minute metadata expiry or fencing-map
+size cap. Size eviction can still remove the entire entry. A fresh access uses
+`logical = now + access TTL`, `stale until = logical + window`, and
+`retention until = max(store-time retention floor, stale until)`. Retention
+beyond the stale cutoff does not authorize serving the value after that cutoff.
+
+For a custom `LocalCache`, preserve each opaque `StoredEntry` unchanged. Combining
+a positive degradation window with access expiry additionally requires
+`supportsAtomicReplace()` and `replaceIfSame(...)`: identity-checked replacement
+of value and TTL without reinserting a removed/expired entry. Caffeine implements
+this operation. An unsupported provider fails at cache creation with the cache
+name and required capability; other configurations remain compatible. These
+local deadlines are never serialized into Redis frames.
+
 
 Trade-offs to weigh before enabling: entries live longer in L1 (memory
 bounded by `window / L1 TTL x working set`, still capped by `l1-max-size`),
@@ -328,3 +370,108 @@ only:
 Fail-fast validation is core's and applies identically: an invalid
 combination (for example an L1 TTL above the L2 TTL) aborts application
 startup with an actionable error.
+
+## Built-in Redis namespaces (v2)
+
+Each complete physical cache namespace is encoded as a delimiter-safe
+Base64URL token: Spring `users` uses the token for `spring:users`, Micronaut
+uses `micronaut:users`, and programmatic wiring uses the configured cache
+name. Colons, glob syntax, empty names where supported, and valid Unicode
+retain their literal identities. Malformed Unicode fails before mutation.
+Data and control keys occupy separate `tiercache:v2:*` families. The logical
+journal identity remains `users` in both framework examples.
+
+There is no legacy/v2 compatibility switch. Version 2.0.0 requires
+a coordinated cold cutover; an ordinary mixed-version
+rolling upgrade is unsafe. See [exact layouts, clear limits, migration and
+rollback](redis-keyspace-v2.md). Clear removes only data in its own namespace,
+using a non-transactional scan; its journal append is a separate operation.
+
+## Resource lifecycle
+
+Factories own auxiliary workers and derived lock providers, while supplied L2,
+clients, connections and explicit providers retain their caller ownership.
+Close factories when their owning component stops. See [resource ownership and
+shutdown](resource-lifecycle.md) for lazy connection cleanup, surviving synchronous
+views, async cancellation and coordination limits during shutdown.
+
+
+## Tags, batches and whole-cache clear
+
+```java
+TierCache<String, String> products = factory.getCache("products");
+products.put("p1", "first", "category:books", "campaign:summer");
+products.put("p2", "second", "category:books");
+products.evictByTag("category:books");
+products.evictAll(java.util.List.of("p3", "p4"));
+products.evictAll();
+```
+
+With the built-in transport, an accepted versioned tagged write changes data,
+tag membership and its journal record in one Redis operation. A losing write
+changes none of them. Tag eviction enumerates matching keys and evicts them
+individually; batch eviction also operates per key. Neither operation is a
+transaction over the whole set or a fence against concurrent writes.
+
+Whole-cache `evictAll()` clears its own data namespace using bounded SCAN work,
+then separately appends EVICT_ALL to the journal. Concurrent writes/loads and
+partial failures can interleave with these steps. Receivers converge through
+live delivery or triggered replay of retained events, not instant synchronous
+acknowledgement from every instance. During degradation, tag membership stored
+only in Redis cannot provide a complete offline local tag index. See
+[namespace boundaries](redis-keyspace-v2.md) and [recovery](recovery.md).
+
+## Custom Spring Redis client and timeouts
+
+The default client uses a 100 ms connect timeout and a 250 ms command timeout.
+There are no `tiercache.*` timeout properties. A primary application-owned
+`RedisClient` can customize both without replacing the `RemoteCache` wiring:
+
+```java
+@Configuration(proxyBeanMethods = false)
+class CacheClientConfiguration {
+    @Bean(destroyMethod = "shutdown")
+    @Primary
+    RedisClient applicationRedisClient(@Value("${tiercache.redis-uri}") String uri) {
+        RedisClient client = RedisClient.create(uri);
+        client.setOptions(ClientOptions.builder()
+                .socketOptions(SocketOptions.builder()
+                        .connectTimeout(Duration.ofMillis(150)).build())
+                .timeoutOptions(TimeoutOptions.enabled(Duration.ofMillis(350)))
+                .build());
+        return client;
+    }
+}
+```
+
+Imports are `io.lettuce.core.{RedisClient,ClientOptions,SocketOptions,TimeoutOptions}`,
+`java.time.Duration`, Spring's `context.annotation.{Configuration,Bean,Primary}`
+and `beans.factory.annotation.Value`. Keep `tiercache.enabled=true` and
+`tiercache.redis-uri` configured. Choose timeouts below the application's request
+budget; the numbers above demonstrate customization, not universal sizing.
+
+The primary client is used for data, lock, journal and invalidation connections.
+The current auto-configuration also creates its extra default client bean: its
+condition checks for a custom RemoteCache, not another RedisClient. Both clients
+are closed by their owning Spring context. This wiring is exercised by
+[CustomRedisClientDocumentationTest](../tiercache-spring-boot-starter/src/test/java/io/tiercache/spring/CustomRedisClientDocumentationTest.java).
+It is not a claim that an equivalent custom Micronaut-client example was tested.
+
+## Serialization and Native Image
+
+The standard transport uses JDK serialization: keys and values must be
+serializable, class evolution must remain compatible, and untrusted serialized
+data must not be accepted. Redis access and payload provenance are therefore
+part of the application's trust boundary.
+
+There is no starter property that selects a serializer. Programmatic transport
+builders expose key/value serializer extension points, but these transport
+classes and SPIs are internal, outside the stable API listed in the README.
+Manual wiring must keep L2, journal and UPDATE transport serializers compatible.
+Providing only a custom `RemoteCache` skips the starter's automatic invalidation
+wiring; it does not magically create a compatible journal or transport.
+
+For GraalVM Native Image, applications using JDK serialization must register
+**their own key/value DTOs** for serialization. The library's String registration
+does not cover application classes. The native demo verifies its own payloads,
+not every application's serializer or DTO graph.

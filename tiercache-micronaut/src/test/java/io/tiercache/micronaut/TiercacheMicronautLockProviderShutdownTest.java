@@ -39,6 +39,10 @@ class TiercacheMicronautLockProviderShutdownTest {
             assertThat(context.containsBean(LettuceLockProvider.class)).isTrue();
             LettuceLockProvider provider = context.getBean(LettuceLockProvider.class);
 
+            provider.tryLock("preflight", Duration.ofSeconds(5)).release();
+            var field = LettuceLockProvider.class.getDeclaredField("ownedConnection");
+            field.setAccessible(true);
+            var owned = (io.lettuce.core.api.StatefulRedisConnection<?, ?>) field.get(provider);
             redis.getDockerClient().pauseContainerCmd(redis.getContainerId()).exec();
             try {
                 org.junit.jupiter.api.Assertions.assertThrows(Exception.class,
@@ -55,6 +59,10 @@ class TiercacheMicronautLockProviderShutdownTest {
             }
 
             context.close();
+            assertThat(owned.isOpen()).isFalse();
+            provider.close();
+            org.junit.jupiter.api.Assertions.assertThrows(io.tiercache.internal.LockProviderClosedException.class,
+                    () -> provider.tryLock("closed", Duration.ofSeconds(5)));
             long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
             while (compensationThreads() > 0 && System.nanoTime() < deadline) {
                 Thread.sleep(20);

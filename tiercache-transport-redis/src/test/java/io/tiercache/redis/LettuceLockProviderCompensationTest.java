@@ -41,7 +41,7 @@ class LettuceLockProviderCompensationTest {
 
     @BeforeAll
     static void startServer() {
-        server = new GenericContainer<>(DockerImageName.parse("redis:6.2-alpine"))
+        server = new GenericContainer<>(ServerProfile.image())
                 .withExposedPorts(6379);
         server.start();
         redisUri = "redis://" + server.getHost() + ":" + server.getMappedPort(6379);
@@ -91,7 +91,7 @@ class LettuceLockProviderCompensationTest {
     }
 
     private static String lockKey(String name) {
-        return LettuceLockProvider.LOCK_KEYSPACE + name;
+        return RedisKeyspace.lock(name);
     }
 
     /**
@@ -396,32 +396,34 @@ class LettuceLockProviderCompensationTest {
     @Test
     void closeWithLiveSchedulerSwallowsTheSchedulingRace() throws Exception {
         var connection = client.connect();
-        // The failing proxy always reports a client timeout on acquire.
+        var entered = new java.util.concurrent.CountDownLatch(1);
+        var resume = new java.util.concurrent.CountDownLatch(1);
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        var original = new RedisCommandTimeoutException("simulated client timeout");
         RedisCommands<String, String> failing = proxy(connection, (args, method) -> {
-            if ("set".equals(method.getName()) && args != null && args.length == 3
-                    && args[2] instanceof SetArgs) {
-                throw new RedisCommandTimeoutException("simulated client timeout");
+            if ("set".equals(method.getName()) && args != null && args.length == 3) {
+                if (calls.incrementAndGet() == 2) {
+                    entered.countDown();
+                    try { assertTrue(resume.await(5, TimeUnit.SECONDS)); }
+                    catch (InterruptedException e) { throw new AssertionError(e); }
+                }
+                throw original;
             }
             return passthrough();
         });
-        LettuceLockProvider provider = new LettuceLockProvider(connectionTo(failing));
-        // First ambiguous acquire spins the scheduler up.
-        assertThrows(RedisCommandTimeoutException.class,
-                () -> provider.tryLock("close-live-1", Duration.ofSeconds(30)));
-
-        provider.close();
-        // Another ambiguous acquire on the closed provider: the scheduling
-        // race must be swallowed and the ORIGINAL timeout must surface.
+        var provider = new LettuceLockProvider(connectionTo(failing));
+        var pool = java.util.concurrent.Executors.newSingleThreadExecutor();
         try {
-            provider.tryLock("close-live-2", Duration.ofSeconds(30));
-            throw new AssertionError("the acquire must fail");
-        } catch (Throwable t) {
-            assertTrue(t instanceof RedisCommandTimeoutException,
-                    "the original timeout surfaces even with a live scheduler, got " + t);
-        }
-        assertTrue(provider.pendingCompensations() <= 1,
-                "bookkeeping stays bounded after close, got " + provider.pendingCompensations());
-        connection.close();
+            assertThrows(RedisCommandTimeoutException.class,
+                    () -> provider.tryLock("close-live-1", Duration.ofSeconds(30)));
+            var call = pool.submit(() -> provider.tryLock("close-live-2", Duration.ofSeconds(30)));
+            assertTrue(entered.await(5, TimeUnit.SECONDS));
+            provider.close(); resume.countDown();
+            var failure = assertThrows(java.util.concurrent.ExecutionException.class,
+                    () -> call.get(5, TimeUnit.SECONDS));
+            org.junit.jupiter.api.Assertions.assertSame(original, failure.getCause());
+            assertEquals(0, provider.pendingCompensations());
+        } finally { resume.countDown(); provider.close(); pool.shutdownNow(); connection.close(); }
     }
 
     /**

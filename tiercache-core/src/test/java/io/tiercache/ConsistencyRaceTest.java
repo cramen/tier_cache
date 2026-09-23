@@ -6,6 +6,7 @@ import io.tiercache.internal.DefaultTierCache;
 import io.tiercache.spi.LocalCache;
 import io.tiercache.spi.RemoteCache;
 import io.tiercache.spi.StoredEntry;
+import io.tiercache.spi.TaggedWriteOutcome;
 import io.tiercache.testkit.CountingLocalCache;
 import io.tiercache.testkit.InMemoryRemoteCache;
 import org.junit.jupiter.api.Test;
@@ -50,6 +51,15 @@ class ConsistencyRaceTest {
                 awaitQuietly(releaseAfterGet);
             }
             return entry;
+        }
+
+        @Override
+        public boolean supportsAtomicReplace() { return true; }
+
+        @Override
+        public boolean replaceIfSame(String key, StoredEntry<String> expected,
+                StoredEntry<String> replacement, Duration ttl) {
+            return delegate.replaceIfSame(key, expected, replacement, ttl);
         }
 
         @Override
@@ -439,11 +449,14 @@ class ConsistencyRaceTest {
             }
 
             @Override
-            public void putTagged(String key, StoredEntry<String> entry, Duration ttl,
+            public boolean supportsTaggedWriteOutcomes() { return true; }
+
+            @Override
+            public TaggedWriteOutcome putTaggedIfNewer(String key, StoredEntry<String> entry, Duration ttl,
                     String[] tags) {
                 taggedWritten.countDown();
                 awaitQuietly(releaseTagged);
-                delegate.putTagged(key, entry, ttl, tags);
+                return delegate.putTaggedIfNewer(key, entry, ttl, tags);
             }
 
             @Override

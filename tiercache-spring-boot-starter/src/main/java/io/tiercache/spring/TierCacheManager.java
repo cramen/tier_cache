@@ -53,6 +53,10 @@ public class TierCacheManager extends AbstractCacheManager {
      */
     @Override
     protected Cache getMissingCache(String name) {
-        return new TierCacheSpringCache(name, factory.getCache(name));
+        // Initialize the synchronous cache before async-view acquisition enters
+        // the factory lifecycle gate; no new monitor wraps lazy transport I/O.
+        var sync = factory.getCache(name);
+        var async = factory.asyncCache(name);
+        return new TierCacheSpringCache(name, sync, async);
     }
 }

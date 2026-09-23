@@ -1,6 +1,7 @@
 package io.tiercache.internal;
 
 import io.tiercache.CacheSettings;
+import io.tiercache.CacheConfigurationException;
 import io.tiercache.InvalidationMode;
 import io.tiercache.InvalidationMessage;
 import io.tiercache.LookupResult;
@@ -15,12 +16,12 @@ import io.tiercache.spi.CacheMetricsListener;
 import io.tiercache.spi.LocalCache;
 import io.tiercache.spi.RemoteCache;
 import io.tiercache.spi.StoredEntry;
+import io.tiercache.spi.TaggedWriteOutcome;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledExecutorService;
@@ -49,9 +50,11 @@ import java.util.function.Function;
  * overwritten by the stale copy) and a single asynchronous revalidation per
  * key per instance
  * (claimed on the same in-flight map as singleflight) refreshes them through
- * the coordinated load path; failures keep serving stale and never reach
- * readers. XFetch (opt-in via {@code xfetchEnabled}) adds a probabilistic
- * early refresh on fresh L2 hits, driven by entry age and a per-cache EMA of
+ * the coordinated load path. A skipped refresh is not a source miss:
+ * foreground demand promotes it to a bounded ordinary load, while stale
+ * readers keep their immediate result. Background failures do not replace
+ * an already served stale result. XFetch (opt-in via {@code xfetchEnabled})
+ * adds a probabilistic early refresh on fresh L2 hits, driven by entry age and a per-cache EMA of
  * loader durations measured internally.
  *
  * <p>Hot-path discipline: a steady-state L1 hit performs exactly one
@@ -94,6 +97,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
     private final InvalidationHandler invalidation;    // null = single-node
     private final CircuitBreaker breaker;              // null = unguarded L2 (opt-out)
     private final CacheMetricsListener metrics;
+    private final java.util.function.BooleanSupplier auxiliaryOpen;
     private final Executor revalidationExecutor;       // null = no async revalidation
     private final Duration staleTtl;
     private final boolean staleWindowEnabled;
@@ -106,9 +110,10 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
     private final long staleBoundaryMillis;            // l2TtlMillis + staleTtl
     private final double xfetchBetaNanos;
     private final TtlJitter jitter;
+    private final java.util.function.LongSupplier localClock;
     /** EMA of loader durations in nanoseconds; updated on every load. */
     private final AtomicLong loaderDurationEmaNanos = new AtomicLong(EMA_UNINITIALIZED);
-    private final Map<K, CompletableFuture<StoredEntry<V>>> inflight = new ConcurrentHashMap<>();
+    private final Map<K, LoadClaim<K, V>> inflight = new ConcurrentHashMap<>();
 
     /**
      * Per-key invalidation barrier: the highest version this instance has
@@ -128,6 +133,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
     private static final int L1_STRIPES = 64;
 
     private final L1BarrierMap<K> l1Metas;
+    private final java.util.concurrent.atomic.AtomicLong recoveryGeneration = new java.util.concurrent.atomic.AtomicLong();
     private final Object[] l1Locks;
     /** Bumped when protective L1 state is forgotten (barrier eviction, evictAll). */
     private final AtomicLong l1Generation = new AtomicLong();
@@ -267,6 +273,37 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
             VersionGenerator versionGenerator, InvalidationHandler invalidation,
             CircuitBreaker breaker, CacheMetricsListener metrics, Executor revalidationExecutor,
             TtlJitter jitter) {
+        this(cacheName, l1, l2, settings, singleflightEnabled, lockProvider, watchdog,
+                versionGenerator, invalidation, breaker, metrics, revalidationExecutor, jitter, () -> true);
+    }
+
+    /** Internal factory wiring with an auxiliary admission gate. */
+    public DefaultTierCache(String cacheName, LocalCache<K, V> l1, RemoteCache<K, V> l2,
+            CacheSettings settings, boolean singleflightEnabled,
+            DistributedLockProvider lockProvider, ScheduledExecutorService watchdog,
+            VersionGenerator versionGenerator, InvalidationHandler invalidation,
+            CircuitBreaker breaker, CacheMetricsListener metrics, Executor revalidationExecutor,
+            TtlJitter jitter, java.util.function.BooleanSupplier auxiliaryOpen) {
+        this(cacheName, l1, l2, settings, singleflightEnabled, lockProvider, watchdog,
+                versionGenerator, invalidation, breaker, metrics, revalidationExecutor, jitter,
+                auxiliaryOpen, System::nanoTime);
+    }
+
+    /** Internal clock seam for deterministic local-lifetime testing. */
+    public DefaultTierCache(String cacheName, LocalCache<K, V> l1, RemoteCache<K, V> l2,
+            CacheSettings settings, boolean singleflightEnabled,
+            DistributedLockProvider lockProvider, ScheduledExecutorService watchdog,
+            VersionGenerator versionGenerator, InvalidationHandler invalidation,
+            CircuitBreaker breaker, CacheMetricsListener metrics, Executor revalidationExecutor,
+            TtlJitter jitter, java.util.function.BooleanSupplier auxiliaryOpen,
+            java.util.function.LongSupplier localClock) {
+        this.localClock = localClock;
+        if (!settings.degradationStaleTtl().isZero() && settings.l1ExpireAfterAccess() != null
+                && !l1.supportsAtomicReplace()) {
+            throw new IllegalArgumentException("Cache '" + cacheName
+                    + "': degradationStaleTtl with l1ExpireAfterAccess requires LocalCache atomic replacement");
+        }
+        this.auxiliaryOpen = auxiliaryOpen;
         this.cacheName = cacheName;
         this.l1 = l1;
         this.l2 = l2;
@@ -295,7 +332,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
                     cacheName);
         }
         this.l1Metas = new L1BarrierMap<>(L1_META_MAX, L1_META_EXPIRY,
-                l1Generation::incrementAndGet);
+                l1Generation::incrementAndGet, localClock);
         this.l1Locks = new Object[L1_STRIPES];
         for (int i = 0; i < L1_STRIPES; i++) {
             l1Locks[i] = new Object();
@@ -459,23 +496,59 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
                     ? CacheMetricsListener.Outcome.LOAD : CacheMetricsListener.Outcome.MISS);
             return unwrap(result);
         }
-        CompletableFuture<StoredEntry<V>> future = new CompletableFuture<>();
-        CompletableFuture<StoredEntry<V>> existing = inflight.putIfAbsent(key, future);
-        if (existing != null) {
-            metrics.onRequest(cacheName, CacheMetricsListener.Outcome.COALESCED);
-            return unwrap(existing.join());
+        LoadClaim.Demand<K, V> demand = new LoadClaim.Demand<>(loader,
+                System.nanoTime() + OVERALL_BUDGET.toNanos());
+        LoadClaim<K, V> claim = new LoadClaim<>(demand);
+        LoadClaim<K, V> existing = inflight.putIfAbsent(key, claim);
+        if (existing == null) {
+            return runForegroundClaim(key, claim, demand, true);
         }
+        existing.requireResult(demand);
+        metrics.onRequest(cacheName, CacheMetricsListener.Outcome.COALESCED);
+        LoadClaim.Outcome<V> outcome = existing.result.join();
+        if (!outcome.isSkipped()) {
+            return unwrap(outcome.resultEntry());
+        }
+        return recoverSkippedRefresh(key, existing, demand);
+    }
+
+    /**
+     * One map transition replaces a terminal skip or promotes its replacement.
+     * The selected claim cannot skip again: foreground demand is registered
+     * before the map transition ends. The old owner's finally uses identity
+     * removal and cannot delete this replacement.
+     */
+    private V recoverSkippedRefresh(K key, LoadClaim<K, V> skipped,
+            LoadClaim.Demand<K, V> demand) {
+        LoadClaim<K, V> replacement = new LoadClaim<>(demand);
+        LoadClaim<K, V> selected = inflight.compute(key, (ignored, current) -> {
+            if (current == null || current == skipped || !current.requireResult(demand)) {
+                return replacement;
+            }
+            return current;
+        });
+        if (selected == replacement) {
+            // The original request was already counted as coalesced.
+            return runForegroundClaim(key, replacement, demand, false);
+        }
+        return unwrap(selected.result.join().resultEntry());
+    }
+
+    private V runForegroundClaim(K key, LoadClaim<K, V> claim,
+            LoadClaim.Demand<K, V> demand, boolean recordOutcome) {
         try {
-            StoredEntry<V> loaded = loadPath(key, loader);
-            metrics.onRequest(cacheName, loaded != null && !loaded.isNullMarker()
-                    ? CacheMetricsListener.Outcome.LOAD : CacheMetricsListener.Outcome.MISS);
-            future.complete(loaded);
+            StoredEntry<V> loaded = loadPath(key, demand.loader(), demand.deadlineNanos());
+            if (recordOutcome) {
+                metrics.onRequest(cacheName, loaded != null && !loaded.isNullMarker()
+                        ? CacheMetricsListener.Outcome.LOAD : CacheMetricsListener.Outcome.MISS);
+            }
+            claim.result.complete(LoadClaim.Outcome.result(loaded));
             return unwrap(loaded);
-        } catch (RuntimeException e) {
-            future.completeExceptionally(e);
+        } catch (RuntimeException | Error e) {
+            claim.result.completeExceptionally(e);
             throw e;
         } finally {
-            inflight.remove(key, future);
+            inflight.remove(key, claim);
         }
     }
 
@@ -577,6 +650,11 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
             put(key, value);
             return;
         }
+        // A missing SPI capability is a configuration error, including while
+        // OPEN: it must not silently become a successful local-only write.
+        if (versionGenerator != null && !l2.supportsTaggedWriteOutcomes()) {
+            throw unsupportedTaggedWrite();
+        }
         long g0 = l1Generation.get();
         Version version = nextVersion();
         StoredEntry<V> entry = StoredEntry.ofValue(value, version);
@@ -584,13 +662,33 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
             warmL1(key, entry, g0);
             return;
         }
+        TaggedWriteOutcome outcome;
         try {
-            l2.putTagged(key, entry, settings.l2Ttl(), tags);
-            warmL1(key, entry, g0);
-            publishStore(key, entry, version);
+            outcome = l2.putTaggedIfNewer(key, entry, settings.l2Ttl(), tags);
         } catch (L2UnavailableException e) {
             warmL1(key, entry, g0);
+            return;
         }
+        if (outcome == TaggedWriteOutcome.UNSUPPORTED) {
+            throw unsupportedTaggedWrite();
+        }
+        if (outcome == TaggedWriteOutcome.LOST) {
+            StoredEntry<V> current = l2Get(key);
+            if (current != null) {
+                warmL1(key, current, g0);
+            } else {
+                evictLocal(key);
+            }
+            return;
+        }
+        warmL1(key, entry, g0);
+        publishStore(key, entry, version);
+    }
+
+    private CacheConfigurationException unsupportedTaggedWrite() {
+        return new CacheConfigurationException("Cache '" + cacheName
+                + "' requires versioned tagged-write outcomes. Implement RemoteCache."
+                + "supportsTaggedWriteOutcomes() and putTaggedIfNewer() in the custom transport.");
     }
 
     @Override
@@ -660,12 +758,36 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
             // One atomic step: lift the barrier AND install the payload (its
             // own version always passes — equality is not staleness).
             Duration ttl = jitter.apply(settings.l1ExpireAfterWrite(), settings.jitterAmplitude());
-            long logicalDeadline = System.nanoTime() + ttl.toNanos();
-            l1.put(typedKey, StoredEntry.ofValue((V) value, eventVersion),
+            Version barrier = maxVersion(eventVersion, highestSeen);
+            l1.put(typedKey, localCopy(StoredEntry.ofValue((V) value, eventVersion), ttl, barrier),
                     degradationStaleEnabled ? ttl.plus(degradationStaleTtl) : ttl);
-            l1Metas.put(typedKey, new L1BarrierMap.L1Meta(
-                    maxVersion(eventVersion, highestSeen), logicalDeadline,
-                    logicalDeadline + degradationStaleTtl.toNanos()));
+            l1Metas.put(typedKey, barrier);
+        }
+    }
+
+    @Override
+    public long recoveryGeneration() { return recoveryGeneration.get(); }
+
+    @Override
+    public long resetRecovery(long expectedGeneration) {
+        if (!recoveryGeneration.compareAndSet(expectedGeneration, expectedGeneration + 1)) return -1;
+        clearL1Contents();
+        return expectedGeneration + 1;
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public long applyRecovery(InvalidationMessage message, long expectedGeneration) {
+        if (message.type() == InvalidationMessage.Type.EVICT_ALL) return resetRecovery(expectedGeneration);
+        K key = (K) message.key();
+        synchronized (l1LockFor(key)) {
+            if (recoveryGeneration.get() != expectedGeneration) return -1;
+            if (message.type() == InvalidationMessage.Type.UPDATE) {
+                applyUpdateL1(key, message.payload(), message.version());
+            } else {
+                evictL1IfNewer(key, message.version());
+            }
+            return expectedGeneration;
         }
     }
 
@@ -705,20 +827,31 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
             if (generationAtStart != l1Generation.get()) {
                 return false;
             }
-            Version highestSeen = meta != null ? meta.highestSeen() : null;
-            if (entry.version() != null && highestSeen != null
-                    && entry.version().compareTo(highestSeen) < 0) {
+            StoredEntry<V> current = l1.get(key);
+            Version highestSeen = maxVersion(meta != null ? meta.highestSeen() : null,
+                    current != null ? current.version() : null);
+            if (current != null && current.localFreshness() != null) {
+                highestSeen = maxVersion(highestSeen, current.localFreshness().highestSeen());
+            }
+            if (generationAtStart != l1Generation.get()) return false;
+            if (highestSeen != null && (entry.version() == null
+                    || entry.version().compareTo(highestSeen) < 0)) {
                 return false;
             }
-            // Freshness deadlines are stamped with the ACTUAL jittered TTL;
-            // physical retention additionally covers the degradation window.
-            long logicalDeadline = System.nanoTime() + ttl.toNanos();
-            long staleServeUntil = logicalDeadline + degradationStaleTtl.toNanos();
-            l1.put(key, entry, degradationStaleEnabled ? ttl.plus(degradationStaleTtl) : ttl);
-            l1Metas.put(key, new L1BarrierMap.L1Meta(
-                    maxVersion(entry.version(), highestSeen), logicalDeadline, staleServeUntil));
+            Version barrier = maxVersion(entry.version(), highestSeen);
+            l1.put(key, localCopy(entry, ttl, barrier),
+                    degradationStaleEnabled ? ttl.plus(degradationStaleTtl) : ttl);
+            l1Metas.put(key, barrier);
             return true;
         }
+    }
+
+    private StoredEntry<V> localCopy(StoredEntry<V> entry, Duration ttl, Version barrier) {
+        if (!degradationStaleEnabled) return entry;
+        long logical = localClock.getAsLong() + ttl.toNanos();
+        long retention = logical + degradationStaleTtl.toNanos();
+        return entry.withLocalFreshness(new StoredEntry.LocalFreshness(
+                logical, retention, retention, retention, barrier));
     }
 
     /**
@@ -768,6 +901,11 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
 
     /** Full local clear: generation bump first, then per-stripe ordering, then the clears. */
     private void clearL1() {
+        recoveryGeneration.incrementAndGet();
+        clearL1Contents();
+    }
+
+    private void clearL1Contents() {
         l1Generation.incrementAndGet();
         // Ordering point with in-flight per-key commits: a commit that
         // passed its generation check before the bump completes its write
@@ -783,14 +921,14 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
     }
 
     private void publish(Object key, Version version, InvalidationMessage.Type type) {
-        if (invalidation != null && version != null) {
+        if (auxiliaryOpen.getAsBoolean() && invalidation != null && version != null) {
             invalidation.onLocalWrite(cacheName, key, version, type);
         }
     }
 
     /** Publish for a stored entry: UPDATE (with payload) in update mode, else INVALIDATE. */
     private void publishStore(K key, StoredEntry<V> entry, Version version) {
-        if (invalidation == null || version == null) {
+        if (!auxiliaryOpen.getAsBoolean() || invalidation == null || version == null) {
             return;
         }
         if (settings.invalidationMode() == InvalidationMode.UPDATE && !entry.isNullMarker()) {
@@ -865,22 +1003,21 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
      */
     private void triggerRevalidation(K key, Function<? super K, ? extends V> loader,
             long servedWriteTimestamp) {
-        if (revalidationExecutor == null) {
+        if (!auxiliaryOpen.getAsBoolean() || revalidationExecutor == null) {
             return; // legacy wiring: stale keeps serving without revalidation
         }
-        CompletableFuture<StoredEntry<V>> claim = new CompletableFuture<>();
+        LoadClaim<K, V> claim = new LoadClaim<>(null);
         if (inflight.putIfAbsent(key, claim) != null) {
             return; // a load or revalidation for this key is already in flight
         }
-        metrics.onRevalidationTriggered(cacheName);
         try {
-            revalidationExecutor.execute(
-                    () -> runRevalidation(key, loader, servedWriteTimestamp, claim));
+            metrics.onRevalidationTriggered(cacheName);
+            revalidationExecutor.execute(new RevalidationTask(key, loader, servedWriteTimestamp, claim));
         } catch (RuntimeException e) {
             // Executor rejected (saturated or shut down): complete the claim
             // first so waiters already joined on it fail fast instead of
             // hanging, then release the slot so a later read retries.
-            claim.completeExceptionally(e);
+            claim.result.completeExceptionally(e);
             inflight.remove(key, claim);
             metrics.onRevalidationFailed(cacheName);
             log.warn("Revalidation for key '{}' in cache '{}' could not be submitted "
@@ -889,17 +1026,54 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         }
     }
 
+    /** A queued task must retire its claim when shutdown discards it. */
+    public interface DiscardableTask extends Runnable { void discard(); }
+
+    private final class RevalidationTask implements DiscardableTask {
+        private final K key;
+        private final Function<? super K, ? extends V> loader;
+        private final long timestamp;
+        private final LoadClaim<K, V> claim;
+        private final java.util.concurrent.atomic.AtomicBoolean claimed = new java.util.concurrent.atomic.AtomicBoolean();
+        RevalidationTask(K key, Function<? super K, ? extends V> loader, long timestamp, LoadClaim<K, V> claim) {
+            this.key = key; this.loader = loader; this.timestamp = timestamp; this.claim = claim;
+        }
+        @Override public void run() {
+            if (!auxiliaryOpen.getAsBoolean()) { discard(); return; }
+            if (claimed.compareAndSet(false, true)) runRevalidation(key, loader, timestamp, claim);
+        }
+        @Override public void discard() {
+            if (claimed.compareAndSet(false, true)) {
+                inflight.remove(key, claim);
+                claim.result.complete(LoadClaim.Outcome.skippedRefresh());
+            }
+        }
+    }
+
     private void runRevalidation(K key, Function<? super K, ? extends V> loader,
-            long servedWriteTimestamp, CompletableFuture<StoredEntry<V>> claim) {
+            long servedWriteTimestamp, LoadClaim<K, V> claim) {
         try {
-            StoredEntry<V> refreshed = revalidate(key, loader, servedWriteTimestamp);
-            claim.complete(refreshed);
+            LoadClaim.Outcome<V> refreshed = revalidate(key, loader, servedWriteTimestamp);
+            if (refreshed.isSkipped()) {
+                LoadClaim.Demand<K, V> demand = claim.skipOrForeground();
+                if (demand != null) {
+                    // Still the same local owner. A skipped acquisition used
+                    // no loader budget; this one load path retains its normal
+                    // two-execution bound and the original foreground deadline.
+                    refreshed = LoadClaim.Outcome.result(
+                            loadPath(key, demand.loader(), demand.deadlineNanos()));
+                }
+            }
+            claim.result.complete(refreshed);
             metrics.onRevalidationCompleted(cacheName);
-        } catch (RuntimeException e) {
-            claim.completeExceptionally(e);
+        } catch (RuntimeException | Error e) {
+            claim.result.completeExceptionally(e);
             metrics.onRevalidationFailed(cacheName);
             log.warn("Revalidation failed for key '{}' in cache '{}'; the stale entry "
                     + "keeps serving until its window ends.", key, cacheName, e);
+            if (e instanceof Error error) {
+                throw error;
+            }
         } finally {
             inflight.remove(key, claim);
         }
@@ -912,29 +1086,29 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
      * served suppresses the reload. A lost lock race is not a failure: another
      * instance is refreshing, and the stale entry keeps serving.
      */
-    private StoredEntry<V> revalidate(K key, Function<? super K, ? extends V> loader,
+    private LoadClaim.Outcome<V> revalidate(K key, Function<? super K, ? extends V> loader,
             long servedWriteTimestamp) {
         long g0 = l1Generation.get();
-        if (lockProvider == null || watchdog == null || !l2Available()) {
+        if (!auxiliaryOpen.getAsBoolean() || lockProvider == null || watchdog == null || !l2Available()) {
             // No coordination possible: the in-flight claim already bounds
             // this to one load per key per instance.
-            return loadAndStore(key, loader);
+            return LoadClaim.Outcome.result(loadAndStore(key, loader));
         }
-        DistributedLock lock = tryLockGuarded(cacheName + ":" + key);
+        DistributedLock lock;
+        try { lock = tryLockGuarded(cacheName + ":" + key); }
+        catch (LockProviderClosedException e) { return LoadClaim.Outcome.result(loadAndStore(key, loader)); }
         if (lock == null) {
-            return null; // another instance holds the rebuild lock
+            return LoadClaim.Outcome.skippedRefresh(); // no source absence was observed
         }
-        try {
+        try (LockScope scope = new LockScope(lock, key)) {
             StoredEntry<V> current = l2Get(key);
             if (current != null && current.hasWriteTimestamp()
                     && current.writeTimestampMillis() > servedWriteTimestamp) {
                 // A newer write landed while we claimed the lock: converge, no load.
                 warmL1(key, current, g0);
-                return current;
+                return LoadClaim.Outcome.result(current);
             }
-            return loadWithWatchdog(key, loader, lock);
-        } finally {
-            releaseGuarded(lock, key);
+            return LoadClaim.Outcome.result(loadWithWatchdog(key, loader, scope));
         }
     }
 
@@ -960,20 +1134,32 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
     // --- Load path selection: coordinated when possible ---
 
     private StoredEntry<V> loadPath(K key, Function<? super K, ? extends V> loader) {
-        if (lockProvider == null || watchdog == null || !l2Available()) {
+        return loadPath(key, loader, System.nanoTime() + OVERALL_BUDGET.toNanos());
+    }
+
+    private StoredEntry<V> loadPath(K key, Function<? super K, ? extends V> loader,
+            long overallDeadline) {
+        if (!auxiliaryOpen.getAsBoolean() || lockProvider == null || watchdog == null || !l2Available()) {
             // No coordination possible (or L2 down): per-instance load.
             return loadAndStore(key, loader);
         }
-        return coordinatedLoad(key, loader);
+        return coordinatedLoad(key, loader, overallDeadline);
     }
 
-    private StoredEntry<V> coordinatedLoad(K key, Function<? super K, ? extends V> loader) {
+    private StoredEntry<V> coordinatedLoad(K key, Function<? super K, ? extends V> loader,
+            long overallDeadline) {
         String lockName = cacheName + ":" + key;
         long g0 = l1Generation.get();
-        long overallDeadline = System.nanoTime() + OVERALL_BUDGET.toNanos();
-        long waitDeadline = System.nanoTime() + WAIT_SLICE.toNanos();
         while (true) {
-            DistributedLock lock = tryLockGuarded(lockName);
+            if (System.nanoTime() >= overallDeadline) {
+                log.warn("Rebuild coordination budget exhausted for key '{}' in cache '{}'; "
+                        + "loading without coordination (possible stampede after repeated "
+                        + "winner failures).", key, cacheName);
+                return loadAndStore(key, loader);
+            }
+            DistributedLock lock;
+            try { lock = tryLockGuarded(lockName); }
+            catch (LockProviderClosedException e) { return loadAndStore(key, loader); }
             if (!l2Available()) {
                 // L2 failed between the availability check and lock
                 // acquisition: fall back to the per-instance load — after
@@ -985,35 +1171,29 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
                 return loadAndStore(key, loader);
             }
             if (lock != null) {
-                try {
+                try (LockScope scope = new LockScope(lock, key)) {
                     // Mandatory double-check: the value may have
                     // appeared while we were acquiring the lock.
                     StoredEntry<V> entry = readThrough(key, g0);
                     if (entry != null) {
                         return entry;
                     }
-                    return loadWithWatchdog(key, loader, lock);
-                } finally {
-                    releaseGuarded(lock, key);
+                    return loadWithWatchdog(key, loader, scope);
                 }
             }
+            long waitDeadline = Math.min(overallDeadline,
+                    System.nanoTime() + WAIT_SLICE.toNanos());
             StoredEntry<V> appeared = awaitValue(key, waitDeadline);
             if (appeared != null) {
                 warmL1(key, appeared, g0);
                 return appeared;
             }
-            if (System.nanoTime() > overallDeadline) {
-                log.warn("Rebuild coordination budget exhausted for key '{}' in cache '{}'; "
-                        + "loading without coordination (possible stampede after repeated "
-                        + "winner failures).", key, cacheName);
-                return loadAndStore(key, loader);
-            }
-            waitDeadline = System.nanoTime() + WAIT_SLICE.toNanos();
         }
     }
 
     /** Lock acquisition through the breaker: fast-fail when open. */
     private DistributedLock tryLockGuarded(String lockName) {
+        if (!auxiliaryOpen.getAsBoolean()) throw new LockProviderClosedException();
         if (breaker != null && breaker.isOpen()) {
             return null;
         }
@@ -1045,17 +1225,36 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         return entry;
     }
 
-    private StoredEntry<V> loadWithWatchdog(K key, Function<? super K, ? extends V> loader,
-            DistributedLock lock) {
-        long periodMillis = LOCK_LEASE.toMillis() / 3;
-        ScheduledFuture<?> extension = watchdog.scheduleAtFixedRate(
-                () -> lock.extend(LOCK_LEASE),
-                periodMillis, periodMillis, TimeUnit.MILLISECONDS);
-        try {
-            return loadAndStore(key, loader);
-        } finally {
-            extension.cancel(false);
+    private final class LockScope implements AutoCloseable {
+        final DistributedLock lock;
+        final K key;
+        ScheduledFuture<?> extension;
+        boolean retired;
+        LockScope(DistributedLock lock, K key) { this.lock = lock; this.key = key; }
+        @Override public void close() {
+            if (retired) return;
+            retired = true;
+            if (extension != null) extension.cancel(false);
+            releaseGuarded(lock, key);
         }
+    }
+
+    private StoredEntry<V> loadWithWatchdog(K key, Function<? super K, ? extends V> loader,
+            LockScope scope) {
+        if (!auxiliaryOpen.getAsBoolean()) {
+            scope.close();
+            return loadAndStore(key, loader);
+        }
+        long periodMillis = LOCK_LEASE.toMillis() / 3;
+        try {
+            scope.extension = watchdog.scheduleAtFixedRate(
+                    () -> { if (auxiliaryOpen.getAsBoolean()) scope.lock.extend(LOCK_LEASE); },
+                    periodMillis, periodMillis, TimeUnit.MILLISECONDS);
+        } catch (java.util.concurrent.RejectedExecutionException e) {
+            scope.close();
+            if (auxiliaryOpen.getAsBoolean() && !watchdog.isShutdown()) throw e;
+        }
+        return loadAndStore(key, loader);
     }
 
     /** Bounded wait for the winner's value in L2. Null on timeout. */
@@ -1286,37 +1485,30 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         synchronized (l1LockFor(key)) {
             // Coherent snapshot under the lock: the entry is re-read here,
             // so a completed concurrent write can never be overwritten by a
-            // stale caller-side read. The barrier metadata belongs to the
-            // same commit, so value and metadata always describe each other.
+            // stale caller-side read. Its immutable local descriptor belongs
+            // to this exact holder, independently of fencing-map eviction.
             entry = l1.get(key);
-            L1BarrierMap.L1Meta meta = l1Metas.get(key);
-            if (entry == null) {
-                // The value was evicted or removed concurrently: never hand
-                // out a null entry (a FRESH classification would NPE the
-                // caller). The protective barrier metadata stays untouched;
-                // the caller continues to the normal L2/loader path.
-                return new FreshnessSnapshot<>(null, L1Freshness.EXPIRED);
-            }
-            if (meta == null || meta.logicalDeadlineNanos() == 0L) {
-                return new FreshnessSnapshot<>(entry, L1Freshness.EXPIRED);
-            }
-            long now = System.nanoTime();
-            if (now <= meta.logicalDeadlineNanos()) {
-                java.time.Duration accessTtl = settings.l1ExpireAfterAccess();
-                if (accessTtl != null && entry != null && l1Metas.get(key) == meta) {
-                    // Fresh access: slide freshness, the stale horizon AND
-                    // the physical retention — identity-checked, so a
-                    // concurrently replaced value keeps its own deadlines.
+            if (entry == null) return new FreshnessSnapshot<>(null, L1Freshness.EXPIRED);
+            StoredEntry.LocalFreshness meta = entry.localFreshness();
+            if (meta == null) return new FreshnessSnapshot<>(entry, L1Freshness.EXPIRED);
+            long now = localClock.getAsLong();
+            if (now - meta.logicalDeadlineNanos() < 0) {
+                Duration accessTtl = settings.l1ExpireAfterAccess();
+                if (accessTtl != null) {
                     long logical = now + accessTtl.toNanos();
-                    l1Metas.put(key, new L1BarrierMap.L1Meta(meta.highestSeen(), logical,
-                            logical + degradationStaleTtl.toNanos()));
-                    l1.put(key, entry, accessTtl.plus(degradationStaleTtl));
+                    long staleUntil = logical + degradationStaleTtl.toNanos();
+                    long retention = now + Math.max(meta.storeRetentionFloorNanos() - now, staleUntil - now);
+                    StoredEntry<V> refreshed = entry.withLocalFreshness(new StoredEntry.LocalFreshness(
+                            logical, staleUntil, meta.storeRetentionFloorNanos(), retention, meta.highestSeen()));
+                    if (!l1.replaceIfSame(key, entry, refreshed, Duration.ofNanos(retention - now))) {
+                        return new FreshnessSnapshot<>(null, L1Freshness.EXPIRED);
+                    }
+                    entry = refreshed;
                 }
                 return new FreshnessSnapshot<>(entry, L1Freshness.FRESH);
             }
-            return new FreshnessSnapshot<>(entry,
-                    now <= meta.staleServeUntilNanos() ? L1Freshness.STALE_ALLOWED
-                            : L1Freshness.EXPIRED);
+            return new FreshnessSnapshot<>(entry, now - meta.staleServeUntilNanos() < 0
+                    ? L1Freshness.STALE_ALLOWED : L1Freshness.EXPIRED);
         }
     }
 

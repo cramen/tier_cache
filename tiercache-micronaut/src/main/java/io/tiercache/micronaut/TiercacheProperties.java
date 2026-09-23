@@ -1,5 +1,6 @@
 package io.tiercache.micronaut;
 
+import io.tiercache.invalidation.JournalProtocol;
 import io.micronaut.context.annotation.ConfigurationInject;
 import io.micronaut.context.annotation.ConfigurationProperties;
 import io.micronaut.core.annotation.Introspected;
@@ -191,7 +192,7 @@ public class TiercacheProperties {
          * @since 1.1.0
          */
         public int getJournalCapacity() {
-            return journalCapacity != null ? journalCapacity : 10_000;
+            return journalCapacity != null ? journalCapacity : JournalProtocol.DEFAULT_CAPACITY;
         }
     }
 

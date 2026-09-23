@@ -2,6 +2,7 @@ package io.tiercache.testkit;
 
 import io.tiercache.spi.RemoteCache;
 import io.tiercache.spi.StoredEntry;
+import io.tiercache.spi.TaggedWriteOutcome;
 
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -50,4 +51,15 @@ public final class CountingRemoteCache<K, V> implements RemoteCache<K, V> {
     public boolean setIfAbsent(K key, StoredEntry<V> entry, Duration ttl) {
         return delegate.setIfAbsent(key, entry, ttl);
     }
+    @Override
+    public boolean supportsTaggedWriteOutcomes() {
+        return delegate.supportsTaggedWriteOutcomes();
+    }
+
+    @Override
+    public TaggedWriteOutcome putTaggedIfNewer(K key, StoredEntry<V> entry, Duration ttl, String[] tags) {
+        puts.incrementAndGet();
+        return delegate.putTaggedIfNewer(key, entry, ttl, tags);
+    }
+
 }

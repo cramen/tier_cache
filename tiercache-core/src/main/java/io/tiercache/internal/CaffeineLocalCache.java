@@ -35,9 +35,15 @@ public final class CaffeineLocalCache<K, V> implements LocalCache<K, V> {
      * @since 0.1.0
      */
     public CaffeineLocalCache(CacheSettings settings) {
+        this(settings, System::nanoTime);
+    }
+
+    /** Internal clock seam; the engine and L1 must use the same monotonic clock. */
+    public CaffeineLocalCache(CacheSettings settings, java.util.function.LongSupplier clock) {
         @SuppressWarnings("unchecked")
         Caffeine<K, Holder<V>> builder = (Caffeine<K, Holder<V>>) (Caffeine<?, ?>) Caffeine.newBuilder();
         this.cache = builder
+                .ticker(clock::getAsLong)
                 .maximumSize(settings.l1MaxSize())
                 .expireAfter(new Expiry<K, Holder<V>>() {
                     @Override
@@ -94,6 +100,18 @@ public final class CaffeineLocalCache<K, V> implements LocalCache<K, V> {
     @Override
     public boolean setIfAbsent(K key, StoredEntry<V> entry, Duration ttl) {
         return cache.asMap().putIfAbsent(key, new Holder<>(entry, ttl.toNanos())) == null;
+    }
+
+    @Override
+    public boolean supportsAtomicReplace() { return true; }
+
+    @Override
+    public boolean replaceIfSame(K key, StoredEntry<V> expected, StoredEntry<V> replacement, Duration ttl) {
+        // A no-op computeIfPresent still invokes expireAfterUpdate and can reset
+        // another entry's TTL. Read quietly, then compare the exact holder at commit.
+        Holder<V> current = cache.policy().getIfPresentQuietly(key);
+        if (current == null || current.entry != expected) return false;
+        return cache.asMap().replace(key, current, new Holder<>(replacement, ttl.toNanos()));
     }
 
     private static final class Holder<V> {

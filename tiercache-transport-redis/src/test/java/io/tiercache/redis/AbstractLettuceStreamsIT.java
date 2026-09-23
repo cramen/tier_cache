@@ -24,7 +24,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Spec: invalidation — durable Streams profile over real Redis: events flow,
- * disconnects heal by consuming the journal stream (no full flush).
+ * pending resumes within retained history or a safe registration/reset baseline.
  */
 abstract class AbstractLettuceStreamsIT {
 
@@ -109,8 +109,7 @@ abstract class AbstractLettuceStreamsIT {
     void subscriptionCreatesConsumerGroupEagerly() {
         factoryB.getCache("streams");
         byte[] stream = RedisStreamJournal.streamKeyBytes("streams");
-        byte[] group = (LettuceStreamsInvalidationTransport.GROUP_PREFIX + "streams:" + instanceB)
-                .getBytes(StandardCharsets.UTF_8);
+        byte[] group = RedisKeyspace.group("streams", instanceB);
         var connection = clientB.connect(ByteArrayCodec.INSTANCE);
         try {
             assertTrue(groupExists(connection.sync(), stream, group),
@@ -121,7 +120,7 @@ abstract class AbstractLettuceStreamsIT {
     }
 
     @Test
-    void disconnectHealsWithoutFullFlush() throws Exception {
+    void stableResumeEstablishesSafeRegistrationBaseline() throws Exception {
         TierCache<String, String> a = factoryA.getCache("streams");
         TierCache<String, String> b = factoryB.getCache("streams");
         awaitConsumerGroup("streams");
@@ -152,7 +151,7 @@ abstract class AbstractLettuceStreamsIT {
         service.registerTarget("streams", (io.tiercache.spi.InvalidationTarget) factoryB.getCache("streams"));
         waitFor(() -> b.get("keep") == null);
         assertEquals("v0", b.get("flood-0"));
-        reconnected.close();
+        service.close();
     }
 
     /**
@@ -162,8 +161,7 @@ abstract class AbstractLettuceStreamsIT {
      */
     private void awaitConsumerGroup(String cache) throws InterruptedException {
         byte[] stream = RedisStreamJournal.streamKeyBytes(cache);
-        byte[] group = (LettuceStreamsInvalidationTransport.GROUP_PREFIX + cache + ":" + instanceB)
-                .getBytes(StandardCharsets.UTF_8);
+        byte[] group = RedisKeyspace.group(cache, instanceB);
         var connection = clientB.connect(ByteArrayCodec.INSTANCE);
         try {
             var sync = connection.sync();
@@ -211,6 +209,41 @@ abstract class AbstractLettuceStreamsIT {
         }
     }
 
+    @Test
+    void poisonBatchCannotStrandPendingOrLeaveAStaleVictim() throws Exception {
+        TierCache<String, String> a = factoryA.getCache("streams");
+        TierCache<String, String> b = factoryB.getCache("streams");
+        var observed = new java.util.concurrent.CopyOnWriteArrayList<Object>();
+        var field = TierCacheFactory.class.getDeclaredField("invalidation"); field.setAccessible(true);
+        ((io.tiercache.spi.InvalidationHandler) field.get(factoryB)).setEventListener((c, event) -> observed.add(event.key()));
+        a.put("victim", "old"); a.put("batch", "old");
+        waitFor(() -> observed.contains("victim") && observed.contains("batch"));
+        assertEquals("old", b.get("victim")); assertEquals("old", b.get("batch")); observed.clear();
+        byte[] stream = RedisKeyspace.journal("streams"); byte[] group = RedisKeyspace.group("streams", instanceB);
+        var serializer = new JdkCacheSerializer<String>();
+        var version = new io.tiercache.Version(Long.MAX_VALUE - 1, java.util.UUID.randomUUID());
+        try (var connection = clientA.connect(ByteArrayCodec.INSTANCE)) {
+            var cmd = connection.sync();
+            cmd.del(RedisKeyspace.dataKey("streams", serializer.toBytes("victim")),
+                    RedisKeyspace.dataKey("streams", serializer.toBytes("batch")));
+            cmd.eval("redis.call('xadd',KEYS[1],'*','t',string.char(99),'k',ARGV[1],'v',ARGV[3]); "
+                            + "redis.call('xadd',KEYS[1],'*','t',string.char(0),'k',ARGV[2],'v',ARGV[3]); return 1",
+                    io.lettuce.core.ScriptOutputType.INTEGER, new byte[][]{stream},
+                    serializer.toBytes("victim"), serializer.toBytes("batch"), version.toWire().getBytes(StandardCharsets.UTF_8));
+            waitFor(() -> transportB.lastReaderError != null);
+            var journal = new RedisStreamJournal(connection, 1000, new JdkCacheSerializer<>());
+            journal.append("streams", new io.tiercache.InvalidationMessage("streams", "later", version,
+                    version.instanceId(), io.tiercache.InvalidationMessage.Type.INVALIDATE));
+            try { waitFor(() -> cmd.xpending(stream, group).getCount() == 0); }
+            finally { System.out.println("Poison batch: pending=" + cmd.xpending(stream, group).getCount() + ", delivered=" + observed); }
+            org.junit.jupiter.api.Assertions.assertNull(b.get("victim"), "ACK/skip without a clear leaves the corrupt-only victim stale");
+            org.junit.jupiter.api.Assertions.assertNull(b.get("batch"), "the batch remainder must be applied or covered by a safe clear");
+            journal.append("streams", new io.tiercache.InvalidationMessage("streams", "after", version,
+                    version.instanceId(), io.tiercache.InvalidationMessage.Type.INVALIDATE));
+            waitFor(() -> observed.contains("after"));
+        }
+    }
+
     private interface Check {
         boolean ok();
     }
@@ -220,7 +253,7 @@ abstract class AbstractLettuceStreamsIT {
 class RedisStreamsIT extends AbstractLettuceStreamsIT {
     @Override
     DockerImageName image() {
-        return DockerImageName.parse("redis:6.2-alpine");
+        return ServerProfile.image();
     }
 }
 

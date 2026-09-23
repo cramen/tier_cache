@@ -25,6 +25,21 @@ public interface InvalidationTransport extends AutoCloseable {
     void publish(InvalidationMessage message);
 
     /**
+     * Observes submission without waiting for delivery. A normal legacy void return
+     * is unconfirmed; exceptional completion or cancellation is classified as failed.
+     * Implementations must not block waiting for command completion.
+     */
+    default java.util.concurrent.CompletionStage<PublicationOutcome> publishAsync(InvalidationMessage message) {
+        try {
+            publish(message);
+            return java.util.concurrent.CompletableFuture.completedFuture(PublicationOutcome.UNCONFIRMED);
+        } catch (RuntimeException e) {
+            return java.util.concurrent.CompletableFuture.failedFuture(e);
+        }
+    }
+
+
+    /**
      * Subscribes to a cache's invalidation channel. The handler is invoked
      * asynchronously; per-channel ordering is preserved.
      *
@@ -45,6 +60,15 @@ public interface InvalidationTransport extends AutoCloseable {
      */
     default void setReconnectListener(Runnable listener) {
     }
+
+    /** Installs optional recovery authorization; legacy transports ignore this hook. */
+    default void setGapHandler(InvalidationGapHandler handler) { }
+
+    /** Installs optional Streams diagnostics; callbacks must run outside state monitors. */
+    default void setMetricsListener(CacheMetricsListener metrics) { }
+
+    /** Side-effect-free capability: registration must establish an empty L1 before serving traffic. */
+    default boolean requiresRegistrationReset() { return false; }
 
     /**
      * Shuts the transport down: subscriptions are cancelled and resources

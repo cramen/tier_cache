@@ -7,6 +7,178 @@ target versions.
 
 For the full list of additions and fixes, see [CHANGELOG.md](CHANGELOG.md).
 
+## 2.0.0: observable invalidation publication
+
+The void transport method remains available; legacy implementations adapt to
+UNCONFIRMED through the new default publishAsync method. Native Pub/Sub completion
+supplies actual Redis acknowledgement or a failed stage, while Streams reports
+NOT_REQUIRED. Existing metrics listeners remain compatible through a default
+batched publication callback. No mandatory Micrometer dependency was added.
+
+SENT records attempted submission, not successful delivery. Use the new
+`tiercache.invalidation.publish` outcome counters and dashboard panels. Terminal
+callbacks run on a bounded observer worker; counts may appear after the cache call
+returns. Observer errors and failed publication do not replace committed write
+results. Direct void Pub/Sub callers should use publishAsync to observe submission
+errors as well as late failures. No automatic republish or stronger delivery
+recovery guarantee is introduced. Close drains available observations for at most
+one second, with best-effort export after backend shutdown.
+
+## 2.0.0: invalidation journal capacity floor
+
+Enabled built-in journals now reject `tiercache.invalidation.journal-capacity`
+values <=64, including the exact boundary 64. Configure at least 65; the confirmed
+cursor row must survive alongside the next 64 delivered events. The default remains
+10000. Direct RedisStreamJournal construction and Spring/Micronaut wiring validate
+before journal commands or owned connection creation; disabled invalidation leaves
+its unused capacity setting alone. Values are rejected, never silently clamped.
+
+65 is only the protocol floor. Choose a larger window for bursts, disconnected
+receivers and scheduled recovery delays. Redis trimming remains approximate, and
+read failures or real history loss can still require a conservative L1 reset.
+See [journal sizing](docs/sizing-and-ttl.md#journal-capacity).
+
+## 2.0.0: complete Spring async retrieval
+
+Managed Spring caches now use the factory's bounded async view for both retrieve
+methods introduced in Spring 6.1. Single-argument retrieval no longer blocks its
+caller on L2. Supplier retrieval supports synchronized CompletableFuture and Mono
+caching through existing engine coalescing, with unchanged null policy and async
+shutdown/rejection semantics. Ordinary sync=false annotations gain no coalescing
+promise; synchronous writes/evictions remain synchronous.
+
+The internal two-argument TierCacheSpringCache constructor remains usable for sync
+operations, but both retrieve overloads return failed futures without an async view.
+Direct async users must use TierCacheManager or the new constructor accepting both
+views. This changes its former blocking single-argument retrieval behavior.
+See [Spring async retrieval](docs/migration-from-spring-cache.md#asynchronous-retrieval)
+for wrappers, cached nulls, bounded execution and cancellation.
+
+## 2.0.0: value-bound local freshness
+
+Degradation freshness now lives with the retained L1 entry instead of an
+independently expiring metadata map. Freshness and allowed stale serving no longer
+end early when a version fence expires or is evicted. Access refresh preserves
+the original retention floor and cannot reinsert an entry removed by Caffeine.
+
+Existing LocalCache methods and defaults remain compatible. Custom providers
+must preserve opaque StoredEntry holders. Only providers combining a positive
+`degradationStaleTtl` with `l1ExpireAfterAccess` need to implement the new default
+capability and atomic identity-replacement methods; otherwise engine-cache
+creation rejects that combination. Built-in Caffeine already supports it.
+Redis frames and remote timestamps are unchanged. The window remains off by
+default and does not heal writes performed while Redis was unavailable.
+
+## 2.0.0: lock-provider and factory shutdown
+
+Client-backed lock providers now close the dedicated connections they create;
+caller-supplied clients and connections remain caller-owned. Derived providers
+are lazy and owned by their factory. Direct acquisition after provider close
+fails immediately instead of accidentally reopening coordination resources.
+
+Already-obtained synchronous caches remain usable with a usable supplied L2,
+but factory close disables coordination, refresh, invalidation publication and
+recovery. Continued cluster coherence is not promised. Async shutdown semantics,
+constructor signatures, stored data and lease/compensation settings are unchanged.
+See [resource ownership and shutdown](docs/resource-lifecycle.md).
+
+## 2.0.0: Redis keyspace v2 (breaking)
+
+The built-in Redis/Valkey transport now uses separate v2 data, tag, journal,
+channel, group and lock addresses. This fixes cross-cache deletion by clear
+for hierarchical names (`user` / `user:roles`) and glob-containing names
+(`a?` / `a1`). Java cache APIs and value frames are unchanged, but active
+old/new instances are **not rolling-compatible**.
+
+Version 2.0.0 carries this operational break under the published major-release
+compatibility policy. It is not a compatible 1.x patch/minor upgrade.
+
+Follow the [v2 migration guide](docs/redis-keyspace-v2.md): quiesce traffic or
+source mutations, drain and stop all old requests/loaders/publishers, start
+with empty v2 namespaces, then resume with capacity for cold-cache loads.
+V2 never reads, copies, subscribes to or deletes legacy state. Rollback also
+requires a drained cutover and clean isolated cache storage. Whole-cache
+clear remains a non-transactional scan followed by a separate journal append.
+
+## 2.0.0: asynchronous invalidation recovery
+
+Replay no longer runs under state monitors or inline in the successful probe
+or reconnect callback. The breaker stays HALF_OPEN until its recovery epoch
+has verified replay or a safe baseline-and-clear result; CLOSED/recovered
+notifications can therefore arrive later. A failed baseline still clears L1
+but keeps the confirmed cursor and recovery pending. Repeated failures retry
+with bounded backoff instead of waiting for another live event.
+
+Factories own two recovery workers and unregister pending gauges on close.
+Closed coherence hooks cannot be restarted by surviving synchronous caches;
+real probes may still establish caller-owned L2 availability. Existing SPI
+methods remain, with additive asynchronous completion and local-clear epoch
+hooks. Custom callers must await the completion stage when they require
+settled recovery; returning from the old void callback is no longer that
+boundary. See [the recovery contract](docs/recovery.md).
+
+## 2.0.0: Streams pending recovery
+
+Streams now drains its own pending work before new rows and resumes only
+inside the receiver's own group. Poison/missing rows require a committed
+baseline-before-clear result before covered ACKs. Failed application and ACK
+attempts retain the delivered batch and use bounded retries. A reader without
+a capable gap handler remains pending rather than silently skipping the gap.
+
+Default random-identity groups are retired best-effort on graceful close;
+explicit stable-UUID groups persist for an **exclusive** restart. Registration
+clears the fresh/resumed target against a captured baseline, so covered old
+UPDATE payloads cannot warm a new L1. Do not run two live owners of one UUID.
+
+`CheckedRange` keeps its record signature but may omit a raw-validated cursor
+anchor. Consumers must use its integrity flag rather than requiring the first
+event to be the cursor row. Existing custom journals may retain a valid typed
+anchor. Corrupt unconsumed rows now raise sanitized typed failures. See
+[Streams recovery and operator procedures](docs/streams-recovery.md).
+
+## 2.0.0: custom transport migration
+
+### Custom transports: versioned tagged writes
+
+The public `TierCache.put(key, value, tags)` signature is unchanged. Custom
+`RemoteCache` providers and decorators must implement both
+`supportsTaggedWriteOutcomes()` (a side-effect-free, no-I/O capability query)
+and `putTaggedIfNewer(...)` before accepting **versioned tagged writes**.
+The existing void `putTagged(...)` method alone is no longer sufficient.
+Old providers still compile and link, but core now throws an actionable
+`CacheConfigurationException` before any mutation for this unsupported
+operation, including when the breaker is OPEN. Unsupported capability is
+not recorded as an infrastructure failure.
+
+Return `WON` only after accepting the candidate, and `LOST` when a newer
+stored value or tombstone rejects it. Couple the acceptance decision with
+data, replacement tag memberships, reverse index and any configured journal
+append. A losing candidate must leave all of them unchanged. Advertise the
+capability only when this contract is implemented; decorators must forward
+both methods. The default extension returns `UNSUPPORTED` without I/O for
+versioned entries. Unversioned entries still delegate to the legacy void
+method with its existing unconditional semantics.
+
+The built-in Lettuce transport implements this in one Lua operation on
+Redis/Valkey. This tagged-write correction alone does not change value frames,
+key names or journal formats; the separate v2 keyspace change above does
+change addresses and requires its coordinated migration.
+Its existing limitation remains: without a journal, or for unversioned
+entries, tagged writes are unconditional. Retagging replaces old memberships;
+it does not accumulate every tag ever assigned to the key. During a mixed
+rollout, old writers can still create incorrect memberships or publish a
+losing candidate. Upgrade all writers; already-corrupt indexes are not
+repaired automatically by the new protocol.
+
+A confirmed loss performs at most one convergence read and never publishes
+the losing value. A refused breaker probe or an admitted infrastructure
+failure uses local-only fallback without publishing or persisting tags.
+This does not make an unacknowledged timeout a confirmed loss: Redis may
+have accepted the write before the client timed out. There is no guaranteed
+rollback, exactly-once retry, or reconciliation after such an uncertain
+outcome. Lua excludes interleaving commands, but does not roll back commands
+already executed if a later Redis runtime error occurs.
+
 ## 1.4.0
 
 - New opt-in knob `tiercache.degradation-stale-ttl` (per cache, default `0`
@@ -178,3 +350,22 @@ Modules:
 - `tiercache-tck` — public chaos-test suite (Testcontainers) and benchmarks.
 
 Baseline requirements: JDK 17+, Redis 6.2+ or Valkey.
+
+
+## Documentation clarification — 2026-09-23
+
+Whole-cache SCAN clear and its following EVICT_ALL journal append are separate,
+non-transactional steps; neither clear nor tag/batch eviction fences concurrent
+writes. Verified replay preserves unaffected L1 entries, but missing/unverifiable
+history, including read failure inside nominal retention, can require a clear.
+A failed fallback baseline still clears conservatively while retaining the cursor
+and pending recovery. A silent gap needs a recovery trigger; journal existence
+alone does not heal it. Changes that never reached Redis cannot be reconstructed.
+
+Budget source staleness using [TTL and outage conditions](docs/sizing-and-ttl.md),
+not an unconditional one-L1-TTL bound. A fallback across a fleet can cause extra
+source traffic. Keep Spring `sync=true` for loader coalescing; null and stale
+serving remain opt-in. See [diagnosis](docs/troubleshooting.md), the
+[tested platform matrix](docs/compatibility.md) and [release evidence](docs/release-evidence.md).
+These are scope clarifications, not a new format or API migration; the separately
+documented Redis v2 cold cutover and major-version requirement still apply.

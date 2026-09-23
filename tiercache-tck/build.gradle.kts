@@ -42,6 +42,9 @@ dependencies {
     implementation(libs.testcontainers.junit.jupiter)
 
     "vtStressImplementation"(project(":tiercache-core"))
+    "vtStressImplementation"(project(":tiercache-invalidation"))
+    "vtStressImplementation"(project(":tiercache-transport-redis"))
+    "vtStressImplementation"(libs.testcontainers)
     "vtStressImplementation"(testFixtures(project(":tiercache-core")))
     "vtStressImplementation"(platform(libs.junit.bom))
     "vtStressImplementation"(libs.junit.jupiter)
@@ -66,11 +69,12 @@ configurations {
 // JDK 21+ toolchain for the virtual-thread stress gate. Resolution is lazy:
 // when no 21+ JDK is installed the compile/test tasks below are skipped with
 // a loud log line instead of failing (or downloading a JDK).
+val vtJavaVersion = providers.gradleProperty("tiercacheVtJdk").map { it.toInt() }.orElse(21)
 val vtCompiler = javaToolchains.compilerFor {
-    languageVersion = JavaLanguageVersion.of(21)
+    languageVersion = JavaLanguageVersion.of(vtJavaVersion.get())
 }
 val vtLauncher = javaToolchains.launcherFor {
-    languageVersion = JavaLanguageVersion.of(21)
+    languageVersion = JavaLanguageVersion.of(vtJavaVersion.get())
 }
 
 fun vtToolchainAvailable(): Boolean = try {
@@ -112,11 +116,13 @@ tasks.register<Test>("vtStressTest") {
     testClassesDirs = vtStress.output.classesDirs
     classpath = vtStress.runtimeClasspath
     javaLauncher = vtLauncher
+    systemProperty("tiercache.recovery.jfr", layout.buildDirectory.file(
+        "reports/recovery-jdk${vtJavaVersion.get()}.jfr").get().asFile.absolutePath)
     skipUnlessVtToolchain()
 }
 
 tasks.register<Test>("soakTest") {
-    description = "Soak gate: sustained churn against a real L2 container; memory and journal growth gates."
+    description = "Strict soak: separate post-GC heap/RSS <=5% growth, observed workers, bounded journal and JSON evidence."
     group = "verification"
     testClassesDirs = sourceSets.test.get().output.classesDirs
     classpath = sourceSets.test.get().runtimeClasspath
@@ -125,6 +131,10 @@ tasks.register<Test>("soakTest") {
     }
     systemProperty("tiercache.soak.duration",
         providers.systemProperty("tiercache.soak.duration").orElse("PT10M").get())
+    systemProperty("tiercache.soak.report", providers.systemProperty("tiercache.soak.report")
+        .orElse(layout.buildDirectory.file("reports/soak/report.json").map { it.asFile.absolutePath }).get())
+    outputs.upToDateWhen { false } // An explicit release-gate invocation must run the workload again.
+    outputs.cacheIf { false } // Runtime evidence cannot be reused from a build cache.
 }
 
 // Compliance-suite artifact (TCK publication design D5): the TCK's value is

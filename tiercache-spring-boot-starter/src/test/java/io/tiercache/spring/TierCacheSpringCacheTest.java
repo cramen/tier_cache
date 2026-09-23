@@ -86,28 +86,30 @@ class TierCacheSpringCacheTest {
     @Test
     void retrieveIsMultilevel() throws Exception {
         CountingRemoteCache<Object, Object> l2 = new CountingRemoteCache<>();
-        TierCacheFactory factory = newFactory(l2, NullPolicy.deny());
-        // Populate L2 (and L1 of the "writer" cache).
-        TierCacheSpringCache writer = new TierCacheSpringCache("writer", factory.getCache("writer"));
-        writer.put("k", "v");
-        // The factory memoizes one core cache per name, so a different name
-        // yields a genuinely cold L1 over the same L2 (reusing "writer" would
-        // serve the read from its already-warm L1 and prove nothing).
-        TierCacheSpringCache reader = new TierCacheSpringCache("reader", factory.getCache("reader"));
+        try (TierCacheFactory factory = newFactory(l2, NullPolicy.deny())) {
+            // Populate L2 (and L1 of the "writer" cache).
+            TierCacheSpringCache writer = new TierCacheSpringCache("writer", factory.getCache("writer"));
+            writer.put("k", "v");
+            // The factory memoizes one core cache per name, so a different name
+            // yields a genuinely cold L1 over the same L2 (reusing "writer" would
+            // serve the read from its already-warm L1 and prove nothing).
+            TierCacheSpringCache reader = new TierCacheSpringCache("reader", factory.getCache("reader"),
+                    factory.asyncCache("reader"));
 
-        int l2GetsBefore = l2.gets.get();
-        Cache.ValueWrapper wrapper = reader.retrieve("k").get();
-        assertThat(wrapper.get()).isEqualTo("v");
-        assertThat(l2.gets.get()).isGreaterThan(l2GetsBefore)
-                .as("cold L1 must be served from L2");
+            int l2GetsBefore = l2.gets.get();
+            Cache.ValueWrapper wrapper = reader.retrieve("k").get();
+            assertThat(wrapper.get()).isEqualTo("v");
+            assertThat(l2.gets.get()).isGreaterThan(l2GetsBefore)
+                    .as("cold L1 must be served from L2");
 
-        // The L2 hit must have warmed L1: a second retrieve stays on L1.
-        l2GetsBefore = l2.gets.get();
-        assertThat(reader.retrieve("k").get().get()).isEqualTo("v");
-        assertThat(l2.gets.get()).isEqualTo(l2GetsBefore)
-                .as("L2 hit must warm L1; second retrieve must not touch L2");
+            // The L2 hit must have warmed L1: a second retrieve stays on L1.
+            l2GetsBefore = l2.gets.get();
+            assertThat(reader.retrieve("k").get().get()).isEqualTo("v");
+            assertThat(l2.gets.get()).isEqualTo(l2GetsBefore)
+                    .as("L2 hit must warm L1; second retrieve must not touch L2");
 
-        assertThat(reader.retrieve("absent").get()).isNull();
+            assertThat(reader.retrieve("absent").get()).isNull();
+        }
     }
 
     @Test

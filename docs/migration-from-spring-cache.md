@@ -84,13 +84,56 @@ Miss coalescing engages only on the value-loader path. With the default
 `@Cacheable(sync = false)`, Spring performs a get-then-put: a miss reads the
 cache, invokes your method, and stores the result — concurrent misses each
 invoke the method, with no coalescing (standard Spring Cache behavior, not
-specific to Tiercache). Setting `sync = true` routes misses through
-`Cache.get(key, Callable)` instead, which the starter's adapter
+specific to Tiercache). For synchronous return values, setting `sync = true`
+routes misses through `Cache.get(key, Callable)`, which the starter's adapter
 (`TierCacheSpringCache`) implements via the core's `getOrCompute` — engaging
 singleflight (one loader execution per key per instance) plus distributed
 rebuild coordination (one loader per key across the cluster when the Redis
 transport is present). Use `sync = true` on `@Cacheable` methods whose
 loader is expensive or whose keys are hot.
+
+## Asynchronous retrieval
+
+The manager implements both Spring `Cache.retrieve` overloads, available since
+Spring Framework 6.1. Cache I/O and supplier invocation run on the owning
+TierCacheFactory's bounded async executor, rather than the retrieval caller thread.
+L2 hits still warm L1 and concurrent loader calls share the engine's existing claim.
+
+| Call | Value hit | Cached null | Miss |
+| --- | --- | --- | --- |
+| `retrieve(key)` | Future of `ValueWrapper(value)` | Future of a non-null wrapper holding null | Future completing with null |
+| `retrieve(key, supplier)` | Future of the value; supplier is not invoked | Future of null; supplier is not invoked | Invoke supplier through coalescing; return its value or null |
+
+Both methods always return a non-null future. The supplier overload never returns
+a Spring wrapper or its internal NullValue sentinel. Loader nulls follow the cache's
+allow/deny policy; supplier exceptions and failed/cancelled stages remain failed or
+cancellation-type future outcomes with their original cause.
+
+`@Cacheable(sync = true)` methods returning CompletableFuture use the supplier
+overload. Spring's synchronized Mono adaptation is covered too when Reactor is
+present. Ordinary `sync = false` annotations retain separate read/invoke/write
+behavior and gain no coalescing guarantee. Synchronous values, CachePut and
+CacheEvict keep their existing semantics.
+
+The core currently occupies an async worker while awaiting the supplier's stage.
+Slow suppliers can therefore saturate the shared bounded pool. Overflow returns a
+failed future with RejectedExecutionException; work never falls back to the caller
+or a new executor. Factory close settles queued/running retrieval futures with the
+existing cancellation-type outcome and rejects later submissions; completed results
+stay unchanged. Cancelling one caller's future does not cancel the shared load or
+an application-owned supplier stage. Shutdown cannot undo loader side effects.
+
+This repairs retrieval, not every Spring reactive operation: cache initialization
+and synchronous writes/evictions can still perform blocking work.
+
+### Direct construction of the internal adapter
+
+The old `TierCacheSpringCache(name, syncCache)` constructor remains available for
+synchronous use. Both retrieve methods now return actionable failed futures with
+UnsupportedOperationException when no async view was supplied. Its single-argument
+retrieve previously blocked and returned a completed result; that behavior changes.
+Use TierCacheManager, or pass the synchronous and asynchronous views of the same
+factory cache to the new constructor. No unmanaged/common-pool fallback is created.
 
 ## What changes semantically
 
@@ -105,8 +148,8 @@ loader is expensive or whose keys are hot.
   `null-marker-ttl`; subsequent calls do not invoke the method until the
   marker expires. Under the default `deny` policy nothing changes versus
   `ConcurrentMapCache`: nulls are not cached.
-- **Loader coalescing.** With singleflight, concurrent callers for the same
-  missing key share one loader execution. Loader side effects therefore run
+- **Loader coalescing.** On the `sync = true` value-loader path, concurrent
+  callers for the same missing key share one loader execution. Loader side effects therefore run
   once per rebuild round, not once per caller — which is the point, but
   matters if your loader performed per-call bookkeeping.
 - **Cache names not in configuration.** A name absent from

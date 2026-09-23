@@ -33,15 +33,19 @@ public final class BreakerLockProvider implements DistributedLockProvider, AutoC
 
     @Override
     public DistributedLock tryLock(String name, Duration lease) {
-        if (!breaker.tryAcquire()) {
+        CircuitBreaker.Permit permit = breaker.tryAcquirePermit();
+        if (permit == null) {
             return null;
         }
         try {
             DistributedLock lock = delegate.tryLock(name, lease);
-            breaker.onSuccess();
+            permit.success();
             return lock;
+        } catch (LockProviderClosedException e) {
+            permit.cancel();
+            throw e;
         } catch (RuntimeException e) {
-            breaker.onFailure();
+            permit.failure();
             return null;
         }
     }

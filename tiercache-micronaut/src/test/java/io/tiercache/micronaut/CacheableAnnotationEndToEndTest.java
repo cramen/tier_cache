@@ -94,7 +94,7 @@ class CacheableAnnotationEndToEndTest implements TestPropertyProvider {
         // The entry lives in L2 under the cache's namespace.
         try (RedisClient probe = RedisClient.create(redisUri());
                 io.lettuce.core.api.StatefulRedisConnection<String, String> conn = probe.connect()) {
-            assertThat(conn.sync().keys("micronaut:numbers:*")).isNotEmpty();
+            assertThat(conn.sync().keys(new String(io.tiercache.redis.RedisKeyspace.dataPrefix("micronaut:numbers"), java.nio.charset.StandardCharsets.US_ASCII) + "*")).isNotEmpty();
         }
     }
 

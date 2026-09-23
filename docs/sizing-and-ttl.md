@@ -124,13 +124,21 @@ metric, and the `TiercacheDroppedInvalidations` alert rule in
 [docs/grafana/](grafana/). If you see drops, raise the capacity before
 reaching for longer L1 TTLs.
 
-Hard floor: the capacity must comfortably exceed the live cursor cadence
-(64 events). The replay cursor advances over confirmed-applied contiguous
-rows, and each cadence tick needs the cursor's own row to still be in the
-stream; with a journal smaller than the cadence, that row is always
-trimmed by tick time, prefix integrity is unconfirmable, and the service
-takes the flush path BY DESIGN — even with nothing actually lost. A few
-hundred entries is the practical minimum; the default is far above it.
+The enforced protocol floor is **65 entries**: the fixed live cursor cadence is
+64 delivered events, and the inclusive integrity check also needs the previously
+confirmed cursor row. Capacity 64 loses that row by the next full tick under exact
+retention, so values <=64 are rejected rather than silently increased. Direct
+Redis journal construction and both starters share the same validator. The default
+remains 10000; a disabled journal does not validate its unused capacity setting.
+
+Accepting 65 is not a no-flush guarantee or an outage budget. Bursts, time between
+scheduling and executing recovery, failed reads and disconnected receivers need
+headroom beyond the floor. Size for the invalidation rate times maximum expected
+recovery/read lag, with operational margin; a few hundred or more can be needed
+even for short delays. Redis MAXLEN trimming is approximate: the stream can retain
+more rows than the configured target, but that temporary over-retention is not a
+correctness mechanism. This property is neither a byte cap nor an exact row maximum.
+Conservative reset still applies whenever history cannot be verified.
 
 ## Per-cache overrides vs global defaults
 

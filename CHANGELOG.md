@@ -5,6 +5,55 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [2.0.0] - 2026-09-23
+
+### Changed
+
+- Documentation clarification (2026-09-23): historical claims below that whole-cache clear and journal append are atomic, that reconnect never flushes L1, or that every failure is diagnosable from metrics alone are superseded. SCAN clear and EVICT_ALL append are separate; unverifiable history (including read failure) can require fallback clear, while unstored events cannot be replayed. See docs/configuration.md, docs/recovery.md and docs/troubleshooting.md. This clarification does not retroactively claim that older releases passed current gates.
+
+- Raised the Micrometer baseline to 1.15.12 and aligned the Redis transport's Netty family through the published 4.2.17.Final BOM to address HIGH/CRITICAL dependency findings. Consumer-enforced BOMs can override these defaults; scan the application's resolved graph.
+
+- Release dependency evidence now compares resolved runtime/classifier inventories with module and aggregate SBOMs, including shaded Caffeine and core test fixtures. Trivy SBOM scans fail closed for incomplete evidence and unexcepted HIGH/CRITICAL findings. Candidate manifests bind exact publication bytes, SBOMs and scan reports to an explicit ref/version; complete bundles are signed/attested, with final evidence attached to an existing release. No automatic Central publication is added; see docs/release-evidence.md.
+
+- Added pinned Redis 6.2/7.4/8.x and Valkey contract profiles, isolated Spring Boot 3.5/4.1 published-artifact consumer checks, and a Docker Sentinel regression for planned promotion, abrupt primary loss and full outage. Evidence records dependency graphs, image identities, topology and observed value versions. Redis Cluster remains unsupported; see docs/compatibility.md.
+
+- **BREAKING:** the built-in Redis keyspace moves to v2. Complete cache names are encoded without delimiter/glob ambiguity, and data, tags, journals, channels, consumer groups and rebuild locks have separate address families. Clearing one cache can no longer delete another cache's data or library control state. Old/new active deployments require a coordinated cold cutover; no legacy reads, event bridge or automatic cleanup are provided. See UPGRADING.md and docs/redis-keyspace-v2.md. Value frames and application serializers are unchanged; whole-cache clear is still non-transactional.
+
+### Fixed
+
+- The strict soak gate now measures post-GC heap and process RSS independently, verifies explicit GC completion, and observes every worker Future, including captured Errors. Missing measurements, insufficient samples, cancelled/early/hung workers and independent memory growth above the unchanged 5% budget fail the gate. Linux/macOS readers and per-sample JSON evidence replace the combined heap-plus-virtual-memory proxy; see docs/tck.md.
+
+
+- JMX inspection now owns only its successful registration and consumes that ownership once on close. Skipped/failed registrations and repeated close cannot remove another factory's or a foreign MBean; concurrent lifecycle calls are ordered without changing the fixed ObjectName. All enum-derived Micrometer labels now use Locale.ROOT, preserving JMX hit ratios and metric identities under Turkish or changing default locales. Restart affected processes; existing malformed time series are not renamed in place.
+
+
+- Invalidation publication now observes native Redis completion without delaying writes or replacing committed write results with publication errors. Compatible transport/listener defaults distinguish acknowledged, failed, legacy-unconfirmed and Streams-not-required outcomes. A bounded observer worker exports `tiercache.invalidation.publish` batches with rate-limited sanitized diagnostics; SENT remains the submission-attempt counter. Late completion cannot restart closed observers; see docs/observability.md.
+
+
+- Built-in invalidation journals now reject capacities <=64 before connection use, with one shared 64-event cadence and minimum-capacity definition across Redis, Spring and Micronaut. The minimum is 65 (cursor row plus 64 later events), the default remains 10000, and disabled journals ignore unused capacity settings. This prevents avoidable cursor-baseline loss; sufficient outage retention still requires workload sizing.
+
+
+- Spring Cache now implements both asynchronous retrieve overloads through the owning factory's bounded async view. Lookups no longer perform L2 I/O on the retrieval caller thread; synchronized CompletableFuture/Mono loaders use existing coalescing, null policies and cancellation/rejection semantics. The legacy internal adapter constructor remains synchronous-only and returns explicit failed futures for retrieval; see UPGRADING.md.
+
+
+- L1 freshness now shares the lifetime of its value or null marker, independent of bounded invalidation fencing. Fresh access preserves the store-time retention floor and atomically replaces the current holder, preventing resurrection after L1 eviction. Custom L1 providers need the compatible atomic-replacement extension only for degradation stale serving combined with access expiry. Spring and Micronaut preserve explicit zero overrides and identify invalid cache/default settings.
+
+
+- Lock providers now dispose their owned connections exactly once across lazy initialization and shutdown races, without closing borrowed clients/connections. Derived providers stay lazy. Factory close gates auxiliary work, retires discarded refresh claims and preserves usable synchronous views with local coalescing. Watchdog shutdown releases acquired tokens once before loader fallback; closed-provider outcomes retire breaker permits without recording a Redis result. See docs/resource-lifecycle.md.
+
+
+- Streams no longer strands the rest of a delivered batch after a corrupt row or failed ACK. Readers drain own pending work, claim only within their own group, retain per-row apply/ACK state and require a current safe reset baseline before settling corrupt/missing history. Shared stream/journal validation skips decoding an already-accounted opaque anchor, including poison at the reset tail. Failed clears now complete as bounded recovery failures rather than immediate obsolete-pass retries. Added bounded failure diagnostics and stream failure counters; see docs/streams-recovery.md for stable/random group lifecycle and internal SPI migration.
+
+- Journal recovery now uses two owned workers with bounded per-cache scheduling, pass budgets and exponential retries. Redis I/O and observer callbacks run outside cache-state and breaker monitors. Successful probes return without waiting for replay; CLOSED is gated by the same recovery epoch's verified replay or safe reset. Failed baseline reads still clear L1 but retain the cursor and remain pending. Shutdown cancels queued work and detaches retired coherence hooks. Added `tiercache.invalidation.recovery.pending{cache}` and real-Redis JFR coverage; see docs/recovery.md.
+
+- Tagged data and its reverse index now share one absolute expiry instant. On Redis 6.2, separate relative TTL commands could produce different expiration times inside the same Lua script, especially with many tags. Extend-only tag-set TTLs and losing-write behavior remain unchanged.
+
+- Tagged writes preserve the remote acceptance result: rejected candidates no longer warm L1, publish UPDATE events, or alter tag indexes. Lettuce atomically updates accepted values, replacement tags, reverse indexes and journal bookkeeping. Losing writers perform one bounded convergence read; degraded writes stay local. Custom versioned tagged SPI providers must implement the new outcome method and capability query; see UPGRADING.md.
+
+- Foreground misses that join a skipped SWR/XFetch refresh no longer receive a false null. In-flight claims distinguish real results from skipped coordination and promote foreground demand through the existing bounded load path. Races with an already-skipped or replacement refresh retain singleflight ownership, the original coordination deadline and the two-loader-execution limit; genuine nulls and loader failures remain distinct.
+
 ## [1.4.0] - 2026-09-21
 
 ### Added

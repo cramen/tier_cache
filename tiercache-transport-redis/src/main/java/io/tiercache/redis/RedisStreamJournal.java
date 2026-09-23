@@ -1,5 +1,6 @@
 package io.tiercache.redis;
 
+import io.tiercache.invalidation.JournalProtocol;
 import io.lettuce.core.Limit;
 import io.lettuce.core.Range;
 import io.lettuce.core.StreamMessage;
@@ -18,11 +19,11 @@ import java.util.Map;
 
 /**
  * Bounded invalidation journal on Redis Streams: one stream per cache
- * ({@code tiercache:journal:<cache>}), capacity-capped by approximate
+ * ({@code tiercache:v2:journal:<token(cache)>}), capacity-capped by approximate
  * MAXLEN trimming. Writers append inside the same atomic Lua unit as the
  * data write (see {@link LettuceRemoteCache}), so there is no "wrote but
  * didn't journal" window; every append path also keeps the exact trim
- * counter ({@code tiercache:journal-trims:<cache>}) for the
+ * counter ({@code tiercache:v2:journal-trims:<token(cache)>}) for the
  * beginning-cursor trim check.
  *
  * <p>Cursors are stream entry IDs ({@code millis-seq}); replay reads
@@ -39,7 +40,7 @@ public final class RedisStreamJournal implements InvalidationJournal {
      *
      * @since 0.1.0
      */
-    public static final String JOURNAL_KEYSPACE = "tiercache:journal:";
+    public static final String JOURNAL_KEYSPACE = RedisKeyspace.JOURNAL;
 
     /**
      * Keyspace prefix of the atomic trim counter (one per cache stream):
@@ -49,7 +50,7 @@ public final class RedisStreamJournal implements InvalidationJournal {
      *
      * @since 1.3.0
      */
-    public static final String TRIMS_KEYSPACE = "tiercache:journal-trims:";
+    public static final String TRIMS_KEYSPACE = RedisKeyspace.TRIMS;
 
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(RedisStreamJournal.class);
 
@@ -70,7 +71,7 @@ public final class RedisStreamJournal implements InvalidationJournal {
      *
      * @param connection    the connection to issue stream commands on
      * @param capacity      maximum entries kept per cache stream (approximate
-     *                      MAXLEN trimming)
+     *                      MAXLEN trimming), at least {@value JournalProtocol#MIN_CAPACITY}
      * @param keySerializer serializer for message keys
      * @since 0.1.0
      */
@@ -87,28 +88,28 @@ public final class RedisStreamJournal implements InvalidationJournal {
      *
      * @param connection      the connection to issue stream commands on
      * @param capacity        maximum entries kept per cache stream
-     *                        (approximate MAXLEN trimming)
+     *                        (approximate MAXLEN trimming), at least {@value JournalProtocol#MIN_CAPACITY}
      * @param keySerializer   serializer for message keys
      * @param valueSerializer serializer for UPDATE payloads
      * @since 1.2.1
      */
     public RedisStreamJournal(StatefulRedisConnection<byte[], byte[]> connection, int capacity,
             CacheSerializer<Object> keySerializer, CacheSerializer<Object> valueSerializer) {
+        this.capacity = JournalProtocol.requireCapacity(capacity);
         this.commands = connection.sync();
-        this.capacity = capacity;
         this.keySerializer = keySerializer;
         this.valueSerializer = valueSerializer;
     }
 
     static byte[] streamKey(String cache) {
-        return (JOURNAL_KEYSPACE + cache).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        return RedisKeyspace.journal(cache);
     }
 
     /**
      * Stream key bytes for a cache (public for the transport's Lua script).
      *
      * @param cache the cache name
-     * @return the stream key bytes ({@code tiercache:journal:<cache>})
+     * @return the stream key bytes ({@code tiercache:v2:journal:<token(cache)>})
      * @since 0.1.0
      */
     public static byte[] streamKeyBytes(String cache) {
@@ -116,7 +117,7 @@ public final class RedisStreamJournal implements InvalidationJournal {
     }
 
     static byte[] trimCounterKey(String cache) {
-        return (TRIMS_KEYSPACE + cache).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        return RedisKeyspace.trims(cache);
     }
 
     /**
@@ -124,7 +125,7 @@ public final class RedisStreamJournal implements InvalidationJournal {
      * scripts, which increment it on every capped XADD that removed rows).
      *
      * @param cache the cache name
-     * @return the counter key bytes ({@code tiercache:journal-trims:<cache>})
+     * @return the counter key bytes ({@code tiercache:v2:journal-trims:<token(cache)>})
      * @since 1.3.0
      */
     public static byte[] trimCounterKeyBytes(String cache) {
@@ -191,6 +192,7 @@ public final class RedisStreamJournal implements InvalidationJournal {
 
     @Override
     public CheckedRange checkedRead(String cache, String cursor, int maxRows) {
+        if (maxRows < 1) throw new IllegalArgumentException("maxRows must be positive");
         if ("0-0".equals(cursor)) {
             return checkedReadFromBeginning(cache, maxRows);
         }
@@ -198,10 +200,11 @@ public final class RedisStreamJournal implements InvalidationJournal {
         // row) and the range come from the same response.
         List<StreamMessage<byte[], byte[]>> entries = commands.xrange(streamKey(cache),
                 Range.from(Range.Boundary.including(cursor), Range.Boundary.unbounded()),
-                Limit.from(maxRows));
-        List<JournalRow> rows = toRows(cache, entries);
-        boolean intact = !rows.isEmpty() && rows.get(0).cursor().equals(cursor);
-        return new CheckedRange(intact, rows);
+                Limit.from((long) maxRows + 1));
+        boolean intact = !entries.isEmpty() && entries.get(0).getId().equals(cursor);
+        // The anchor's raw ID proves integrity. Its payload was already accounted
+        // for and may be the poison row covered by the last safe reset.
+        return new CheckedRange(intact, intact ? toRows(cache, entries.subList(1, entries.size())) : List.of());
     }
 
     private CheckedRange checkedReadFromBeginning(String cache, int maxRows) {
@@ -212,6 +215,7 @@ public final class RedisStreamJournal implements InvalidationJournal {
         Object trims = reply.get(0);
         boolean intact = trims == null
                 || Long.parseLong(new String((byte[]) trims, java.nio.charset.StandardCharsets.UTF_8)) == 0;
+        if (!intact) return new CheckedRange(false, List.of());
         List<JournalRow> rows = new ArrayList<>();
         for (Object entry : (List<?>) reply.get(1)) {
             List<?> pair = (List<?>) entry;
@@ -221,7 +225,7 @@ public final class RedisStreamJournal implements InvalidationJournal {
             for (int f = 0; f + 1 < flatFields.size(); f += 2) {
                 body.put((byte[]) flatFields.get(f), (byte[]) flatFields.get(f + 1));
             }
-            rows.add(new JournalRow(id, toMessage(cache, body)));
+            rows.add(new JournalRow(id, StreamRowDecoder.decode(cache, id, body, keySerializer, valueSerializer)));
         }
         return new CheckedRange(intact, rows);
     }
@@ -282,7 +286,7 @@ public final class RedisStreamJournal implements InvalidationJournal {
     private List<JournalRow> toRows(String cache, List<StreamMessage<byte[], byte[]>> entries) {
         List<JournalRow> out = new ArrayList<>(entries.size());
         for (StreamMessage<byte[], byte[]> entry : entries) {
-            out.add(new JournalRow(entry.getId(), toMessage(cache, entry.getBody())));
+            out.add(new JournalRow(entry.getId(), StreamRowDecoder.decode(cache, entry.getId(), entry.getBody(), keySerializer, valueSerializer)));
         }
         return out;
     }
@@ -297,46 +301,7 @@ public final class RedisStreamJournal implements InvalidationJournal {
         return fields;
     }
 
-    private InvalidationMessage toMessage(String cache, Map<byte[], byte[]> body) {
-        byte[] typeOrd = get(body, FIELD_TYPE);
-        byte[] keyBytes = get(body, FIELD_KEY);
-        Version version = Version.fromWire(new String(get(body, FIELD_VERSION),
-                java.nio.charset.StandardCharsets.UTF_8));
-        Object key = keyBytes.length > 0 ? keySerializer.fromBytes(keyBytes) : null;
-        byte[] payloadBytes = body.entrySet().stream()
-                .filter(e -> java.util.Arrays.equals(e.getKey(), FIELD_PAYLOAD))
-                .map(Map.Entry::getValue).findFirst().orElse(new byte[0]);
-        // Replay must apply the same typed value as the live path (which
-        // deserializes in the transport): never hand raw bytes to L1.
-        Object payload = payloadBytes.length > 0 ? valueSerializer.fromBytes(payloadBytes) : null;
-        InvalidationMessage.Type type = InvalidationMessage.Type.values()[typeOrd[0]];
-        if (payload != null && type == InvalidationMessage.Type.INVALIDATE) {
-            type = InvalidationMessage.Type.UPDATE; // payload implies update semantics
-        }
-        return new InvalidationMessage(cache, key, version, version.instanceId(), type, payload);
-    }
-
-    private static byte[] get(Map<byte[], byte[]> body, byte[] field) {
-        for (Map.Entry<byte[], byte[]> e : body.entrySet()) {
-            if (java.util.Arrays.equals(e.getKey(), field)) {
-                return e.getValue();
-            }
-        }
-        throw new IllegalStateException("journal entry missing field");
-    }
-
     static int compareIds(String a, String b) {
-        long[] pa = parse(a);
-        long[] pb = parse(b);
-        int byMillis = Long.compare(pa[0], pb[0]);
-        return byMillis != 0 ? byMillis : Long.compare(pa[1], pb[1]);
-    }
-
-    private static long[] parse(String id) {
-        int dash = id.indexOf('-');
-        if (dash < 0) {
-            return new long[]{Long.parseLong(id), 0};
-        }
-        return new long[]{Long.parseLong(id.substring(0, dash)), Long.parseLong(id.substring(dash + 1))};
+        return StreamRowDecoder.compareIds(a, b);
     }
 }

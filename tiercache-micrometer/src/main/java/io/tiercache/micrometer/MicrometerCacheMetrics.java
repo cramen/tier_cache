@@ -57,12 +57,38 @@ public final class MicrometerCacheMetrics
         this.registry = registry;
     }
 
+    private final Map<String, RecoveryGauge> recoveryGauges = new ConcurrentHashMap<>();
+
+    private static final class RecoveryGauge {
+        final Map<Object, java.util.function.BooleanSupplier> sources = new ConcurrentHashMap<>();
+        Gauge meter;
+        double pending() { return sources.values().stream().anyMatch(java.util.function.BooleanSupplier::getAsBoolean) ? 1 : 0; }
+    }
+
+    @Override
+    public AutoCloseable registerRecovery(String cache, java.util.function.BooleanSupplier pending) {
+        Object registration = new Object();
+        recoveryGauges.compute(cache, (name, existing) -> {
+            RecoveryGauge state = existing == null ? new RecoveryGauge() : existing;
+            state.sources.put(registration, pending);
+            if (state.meter == null) state.meter = Gauge.builder("tiercache.invalidation.recovery.pending", state, RecoveryGauge::pending)
+                    .tag("cache", cache).register(registry);
+            return state;
+        });
+        return () -> recoveryGauges.computeIfPresent(cache, (name, state) -> {
+            state.sources.remove(registration);
+            if (!state.sources.isEmpty()) return state;
+            registry.remove(state.meter);
+            return null;
+        });
+    }
+
     // --- CacheMetricsListener ---
 
     @Override
     public void onRequest(String cache, Outcome outcome) {
         counter(requestCounters, cache, "requests", "result",
-                outcome.name().toLowerCase()).increment();
+                outcome.name().toLowerCase(java.util.Locale.ROOT)).increment();
         if (outcome == Outcome.LOAD) {
             lastStoreNanos.put(cache, System.nanoTime());
         }
@@ -71,7 +97,7 @@ public final class MicrometerCacheMetrics
     @Override
     public void onLatency(String cache, Level level, long nanos) {
         latencyTimers.computeIfAbsent(cache + ":" + level, k -> Timer.builder("tiercache.latency")
-                        .tags("cache", cache, "level", level.name().toLowerCase())
+                        .tags("cache", cache, "level", level.name().toLowerCase(java.util.Locale.ROOT))
                         .register(registry))
                 .record(nanos, TimeUnit.NANOSECONDS);
     }
@@ -79,7 +105,23 @@ public final class MicrometerCacheMetrics
     @Override
     public void onInvalidation(String cache, Direction direction) {
         counter(invalidationCounters, cache, "invalidation", "direction",
-                direction.name().toLowerCase()).increment();
+                direction.name().toLowerCase(java.util.Locale.ROOT)).increment();
+    }
+
+    private final Map<String, Counter> publicationCounters = new ConcurrentHashMap<>();
+
+    @Override
+    public void onPublication(String cache, io.tiercache.spi.PublicationOutcome outcome, long count) {
+        counter(publicationCounters, cache, "invalidation.publish", "outcome",
+                outcome.name().toLowerCase(java.util.Locale.ROOT)).increment(count);
+    }
+
+    private final Map<String, Counter> streamFailures = new ConcurrentHashMap<>();
+
+    @Override
+    public void onStreamFailure(String cache, StreamResult result) {
+        counter(streamFailures, cache, "invalidation.stream", "result",
+                result.name().toLowerCase(java.util.Locale.ROOT)).increment();
     }
 
     @Override

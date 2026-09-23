@@ -1,5 +1,6 @@
 package io.tiercache.spring;
 
+import io.tiercache.invalidation.JournalProtocol;
 import io.lettuce.core.ClientOptions;
 import io.lettuce.core.RedisClient;
 import io.lettuce.core.SocketOptions;
@@ -63,6 +64,9 @@ public class TiercacheAutoConfiguration {
     @Bean(destroyMethod = "shutdown")
     @ConditionalOnMissingBean(RemoteCache.class)
     RedisClient tiercacheRedisClient(TiercacheProperties properties) {
+        if (properties.getInvalidation().isEnabled()) {
+            JournalProtocol.requireCapacity(properties.getInvalidation().getJournalCapacity());
+        }
         if (properties.getRedisUri() == null || properties.getRedisUri().isBlank()) {
             throw new IllegalStateException(
                     "tiercache.redis-uri is required when tiercache.enabled=true "
@@ -89,6 +93,7 @@ public class TiercacheAutoConfiguration {
             havingValue = "true", matchIfMissing = true)
     RedisStreamJournal tiercacheInvalidationJournal(RedisClient tiercacheRedisClient,
             TiercacheProperties properties) {
+        JournalProtocol.requireCapacity(properties.getInvalidation().getJournalCapacity());
         return new RedisStreamJournal(tiercacheRedisClient.connect(ByteArrayCodec.INSTANCE),
                 properties.getInvalidation().getJournalCapacity(), new JdkCacheSerializer<>());
     }
@@ -135,8 +140,13 @@ public class TiercacheAutoConfiguration {
             ObjectProvider<Function<VersionGenerator, InvalidationHandler>> invalidation,
             ObjectProvider<io.tiercache.spi.CacheMetricsListener> metrics,
             ObjectProvider<LettuceLockProvider> lockProvider) {
-        TierCacheFactory.Builder builder = TierCacheFactory.builder()
-                .defaults(properties.getDefaults().toSettings(io.tiercache.CacheSettings.defaults()));
+        io.tiercache.CacheSettings defaults;
+        try {
+            defaults = properties.getDefaults().toSettings(io.tiercache.CacheSettings.defaults());
+        } catch (IllegalArgumentException e) {
+            throw new io.tiercache.CacheConfigurationException("Cache '<global defaults>': " + e.getMessage());
+        }
+        TierCacheFactory.Builder builder = TierCacheFactory.builder().defaults(defaults);
         properties.getCaches().forEach((name, props) -> builder.cache(name, props.toOverride()));
         if (properties.getAsyncExecutorThreads() > 0) {
             builder.asyncExecutorThreads(properties.getAsyncExecutorThreads());

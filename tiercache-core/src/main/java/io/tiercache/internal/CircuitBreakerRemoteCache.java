@@ -3,6 +3,7 @@ package io.tiercache.internal;
 import io.tiercache.Version;
 import io.tiercache.spi.RemoteCache;
 import io.tiercache.spi.StoredEntry;
+import io.tiercache.spi.TaggedWriteOutcome;
 
 import java.time.Duration;
 
@@ -128,22 +129,59 @@ public final class CircuitBreakerRemoteCache<K, V> implements RemoteCache<K, V> 
     }
 
     @Override
+    public boolean supportsTaggedWriteOutcomes() {
+        return delegate.supportsTaggedWriteOutcomes();
+    }
+
+    @Override
+    public TaggedWriteOutcome putTaggedIfNewer(K key, StoredEntry<V> entry,
+            Duration ttl, String[] tags) {
+        if (entry.version() != null && !supportsTaggedWriteOutcomes()) {
+            return TaggedWriteOutcome.UNSUPPORTED;
+        }
+        CircuitBreaker.Permit permit = breaker.tryAcquirePermit();
+        if (permit == null) {
+            throw L2UnavailableException.OPEN;
+        }
+        try {
+            TaggedWriteOutcome result = delegate.putTaggedIfNewer(key, entry, ttl, tags);
+            if (result == TaggedWriteOutcome.UNSUPPORTED) {
+                permit.cancel();
+            } else {
+                permit.success();
+            }
+            return result;
+        } catch (L2UnavailableException e) {
+            permit.cancel();
+            throw e;
+        } catch (Exception e) {
+            permit.failure();
+            throw new L2UnavailableException("L2 call failed: " + e.getClass().getSimpleName(), e);
+        } catch (Error e) {
+            permit.cancel();
+            throw e;
+        }
+    }
+
+    @Override
     public java.util.List<K> keysByTag(String tag) {
         return guard(() -> delegate.keysByTag(tag));
     }
 
     private <T> T guard(java.util.concurrent.Callable<T> call) {
-        if (!breaker.tryAcquire()) {
+        CircuitBreaker.Permit permit = breaker.tryAcquirePermit();
+        if (permit == null) {
             throw L2UnavailableException.OPEN;
         }
         try {
             T result = call.call();
-            breaker.onSuccess();
+            permit.success();
             return result;
         } catch (L2UnavailableException e) {
+            permit.cancel();
             throw e;
         } catch (Exception e) {
-            breaker.onFailure();
+            permit.failure();
             throw new L2UnavailableException("L2 call failed: " + e.getClass().getSimpleName(), e);
         }
     }

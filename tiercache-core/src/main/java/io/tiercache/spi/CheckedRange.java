@@ -10,11 +10,13 @@ import java.util.List;
  *
  * <p>Semantics per cursor kind:
  * <ul>
- *   <li>Non-beginning cursor: {@code rows} starts AT the cursor row
- *       (inclusive read); {@code startIntact} is {@code true} iff the
- *       first returned row IS the cursor row. If it is not (the cursor
- *       row was trimmed), prefix integrity is unconfirmable and the
- *       receiver must take the flush path.</li>
+ *   <li>Non-beginning cursor: the response atomically validates the raw cursor
+ *       row ID and reads the following rows. The already-accounted anchor may
+ *       be omitted without decoding its payload (including a corrupt anchor
+ *       covered by a safe reset). Legacy providers may retain a valid typed
+ *       anchor as the first row; consumers skip that row by cursor ID.
+ *       A missing/trimmed anchor makes {@code startIntact} false, including
+ *       when the returned event list is empty.</li>
  *   <li>Beginning cursor (an end cursor recorded against an empty
  *       journal): there is no cursor row; {@code rows} starts from the
  *       journal's first row and {@code startIntact} reflects the atomic

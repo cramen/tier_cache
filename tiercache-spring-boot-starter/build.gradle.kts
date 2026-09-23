@@ -47,3 +47,12 @@ mavenPublishing {
         )
     }
 }
+
+// A JVM inside the fixture network reaches the exact addresses advertised by Sentinel.
+tasks.register<Sync>("sentinelRuntime") {
+    dependsOn(tasks.testClasses)
+    into(layout.buildDirectory.dir("sentinel-runtime"))
+    from(sourceSets.test.get().output) { into("classes") }
+    from(sourceSets.main.get().output) { into("classes") }
+    from(configurations.testRuntimeClasspath) { into("lib") }
+}

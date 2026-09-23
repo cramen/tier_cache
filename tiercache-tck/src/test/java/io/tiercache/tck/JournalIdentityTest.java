@@ -12,6 +12,7 @@ import io.tiercache.redis.JdkCacheSerializer;
 import io.tiercache.redis.LettucePubSubInvalidationTransport;
 import io.tiercache.redis.LettuceRemoteCache;
 import io.tiercache.redis.RedisStreamJournal;
+import io.tiercache.redis.RedisKeyspace;
 import io.tiercache.spi.InvalidationListener;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.utility.DockerImageName;
@@ -83,9 +84,9 @@ class JournalIdentityTest extends AbstractInvalidationChaosTest {
                 // namespaced, the journal stream is keyed by the logical name.
                 try (RedisClient probe = RedisClient.create(uri);
                         var conn = probe.connect()) {
-                    assertFalse(conn.sync().keys("spring:" + CACHE + ":*").isEmpty(),
+                    assertFalse(conn.sync().keys(new String(RedisKeyspace.dataPrefix("spring:" + CACHE), java.nio.charset.StandardCharsets.US_ASCII) + "*").isEmpty(),
                             "data keys live under the framework namespace");
-                    assertFalse(conn.sync().keys(RedisStreamJournal.JOURNAL_KEYSPACE + CACHE).isEmpty(),
+                    assertFalse(conn.sync().keys(new String(RedisStreamJournal.streamKeyBytes(CACHE), java.nio.charset.StandardCharsets.US_ASCII)).isEmpty(),
                             "journal stream is keyed by the logical cache name");
                 }
 

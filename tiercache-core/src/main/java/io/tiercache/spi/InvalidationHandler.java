@@ -63,12 +63,32 @@ public interface InvalidationHandler extends AutoCloseable {
 
     /**
      * Called when L2 recovers after a circuit-breaker episode: the engine
-     * replays the missed journal range for all registered caches. L1 is
-     * never flushed here (only journal-window overflow flushes).
+     * triggers recovery for registered caches. Built-in recovery is asynchronous;
+     * use recoverAsync for completion. Unconfirmable history may require a clear.
      *
      * @since 0.1.0
      */
     default void onL2Recovery() {
+    }
+
+    /** Installs the factory-owned recovery workers before any target is registered. */
+    default void configureRecoveryExecutor(java.util.concurrent.ScheduledExecutorService executor) { }
+
+    /**
+     * Nonblocking recovery completion. The compatibility adapter runs the legacy
+     * hook on the supplied workers; legacy hooks must throw on failed recovery.
+     * Built-in engines compose cache passes without waiting on their own pool.
+     */
+    default java.util.concurrent.CompletionStage<Boolean> recoverAsync(java.util.concurrent.Executor executor) {
+        return java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+            onL2Recovery();
+            return true;
+        }, executor);
+    }
+
+    /** Requests a baseline-before-clear reset; unsupported legacy handlers fail explicitly. */
+    default java.util.concurrent.CompletionStage<RecoveryResult> resetAsync(String cache) {
+        return java.util.concurrent.CompletableFuture.completedFuture(RecoveryResult.failed());
     }
 
     /**

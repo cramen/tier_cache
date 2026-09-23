@@ -12,7 +12,7 @@ The cache is eventually consistent by design; no strong-consistency guarantees a
 - **Two-level read cascade** — L1 (shaded Caffeine, zero-allocation hit path) → L2 (Redis/Valkey) → your loader. An L2 hit always warms L1, so the next read of the same key is served in-process.
 - **Correct by default** — singleflight per instance plus cluster-wide rebuild coordination (distributed lock with watchdog lease extension and mandatory double-check), TTL jitter, fail-fast TTL-ordering validation, atomic `putIfAbsent` — all on without configuration; disabling requires an explicit opt-in and is logged as a risk. Null caching is opt-in (`null-policy: allow`) with a tri-state `lookup` to distinguish miss from cached-null.
 - **Cross-instance invalidation** — versioned events with last-write-wins ordering, a bounded journal with replay on reconnect, and two transport profiles: lightweight Pub/Sub or durable Redis Streams.
-- **Honest degradation** — a circuit breaker switches the cache to L1-only when Redis fails; business code never sees infrastructure exceptions. Recovery replays recorded invalidations when journal history is readable and intact. Missing or unverifiable history, a replay-read failure, or a missing journal can trigger a full L1 flush and a source-load burst. Writes that never reached Redis cannot be reconstructed by replay; see [recovery semantics](docs/configuration.md#circuit-breaker-and-degradation) for the fallback signals and limits.
+- **Honest degradation** — a circuit breaker switches protected cache operations to local fallback when Redis fails. Loader errors, invalid configuration and async executor rejection remain visible. Recovery replays recorded invalidations when journal history is readable and intact. Missing or unverifiable history, a replay-read failure, or a missing journal can trigger a full L1 flush and a source-load burst. Writes that never reached Redis cannot be reconstructed by replay; see [recovery semantics](docs/configuration.md#circuit-breaker-and-degradation) for the fallback signals and limits.
 - **Stale serving** — stale-while-revalidate and XFetch early refresh keep hot keys fast while values refresh in the background.
 - **Observability as a feature** — Micrometer metrics for cache outcomes, degradation and invalidation, OpenTelemetry tracing, JMX inspection, and a reference Grafana dashboard with alert rules in [`docs/grafana/`](docs/grafana/). Some cleanup failures are log-only; see the [observability catalog](docs/observability.md).
 - **Kotlin coroutines** — `suspend` API, invalidation `Flow`, and a `tierCache { }` config DSL in `tiercache-kotlin`. A suspending loader runs on the caller's coroutine dispatcher, so a blocking loader blocks that dispatcher — offload blocking work with `withContext(Dispatchers.IO)`.
@@ -25,7 +25,7 @@ The cache is eventually consistent by design; no strong-consistency guarantees a
 
 ```kotlin
 // build.gradle.kts
-implementation("io.github.cramen:tiercache-spring-boot-starter:1.4.0")
+implementation("io.github.cramen:tiercache-spring-boot-starter:2.0.0")
 ```
 
 ```yaml
@@ -41,7 +41,7 @@ The starter replaces the standard cache manager: `@Cacheable` / `@CachePut` / `@
 
 ```kotlin
 // build.gradle.kts
-implementation("io.github.cramen:tiercache-micronaut:1.4.0")
+implementation("io.github.cramen:tiercache-micronaut:2.0.0")
 ```
 
 ```yaml
@@ -57,8 +57,8 @@ The module replaces Micronaut's `DefaultCacheManager`: `@Cacheable` / `@CachePut
 
 ```kotlin
 // build.gradle.kts
-implementation("io.github.cramen:tiercache-core:1.4.0")
-implementation("io.github.cramen:tiercache-transport-redis:1.4.0")
+implementation("io.github.cramen:tiercache-core:2.0.0")
+implementation("io.github.cramen:tiercache-transport-redis:2.0.0")
 ```
 
 ```java
@@ -85,7 +85,7 @@ Reads cascade L1 → L2 → loader; concurrent loads of the same key share one l
 
 | Module | What it gives you |
 |---|---|
-| `tiercache-spring-boot-starter` | Spring Boot 3 auto-configuration — the one dependency most Spring apps need |
+| `tiercache-spring-boot-starter` | Spring Boot 3.5 / 4.1 consumer-tested auto-configuration — the one dependency most Spring apps need |
 | `tiercache-micronaut` | Micronaut CacheManager/SyncCache/AsyncCache adapter — the one dependency Micronaut apps need |
 | `tiercache-core` | The framework-independent cache engine: cascade, singleflight, rebuild coordination, degradation |
 | `tiercache-transport-redis` | Lettuce-backed Redis/Valkey L2 and invalidation transport |
@@ -97,10 +97,15 @@ Reads cascade L1 → L2 → loader; concurrent loads of the same key share one l
 ## Requirements
 
 - Java 17 or newer
-- Redis 6.2+ or Valkey (for L2 and cross-instance features)
+- Redis 6.2+ or Valkey (for L2 and cross-instance features). See the [tested platform matrix](docs/compatibility.md) for exact versions and Sentinel scope; Redis Cluster is unsupported by the stock transport.
 - Docker, to run the integration tests and TCK chaos suite locally
 
 ## Compatibility and versioning
+
+TierCache 2.0 introduces Redis keyspace v2, a breaking operational change.
+It requires a coordinated cold-cache cutover;
+old/new instances are not rolling-compatible. See the
+[v2 migration guide](docs/redis-keyspace-v2.md) before upgrading from 1.x.
 
 All published Maven artifacts follow **semantic versioning**: patch releases for backwards-compatible fixes, minor releases for backwards-compatible additions, major releases for breaking changes.
 
@@ -129,6 +134,8 @@ Everything else — builders, transport internals, metrics helpers, and any type
 - [Migration from Spring Cache](docs/migration-from-spring-cache.md)
 - [Migration from Redisson](docs/migration-from-redisson.md)
 - [Migration from JetCache](docs/migration-from-jetcache.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [Release verification evidence](docs/release-evidence.md)
 - [Sizing and TTL guidance](docs/sizing-and-ttl.md)
 - [Observability: metrics, tracing, dashboards](docs/observability.md)
 - [Running the TCK chaos suite](docs/tck.md)
@@ -139,3 +146,5 @@ Everything else — builders, transport internals, metrics helpers, and any type
 ## License
 
 [Apache License 2.0](LICENSE)
+
+Recovery completion, HALF_OPEN admission and fallback limits are described in [the recovery guide](docs/recovery.md).
