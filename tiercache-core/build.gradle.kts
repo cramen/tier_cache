@@ -214,6 +214,8 @@ tasks.check { dependsOn(tasks.jacocoTestCoverageVerification) }
 
 // --- JMH (task 4.2): baseline for the L1-hit hot path.
 jmh {
+    // Keep the larger shared-state matrix out of the existing nightly baseline.
+    includes = listOf("io.tiercache.jmh.L1Hit.*")
     profilers = listOf("gc")
 }
 
@@ -235,4 +237,32 @@ pitest {
     // artifact and is regenerated when absent.
     historyInputLocation.set(layout.buildDirectory.file("pitest/history.bin"))
     historyOutputLocation.set(layout.buildDirectory.file("pitest/history.bin"))
+}
+
+// Explicit diagnostic matrix, with configurable JMH arguments and runtime.
+tasks.register<JavaExec>("sharedL1Benchmark") {
+    group = "verification"
+    description = "Measures shared L1 contention with strict pure-hit attribution."
+    val benchmarkJar = tasks.named<AbstractArchiveTask>("jmhJar")
+    dependsOn(benchmarkJar)
+    classpath = files(benchmarkJar.flatMap { it.archiveFile }, configurations.named("jmhRuntimeClasspath"))
+    mainClass.set("org.openjdk.jmh.Main")
+    javaLauncher.set(javaToolchains.launcherFor {
+        languageVersion.set(JavaLanguageVersion.of(
+            providers.gradleProperty("sharedL1.java").orElse("17").get().toInt()))
+    })
+    val output = layout.buildDirectory.file("results/shared-l1/results.json")
+    doFirst { output.get().asFile.parentFile.mkdirs() }
+    args("io.tiercache.jmh.SharedL1HitBenchmark." +
+            providers.gradleProperty("sharedL1.method").orElse("shared").get(),
+        "-t", providers.gradleProperty("sharedL1.threads").orElse("8").get(),
+        "-p", "feature=" + providers.gradleProperty("sharedL1.features").orElse("plain,stale").get(),
+        "-p", "keys=" + providers.gradleProperty("sharedL1.keys").orElse("hot,distributed").get(),
+        "-p", "workload=" + providers.gradleProperty("sharedL1.workload").orElse("read").get(),
+        "-p", "api=" + providers.gradleProperty("sharedL1.api").orElse("get").get(),
+        "-p", "valueKind=" + providers.gradleProperty("sharedL1.valueKind").orElse("value").get(),
+        "-bm", providers.gradleProperty("sharedL1.mode").orElse("thrpt").get(),
+        "-rf", "json", "-rff", output.get().asFile.absolutePath,
+        "-jvmArgs", "-Xms512m -Xmx512m -XX:+UseG1GC")
+    providers.gradleProperty("sharedL1.profiler").orNull?.let { args("-prof", it) }
 }

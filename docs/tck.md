@@ -173,3 +173,7 @@ contracts, isolated Boot 3.5/4.1 consumer builds and real starter-managed Sentin
 failover regressions. Run commands and evidence locations are documented there.
 These checks complement the churn/chaos suite; they do not imply Redis Cluster
 support, instantaneous failover freshness or recovery of unstored invalidations.
+
+## Shared local-cache contention
+
+For a CPU-only shared-instance L1 diagnostic, including stale retention, access expiry, collision controls and strict cascade attribution, see [the shared L1 benchmark](l1-contention-benchmark.md). It runs separately from the existing thread-local nightly baseline and the real-Redis TCK benchmarks.

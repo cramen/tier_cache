@@ -1463,15 +1463,15 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
     }
 
     /**
-     * Classifies a physically present L1 entry by its stamped deadlines,
-     * atomically under the per-key stripe lock: a fresh access slides the
-     * deadlines (and the physical retention) only when the metadata is
-     * still the one just read — a concurrent replace can never inherit
-     * another value's TTL. A stale access never moves anything.
+     * Classifies the current L1 lifetime. Pure classification needs no
+     * stripe; an access-expiry refresh uses the per-key stripe so a fresh
+     * access slides deadlines and physical retention only for the current
+     * holder. A concurrent replacement cannot inherit another value's TTL.
+     * A stale access never moves anything.
      */
     /**
-     * The coherent result of a freshness check: the CURRENT L1 entry (re-read
-     * under the stripe lock, never a stale caller-side copy) plus its
+     * The coherent result of a freshness check: the CURRENT L1 entry (read
+     * again with its own lifetime, never a stale caller-side copy) plus its
      * freshness classification. Callers must use {@link #entry()} for every
      * value they serve — the caller-side read may already be superseded.
      */
@@ -1481,6 +1481,9 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
     private FreshnessSnapshot<V> freshnessOf(K key, StoredEntry<V> entry) {
         if (!degradationStaleEnabled) {
             return new FreshnessSnapshot<>(entry, L1Freshness.FRESH);
+        }
+        if (settings.l1ExpireAfterAccess() == null) {
+            return readOnlyFreshness(key);
         }
         synchronized (l1LockFor(key)) {
             // Coherent snapshot under the lock: the entry is re-read here,
@@ -1510,6 +1513,25 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
             return new FreshnessSnapshot<>(entry, now - meta.staleServeUntilNanos() < 0
                     ? L1Freshness.STALE_ALLOWED : L1Freshness.EXPIRED);
         }
+    }
+
+    /**
+     * Classifies one immutable value/lifetime snapshot without mutating it.
+     * Keep this second L1 observation: the caller's first holder may have
+     * been replaced or evicted before freshness classification begins.
+     * Access-expiry refresh still uses the stripe-protected path above.
+     */
+    private FreshnessSnapshot<V> readOnlyFreshness(K key) {
+        StoredEntry<V> current = l1.get(key);
+        if (current == null) return new FreshnessSnapshot<>(null, L1Freshness.EXPIRED);
+        StoredEntry.LocalFreshness meta = current.localFreshness();
+        if (meta == null) return new FreshnessSnapshot<>(current, L1Freshness.EXPIRED);
+        long now = localClock.getAsLong();
+        L1Freshness freshness = now - meta.logicalDeadlineNanos() < 0
+                ? L1Freshness.FRESH
+                : now - meta.staleServeUntilNanos() < 0
+                    ? L1Freshness.STALE_ALLOWED : L1Freshness.EXPIRED;
+        return new FreshnessSnapshot<>(current, freshness);
     }
 
     /** @return TRUE stored, FALSE lost a version race, NULL unavailable/failed. */
