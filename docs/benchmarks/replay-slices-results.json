@@ -1,0 +1,553 @@
+{
+  "acceptance": {
+    "baseline": "9af4aee",
+    "backlog": 32768,
+    "liveEvents": 1000,
+    "targetLiveRate": 500,
+    "roundsPerFork": 4,
+    "warmupRounds": 1,
+    "forksPerVersionAndProfile": 3,
+    "profiles": [
+      "ordinary",
+      "healthy",
+      "clear"
+    ],
+    "sliceRows": 32,
+    "readBatch": 256,
+    "maxBatches": 16,
+    "ordinaryP99ReductionMinimumPercent": 10,
+    "ordinaryImprovementForksMinimum": 2,
+    "healthyThroughputRegressionMaximumPercent": 10,
+    "catchupTimeRegressionMaximumPercent": 10,
+    "readCountInflationMaximumPercent": 10,
+    "notes": [
+      "Exact no-extra-read invariant has deterministic coverage; live tick timing can vary benchmark totals.",
+      "Clear profile remains fenced; its latency is separately reported, not promised to improve.",
+      "No sleep/yield or executor handoff is added to production application slices."
+    ]
+  },
+  "results": [
+    {
+      "mode": "ordinary",
+      "backlog": 32768,
+      "rounds": 4,
+      "sameSamples": 404,
+      "otherSamples": 403,
+      "sameP50Ms": 1.224875,
+      "sameP95Ms": 4.266041,
+      "sameP99Ms": 7.523375,
+      "otherP99Ms": 8.255,
+      "allP99Ms": 6.433458,
+      "liveThroughput": 498.742,
+      "cpuSeconds": 4.423811,
+      "catchupMillis": [
+        471.736709,
+        431.478042,
+        369.187917,
+        363.355625
+      ],
+      "checkedReads": [
+        139,
+        139,
+        138,
+        138
+      ],
+      "coherent": true,
+      "version": "baseline",
+      "fork": 1
+    },
+    {
+      "mode": "ordinary",
+      "backlog": 32768,
+      "rounds": 4,
+      "sameSamples": 443,
+      "otherSamples": 439,
+      "sameP50Ms": 1.218666,
+      "sameP95Ms": 5.07125,
+      "sameP99Ms": 9.816875,
+      "otherP99Ms": 9.336958,
+      "allP99Ms": 7.675833,
+      "liveThroughput": 491.951,
+      "cpuSeconds": 4.569899,
+      "catchupMillis": [
+        491.477958,
+        481.333333,
+        408.164125,
+        413.990625
+      ],
+      "checkedReads": [
+        140,
+        139,
+        138,
+        139
+      ],
+      "coherent": true,
+      "version": "baseline",
+      "fork": 2
+    },
+    {
+      "mode": "ordinary",
+      "backlog": 32768,
+      "rounds": 4,
+      "sameSamples": 408,
+      "otherSamples": 406,
+      "sameP50Ms": 1.199292,
+      "sameP95Ms": 4.824959,
+      "sameP99Ms": 6.717125,
+      "otherP99Ms": 7.664167,
+      "allP99Ms": 6.940291,
+      "liveThroughput": 497.902,
+      "cpuSeconds": 4.562431,
+      "catchupMillis": [
+        447.093916,
+        448.844208,
+        389.359916,
+        360.031167
+      ],
+      "checkedReads": [
+        139,
+        139,
+        139,
+        138
+      ],
+      "coherent": true,
+      "version": "baseline",
+      "fork": 3
+    },
+    {
+      "mode": "ordinary",
+      "backlog": 32768,
+      "rounds": 4,
+      "sameSamples": 438,
+      "otherSamples": 436,
+      "sameP50Ms": 1.148375,
+      "sameP95Ms": 5.6575,
+      "sameP99Ms": 11.800917,
+      "otherP99Ms": 7.54325,
+      "allP99Ms": 7.271125,
+      "liveThroughput": 497.187,
+      "cpuSeconds": 3.753908,
+      "catchupMillis": [
+        488.912875,
+        419.809,
+        476.821917,
+        367.782667
+      ],
+      "checkedReads": [
+        138,
+        139,
+        139,
+        138
+      ],
+      "coherent": true,
+      "version": "candidate",
+      "fork": 1
+    },
+    {
+      "mode": "ordinary",
+      "backlog": 32768,
+      "rounds": 4,
+      "sameSamples": 429,
+      "otherSamples": 426,
+      "sameP50Ms": 1.2265,
+      "sameP95Ms": 4.778875,
+      "sameP99Ms": 8.156417,
+      "otherP99Ms": 8.795125,
+      "allP99Ms": 7.187,
+      "liveThroughput": 498.628,
+      "cpuSeconds": 3.903881,
+      "catchupMillis": [
+        472.476167,
+        434.322166,
+        437.013917,
+        379.409541
+      ],
+      "checkedReads": [
+        138,
+        140,
+        138,
+        138
+      ],
+      "coherent": true,
+      "version": "candidate",
+      "fork": 2
+    },
+    {
+      "mode": "ordinary",
+      "backlog": 32768,
+      "rounds": 4,
+      "sameSamples": 385,
+      "otherSamples": 385,
+      "sameP50Ms": 1.22025,
+      "sameP95Ms": 4.235875,
+      "sameP99Ms": 7.172417,
+      "otherP99Ms": 6.4205,
+      "allP99Ms": 6.882792,
+      "liveThroughput": 497.832,
+      "cpuSeconds": 3.957736,
+      "catchupMillis": [
+        426.192416,
+        380.135542,
+        380.661166,
+        357.654125
+      ],
+      "checkedReads": [
+        138,
+        138,
+        139,
+        139
+      ],
+      "coherent": true,
+      "version": "candidate",
+      "fork": 3
+    },
+    {
+      "mode": "healthy",
+      "backlog": 0,
+      "rounds": 4,
+      "sameSamples": 2000,
+      "otherSamples": 2000,
+      "sameP50Ms": 1.104958,
+      "sameP95Ms": 3.42025,
+      "sameP99Ms": 7.368959,
+      "otherP99Ms": 4.963667,
+      "allP99Ms": 5.767291,
+      "liveThroughput": 498.825,
+      "cpuSeconds": 3.096638,
+      "catchupMillis": [
+        2.266292,
+        2.82575,
+        0.875833,
+        1.3935
+      ],
+      "checkedReads": [
+        11,
+        11,
+        10,
+        10
+      ],
+      "coherent": true,
+      "version": "baseline",
+      "fork": 1
+    },
+    {
+      "mode": "healthy",
+      "backlog": 0,
+      "rounds": 4,
+      "sameSamples": 2000,
+      "otherSamples": 2000,
+      "sameP50Ms": 1.103417,
+      "sameP95Ms": 3.313333,
+      "sameP99Ms": 6.0365,
+      "otherP99Ms": 6.841041,
+      "allP99Ms": 6.224875,
+      "liveThroughput": 496.211,
+      "cpuSeconds": 2.970301,
+      "catchupMillis": [
+        2.774375,
+        1.160583,
+        3.100875,
+        1.356792
+      ],
+      "checkedReads": [
+        10,
+        10,
+        11,
+        10
+      ],
+      "coherent": true,
+      "version": "baseline",
+      "fork": 2
+    },
+    {
+      "mode": "healthy",
+      "backlog": 0,
+      "rounds": 4,
+      "sameSamples": 2000,
+      "otherSamples": 2000,
+      "sameP50Ms": 1.332,
+      "sameP95Ms": 4.810958,
+      "sameP99Ms": 8.144625,
+      "otherP99Ms": 7.58025,
+      "allP99Ms": 7.758333,
+      "liveThroughput": 493.16,
+      "cpuSeconds": 3.255639,
+      "catchupMillis": [
+        7.369208,
+        1.425875,
+        3.758,
+        2.918875
+      ],
+      "checkedReads": [
+        10,
+        10,
+        11,
+        10
+      ],
+      "coherent": true,
+      "version": "baseline",
+      "fork": 3
+    },
+    {
+      "mode": "healthy",
+      "backlog": 0,
+      "rounds": 4,
+      "sameSamples": 2000,
+      "otherSamples": 2000,
+      "sameP50Ms": 1.128541,
+      "sameP95Ms": 2.900083,
+      "sameP99Ms": 5.992041,
+      "otherP99Ms": 5.541209,
+      "allP99Ms": 5.584167,
+      "liveThroughput": 497.984,
+      "cpuSeconds": 3.364777,
+      "catchupMillis": [
+        5.8415,
+        4.569167,
+        3.0815,
+        2.600584
+      ],
+      "checkedReads": [
+        11,
+        11,
+        11,
+        10
+      ],
+      "coherent": true,
+      "version": "candidate",
+      "fork": 1
+    },
+    {
+      "mode": "healthy",
+      "backlog": 0,
+      "rounds": 4,
+      "sameSamples": 2000,
+      "otherSamples": 2000,
+      "sameP50Ms": 1.150959,
+      "sameP95Ms": 3.117917,
+      "sameP99Ms": 5.633875,
+      "otherP99Ms": 5.417125,
+      "allP99Ms": 5.55,
+      "liveThroughput": 498.999,
+      "cpuSeconds": 3.203266,
+      "catchupMillis": [
+        1.769125,
+        1.465334,
+        3.7945,
+        1.4555
+      ],
+      "checkedReads": [
+        10,
+        10,
+        11,
+        10
+      ],
+      "coherent": true,
+      "version": "candidate",
+      "fork": 2
+    },
+    {
+      "mode": "healthy",
+      "backlog": 0,
+      "rounds": 4,
+      "sameSamples": 2000,
+      "otherSamples": 2000,
+      "sameP50Ms": 1.562375,
+      "sameP95Ms": 6.446875,
+      "sameP99Ms": 10.597542,
+      "otherP99Ms": 11.41175,
+      "allP99Ms": 10.734375,
+      "liveThroughput": 423.303,
+      "cpuSeconds": 3.31921,
+      "catchupMillis": [
+        1.775667,
+        3.262083,
+        6.028375,
+        1.358958
+      ],
+      "checkedReads": [
+        10,
+        11,
+        10,
+        10
+      ],
+      "coherent": true,
+      "version": "candidate",
+      "fork": 3
+    },
+    {
+      "mode": "clear",
+      "backlog": 32768,
+      "rounds": 4,
+      "sameSamples": 419,
+      "otherSamples": 417,
+      "sameP50Ms": 11.538084,
+      "sameP95Ms": 205.279333,
+      "sameP99Ms": 240.714042,
+      "otherP99Ms": 7.687625,
+      "allP99Ms": 1573.47925,
+      "liveThroughput": 496.095,
+      "cpuSeconds": 4.505908,
+      "catchupMillis": [
+        539.590292,
+        407.793375,
+        383.98775,
+        368.543834
+      ],
+      "checkedReads": [
+        137,
+        135,
+        138,
+        136
+      ],
+      "coherent": true,
+      "version": "baseline",
+      "fork": 1
+    },
+    {
+      "mode": "clear",
+      "backlog": 32768,
+      "rounds": 4,
+      "sameSamples": 412,
+      "otherSamples": 409,
+      "sameP50Ms": 7.113458,
+      "sameP95Ms": 217.705709,
+      "sameP99Ms": 248.6025,
+      "otherP99Ms": 8.025125,
+      "allP99Ms": 1551.195125,
+      "liveThroughput": 497.19,
+      "cpuSeconds": 3.958833,
+      "catchupMillis": [
+        486.088916,
+        443.106334,
+        344.791458,
+        430.106375
+      ],
+      "checkedReads": [
+        137,
+        137,
+        138,
+        137
+      ],
+      "coherent": true,
+      "version": "baseline",
+      "fork": 2
+    },
+    {
+      "mode": "clear",
+      "backlog": 32768,
+      "rounds": 4,
+      "sameSamples": 422,
+      "otherSamples": 421,
+      "sameP50Ms": 5.45825,
+      "sameP95Ms": 182.425917,
+      "sameP99Ms": 195.215875,
+      "otherP99Ms": 7.142125,
+      "allP99Ms": 1499.106,
+      "liveThroughput": 498.161,
+      "cpuSeconds": 4.390925,
+      "catchupMillis": [
+        438.138875,
+        450.890833,
+        360.50025,
+        442.9465
+      ],
+      "checkedReads": [
+        141,
+        140,
+        136,
+        141
+      ],
+      "coherent": true,
+      "version": "baseline",
+      "fork": 3
+    },
+    {
+      "mode": "clear",
+      "backlog": 32768,
+      "rounds": 4,
+      "sameSamples": 426,
+      "otherSamples": 423,
+      "sameP50Ms": 6.598458,
+      "sameP95Ms": 201.771709,
+      "sameP99Ms": 243.561834,
+      "otherP99Ms": 6.155542,
+      "allP99Ms": 1532.535792,
+      "liveThroughput": 498.159,
+      "cpuSeconds": 4.36193,
+      "catchupMillis": [
+        517.3225,
+        398.918834,
+        401.985542,
+        396.558459
+      ],
+      "checkedReads": [
+        142,
+        141,
+        137,
+        137
+      ],
+      "coherent": true,
+      "version": "candidate",
+      "fork": 1
+    },
+    {
+      "mode": "clear",
+      "backlog": 32768,
+      "rounds": 4,
+      "sameSamples": 429,
+      "otherSamples": 426,
+      "sameP50Ms": 4.893084,
+      "sameP95Ms": 185.199083,
+      "sameP99Ms": 225.221667,
+      "otherP99Ms": 6.986208,
+      "allP99Ms": 1484.43325,
+      "liveThroughput": 497.864,
+      "cpuSeconds": 3.724514,
+      "catchupMillis": [
+        492.909792,
+        471.231667,
+        390.031417,
+        357.025667
+      ],
+      "checkedReads": [
+        137,
+        140,
+        138,
+        142
+      ],
+      "coherent": true,
+      "version": "candidate",
+      "fork": 2
+    },
+    {
+      "mode": "clear",
+      "backlog": 32768,
+      "rounds": 4,
+      "sameSamples": 419,
+      "otherSamples": 416,
+      "sameP50Ms": 5.401958,
+      "sameP95Ms": 184.107625,
+      "sameP99Ms": 199.599917,
+      "otherP99Ms": 9.061,
+      "allP99Ms": 1499.372208,
+      "liveThroughput": 497.543,
+      "cpuSeconds": 4.287416,
+      "catchupMillis": [
+        488.442875,
+        421.205625,
+        449.553375,
+        358.440708
+      ],
+      "checkedReads": [
+        137,
+        138,
+        137,
+        142
+      ],
+      "coherent": true,
+      "version": "candidate",
+      "fork": 3
+    }
+  ]
+}

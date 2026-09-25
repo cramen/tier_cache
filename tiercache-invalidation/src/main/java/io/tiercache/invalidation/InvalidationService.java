@@ -18,6 +18,7 @@ public final class InvalidationService implements InvalidationHandler {
     private static final Logger log = LoggerFactory.getLogger(InvalidationService.class);
     private static final ThreadLocal<Boolean> INTERNAL_WORKER = ThreadLocal.withInitial(() -> false);
     private static final int READ_BATCH = 256;
+    private static final int APPLY_SLICE = 32;
     private static final int MAX_BATCHES = 16;
     private static final int WINDOW_CAP = 128;
     private static final int WINDOW_HARD_CAP = 512;
@@ -67,7 +68,7 @@ public final class InvalidationService implements InvalidationHandler {
     }
 
     private record Snapshot(long generation, long token, String cursor, long targetGeneration,
-                            InvalidationTarget target, long deliverySequence) { }
+                            InvalidationTarget target, long deliverySequence, long registration) { }
     private enum Kind { WAITING, WAITING_REPLAY, TICK_DONE, CAUGHT_UP, RESET_SAFE, NO_JOURNAL, FAILED, OBSOLETE }
     private record Pass(Kind kind, String baseline, long generation, long targetGeneration) {
         Pass(Kind kind, String baseline, long generation) { this(kind, baseline, generation, -1); }
@@ -621,11 +622,12 @@ public final class InvalidationService implements InvalidationHandler {
 
     private Snapshot snapshot(CacheState state) {
         return new Snapshot(state.generation, state.token, state.cursor,
-                state.target.recoveryGeneration(), state.target, state.deliveries);
+                state.target.recoveryGeneration(), state.target, state.deliveries, state.registration);
     }
     private boolean valid(CacheState state, Snapshot snapshot) {
         return !closed && !state.retired && state.generation == snapshot.generation
-                && state.token == snapshot.token && Objects.equals(state.cursor, snapshot.cursor)
+                && state.registration == snapshot.registration && state.token == snapshot.token
+                && Objects.equals(state.cursor, snapshot.cursor)
                 && state.target == snapshot.target && state.target.recoveryGeneration() == snapshot.targetGeneration;
     }
     private Pass obsolete(CacheState state) {
@@ -667,41 +669,73 @@ public final class InvalidationService implements InvalidationHandler {
                     && !ensureFence(state)) {
                 return new Pass(Kind.WAITING_REPLAY, null, expectedGeneration);
             }
-            List<InvalidationMessage> notifications = new ArrayList<>();
-            Pass done = null;
-            synchronized (state) {
-                if (!valid(state, snapshot)) return obsolete(state);
-                if (!range.startIntact()) { /* baseline acquisition below, outside the gate */ }
-                else {
-                    List<JournalRow> rows = rowsAfterCursor(range, snapshot.cursor);
-                    long targetGeneration = snapshot.targetGeneration;
-                    for (JournalRow row : rows) {
-                        InvalidationMessage message = row.message();
-                        boolean own = message.originInstanceId().equals(originInstanceId);
-                        if (!replay && !own && !state.applied.containsKey(message.version())) break;
-                        if (replay && (!own || message.type() == InvalidationMessage.Type.EVICT_ALL)) {
-                            long next = state.target.applyRecovery(message, targetGeneration);
-                            if (next < 0 || state.target.recoveryGeneration() != next) return obsolete(state);
-                            targetGeneration = next;
-                            if (!own) notifications.add(message);
-                            if (message.type() == InvalidationMessage.Type.EVICT_ALL) expectedGeneration = ++state.generation;
-                        }
-                        state.applied.remove(message.version());
-                        state.confirmed.add(message.version());
-                        while (state.confirmed.size() > CONFIRMED_CAP) state.confirmed.remove(state.confirmed.iterator().next());
-                        state.cursor = row.cursor();
-                    }
-                    if (rows.isEmpty()) {
-                        state.applied.values().removeIf(sequence -> sequence <= snapshot.deliverySequence);
-                        state.resyncRequired = false;
-                        state.resetOnFailure = false;
-                        done = new Pass(replay ? Kind.CAUGHT_UP : Kind.TICK_DONE, state.cursor, state.generation);
-                    } else if (!replay) done = new Pass(Kind.TICK_DONE, state.cursor, state.generation);
-                }
+            if (!range.startIntact()) {
+                synchronized (state) { if (!valid(state, snapshot)) return obsolete(state); }
+                return reset(state, expectedGeneration);
             }
-            if (!range.startIntact()) return reset(state, expectedGeneration);
-            for (InvalidationMessage message : notifications) notifyEvent(message, true);
-            if (done != null) return done;
+            List<JournalRow> rows = rowsAfterCursor(range, snapshot.cursor);
+            int position = 0;
+            do {
+                List<InvalidationMessage> notifications = new ArrayList<>();
+                Pass done = null;
+                try {
+                    synchronized (state) {
+                        if (!valid(state, snapshot)) done = obsolete(state);
+                        else {
+                            long targetGeneration = snapshot.targetGeneration;
+                            int limit = Math.min(rows.size(), position + APPLY_SLICE);
+                            boolean tickGap = false;
+                            while (position < limit) {
+                                JournalRow row = rows.get(position);
+                                InvalidationMessage message = row.message();
+                                boolean own = message.originInstanceId().equals(originInstanceId);
+                                if (!replay && !own && !state.applied.containsKey(message.version())) {
+                                    tickGap = true;
+                                    break;
+                                }
+                                if (replay && (!own || message.type() == InvalidationMessage.Type.EVICT_ALL)) {
+                                    long next = snapshot.target.applyRecovery(message, targetGeneration);
+                                    if (next < 0 || state.target != snapshot.target
+                                            || state.generation != expectedGeneration
+                                            || state.target.recoveryGeneration() != next) {
+                                        done = obsolete(state);
+                                        break;
+                                    }
+                                    targetGeneration = next;
+                                    if (!own) notifications.add(message);
+                                    if (message.type() == InvalidationMessage.Type.EVICT_ALL) expectedGeneration = ++state.generation;
+                                }
+                                state.applied.remove(message.version());
+                                state.confirmed.add(message.version());
+                                while (state.confirmed.size() > CONFIRMED_CAP) state.confirmed.remove(state.confirmed.iterator().next());
+                                state.cursor = row.cursor();
+                                position++;
+                            }
+                            if (done == null) {
+                                if (rows.isEmpty()) {
+                                    long deliverySequence = snapshot.deliverySequence;
+                                    state.applied.values().removeIf(sequence -> sequence <= deliverySequence);
+                                    state.resyncRequired = false;
+                                    state.resetOnFailure = false;
+                                    done = new Pass(replay ? Kind.CAUGHT_UP : Kind.TICK_DONE, state.cursor, state.generation);
+                                } else if (!replay && (tickGap || position == rows.size())) {
+                                    done = new Pass(Kind.TICK_DONE, state.cursor, state.generation);
+                                }
+                                // Keep the fetched proof and the original delivery watermark.
+                                // Only our own committed prefix changes the expected cursor/epochs.
+                                snapshot = new Snapshot(expectedGeneration, snapshot.token, state.cursor,
+                                        targetGeneration, snapshot.target, snapshot.deliverySequence, snapshot.registration);
+                            }
+                        }
+                    }
+                } finally {
+                    // Even a later obsolete/throwing row cannot erase notifications
+                    // belonging to the prefix already committed in this slice.
+                    for (InvalidationMessage message : notifications) notifyEvent(message, true);
+                }
+                if (done != null) return done;
+            } while (position < rows.size());
+
         }
         synchronized (state) { return obsolete(state); } // bounded continuation, retaining cursor progress
     }

@@ -1,0 +1,138 @@
+{
+  "java17": {
+    "core": {
+      "tests": 452,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "invalidation": {
+      "tests": 80,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "transport-redis": {
+      "tests": 195,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "micrometer": {
+      "tests": 26,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "micronaut": {
+      "tests": 47,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "spring-boot-starter": {
+      "tests": 57,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "kotlin": {
+      "tests": 25,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "reactor": {
+      "tests": 13,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "additionalRuntimes": [
+    {
+      "jdk": 21,
+      "exitCode": 0,
+      "modules": {
+        "core": {
+          "tests": 452,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "invalidation": {
+          "tests": 80,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "transport-redis": {
+          "tests": 195,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "tck": {
+          "tests": 3,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        }
+      }
+    },
+    {
+      "jdk": 25,
+      "exitCode": 1,
+      "modules": {
+        "core": {
+          "tests": 452,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "invalidation": {
+          "tests": 80,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "transport-redis": {
+          "tests": 195,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "tck": {
+          "tests": 3,
+          "failures": 1,
+          "errors": 0,
+          "skipped": 0
+        }
+      }
+    }
+  ],
+  "candidateTck": {
+    "tests": 56,
+    "failures": [
+      "RedisInvalidationRaceTest.raceConvergesToL2Truth"
+    ],
+    "isolatedRetryPassed": true
+  },
+  "baselineTck": {
+    "tests": 56,
+    "failures": [
+      "RedisInvalidationRaceTest.raceConvergesToL2Truth",
+      "ValkeyInvalidationRaceTest.raceConvergesToL2Truth"
+    ]
+  },
+  "java25IsolatedVtRetry": {
+    "passed": false,
+    "libraryPinnedEvents": 72
+  },
+  "coreInitialFailure": "degradedCoordinationFallsBackToSingleflight: 2 loader calls, expected 1; full-suite retry passed",
+  "coverage": {
+    "coveredBranches": 808,
+    "totalBranches": 896
+  },
+  "dependencyAudit": "passed"
+}

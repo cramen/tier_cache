@@ -1,0 +1,22 @@
+[
+  {
+    "recording": "ordinary-1-candidate.jfr",
+    "monitors": {
+      "io/tiercache/invalidation/InvalidationService$CacheState": {
+        "events": 101,
+        "totalWaitMs": 95.644166,
+        "maxWaitMs": 9.939207999999999
+      }
+    }
+  },
+  {
+    "recording": "ordinary-1-baseline.jfr",
+    "monitors": {
+      "io/tiercache/invalidation/InvalidationService$CacheState": {
+        "events": 95,
+        "totalWaitMs": 133.702091,
+        "maxWaitMs": 32.761832999999996
+      }
+    }
+  }
+]
