@@ -248,3 +248,23 @@ logs. The sample dashboard's histogram query requires your registry to publish
 histogram buckets; the binder does not enable them itself. The sample miss alert
 uses its written rate/traffic expression, not a statistical proof of constant
 traffic or a diagnosis of the underlying cause.
+
+## Pub/Sub receiver pressure
+
+| Meter | Unit / tags | Meaning |
+| --- | --- | --- |
+| `tiercache.invalidation.dispatch.retained.messages` | messages | Queued plus executing data frames, summed across registered transport sources |
+| `tiercache.invalidation.dispatch.retained.bytes` | bytes | Retained encoded-frame bytes, not total JVM memory |
+| `tiercache.invalidation.dispatch.rejected` | counter; `reason=count,bytes,pending,decode,apply,routing` | Lost/rejected delivery attempts; untrustworthy routing can affect more than one cache |
+| `tiercache.invalidation.dispatch.repair.pending` | registrations; `cache` | Number of currently pending receiver registrations for that cache |
+| `tiercache.invalidation.dispatch.repair` | counter; `cache`, `result=caught_up,reset_safe,no_journal,failed,closed` | Observed repair results; an old result may require another repair before resume |
+
+Gauges are owned and removed on close/replacement without deleting another owner's
+source. No key, journal-row or payload tags are added. Rejection notifications are
+coalesced and reported off the Redis callback; a free worker can report pressure even
+while another lane's handler is blocked. Overflow/retry logs identify the cache and
+reason, are limited to one per cache per 30 seconds, and omit payloads. Observer
+exceptions cannot prevent reservation release or change recovery authorization.
+Publication acknowledgement is still distinct from receiver application and repair.
+
+The reference dashboard includes these receiver panels. Prometheus adds the base-unit suffix to the pending gauge: `tiercache_invalidation_dispatch_repair_pending_registrations`.

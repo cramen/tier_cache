@@ -142,7 +142,7 @@ abstract class StreamsRecoveryTest {
             var journal = new RedisStreamJournal(connection, 1000, CODEC);
             var pubsub = new LettucePubSubInvalidationTransport(client, CODEC);
             try (var service = new InvalidationService(pubsub, journal, UUID.randomUUID(), InvalidationListener.NOOP)) {
-                service.registerTarget(cache, target); target.values.put("victim", "stale");
+                service.registerTarget(cache, target); int initialClears = target.clears.get(); target.values.put("victim", "stale");
                 String bad = connection.sync().xadd(RedisKeyspace.journal(cache), Map.of(bytes("t"), new byte[]{99}, bytes("k"), CODEC.toBytes("victim"), bytes("v"), bytes("broken-secret")));
                 var error = assertThrows(StreamRowCorruptionException.class, () -> journal.checkedRead(cache, "0-0", 10));
                 assertEquals(cache, error.cache()); assertEquals(bad, error.rowId()); assertNull(error.getCause());
@@ -157,7 +157,7 @@ abstract class StreamsRecoveryTest {
                 assertTrue(after.startIntact()); assertEquals(1, after.rows().size());
                 assertEquals(next, after.rows().get(0).cursor()); assertEquals("typed", after.rows().get(0).message().payload());
                 assertTrue(service.recoverAsync(Runnable::run).toCompletableFuture().get(5, TimeUnit.SECONDS));
-                assertEquals("typed", target.values.get("later")); assertEquals(1, target.clears.get());
+                assertEquals("typed", target.values.get("later")); assertEquals(initialClears + 1, target.clears.get());
                 connection.sync().xdel(RedisKeyspace.journal(cache), bad);
                 assertFalse(journal.checkedRead(cache, bad, 1).startIntact());
             }

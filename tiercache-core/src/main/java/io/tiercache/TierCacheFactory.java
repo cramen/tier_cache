@@ -70,6 +70,8 @@ public final class TierCacheFactory implements AutoCloseable {
     private final java.util.concurrent.ExecutorService asyncExecutor;
     private final io.tiercache.internal.AsyncAdmission asyncAdmission;
     private final Map<String, TierCache<?, ?>> liveCaches = new java.util.concurrent.ConcurrentHashMap<>();
+    private record CacheRegistration(Thread owner, java.util.concurrent.CompletableFuture<TierCache<?, ?>> result) { }
+    private final Map<String, CacheRegistration> cacheRegistrations = new java.util.concurrent.ConcurrentHashMap<>();
     private final Map<String, AsyncTierCache<?, ?>> liveAsyncCaches = new java.util.concurrent.ConcurrentHashMap<>();
     /**
      * Single ordering point for async-view publication and the factory's
@@ -227,7 +229,22 @@ public final class TierCacheFactory implements AutoCloseable {
      */
     @SuppressWarnings("unchecked")
     public <K, V> TierCache<K, V> getCache(String name) {
-        return (TierCache<K, V>) liveCaches.computeIfAbsent(name, n -> {
+        TierCache<?, ?> existing = liveCaches.get(name);
+        if (existing != null) return (TierCache<K, V>) existing;
+        if (invalidation != null && !closed) invalidation.checkRegistrationWaitAllowed();
+        var mine = new CacheRegistration(Thread.currentThread(), new java.util.concurrent.CompletableFuture<>());
+        var pending = cacheRegistrations.putIfAbsent(name, mine);
+        if (pending != null) {
+            if (pending.owner() == Thread.currentThread()) throw new IllegalStateException("Recursive creation of cache '" + name + "'");
+            return (TierCache<K, V>) pending.result().join();
+        }
+        try {
+            existing = liveCaches.get(name);
+            if (existing != null) {
+                mine.result().complete(existing);
+                return (TierCache<K, V>) existing;
+            }
+            String n = name;
             CacheSettings settings = caches.getOrDefault(n, defaults);
             LocalCache<K, V> l1 = (LocalCache<K, V>) localCacheFactory.apply(n, settings);
             DefaultTierCache<K, V> cache = new DefaultTierCache<>(n, l1,
@@ -235,10 +252,24 @@ public final class TierCacheFactory implements AutoCloseable {
                     coordinationEnabled ? lockProvider : null, watchdog, versionGenerator, invalidation,
                     breaker, metricsListener, revalidationExecutor, jitter, () -> !closed);
             if (invalidation != null && !closed) {
-                invalidation.registerTarget(n, cache);
+                invalidation.checkRegistrationWaitAllowed();
+                try {
+                    invalidation.registerTargetAsync(n, cache).toCompletableFuture().join();
+                } catch (java.util.concurrent.CompletionException failure) {
+                    if (failure.getCause() instanceof RuntimeException cause) throw cause;
+                    if (failure.getCause() instanceof Error cause) throw cause;
+                    throw failure;
+                }
             }
+            liveCaches.put(name, cache);
+            mine.result().complete(cache);
             return cache;
-        });
+        } catch (RuntimeException | Error failure) {
+            mine.result().completeExceptionally(failure);
+            throw failure;
+        } finally {
+            cacheRegistrations.remove(name, mine);
+        }
     }
 
     /**
@@ -266,13 +297,15 @@ public final class TierCacheFactory implements AutoCloseable {
      */
     @SuppressWarnings("unchecked")
     public <K, V> AsyncTierCache<K, V> asyncCache(String name) {
+        if (closed) throw new IllegalStateException("TierCacheFactory is closed");
+        TierCache<K, V> readyCache = getCache(name);
         synchronized (factoryLifecycleLock) {
             if (closed) {
                 throw new IllegalStateException("TierCacheFactory is closed");
             }
             viewCreationProbe.run();
             return (AsyncTierCache<K, V>) liveAsyncCaches.computeIfAbsent(name,
-                    n -> new DefaultAsyncTierCache<>(getCache(n), asyncExecutor, asyncAdmission, () -> !closed));
+                    n -> new DefaultAsyncTierCache<>(readyCache, asyncExecutor, asyncAdmission, () -> !closed));
         }
     }
 

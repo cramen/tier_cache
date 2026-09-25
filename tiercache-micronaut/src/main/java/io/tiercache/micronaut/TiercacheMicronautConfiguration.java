@@ -78,6 +78,7 @@ public class TiercacheMicronautConfiguration {
     @Bean(preDestroy = "shutdown")
     @Requires(missingBeans = RemoteCache.class)
     RedisClient tiercacheRedisClient(TiercacheProperties properties) {
+        properties.getInvalidation().getPubsub().toOptions();
         if (properties.getInvalidation().isEnabled()) {
             JournalProtocol.requireCapacity(properties.getInvalidation().getJournalCapacity());
         }
@@ -102,6 +103,7 @@ public class TiercacheMicronautConfiguration {
     RedisStreamJournal tiercacheInvalidationJournal(RedisClient tiercacheRedisClient,
             TiercacheProperties properties) {
         JournalProtocol.requireCapacity(properties.getInvalidation().getJournalCapacity());
+        properties.getInvalidation().getPubsub().toOptions();
         return new RedisStreamJournal(tiercacheRedisClient.connect(ByteArrayCodec.INSTANCE),
                 properties.getInvalidation().getJournalCapacity(), new JdkCacheSerializer<>());
     }
@@ -123,13 +125,14 @@ public class TiercacheMicronautConfiguration {
     Function<VersionGenerator, InvalidationHandler> tiercacheInvalidationHandlerFactory(
             RedisClient tiercacheRedisClient, RedisStreamJournal journal,
             TiercacheProperties properties, BeanProvider<CacheMetricsListener> metrics) {
+        var dispatchOptions = properties.getInvalidation().getPubsub().toOptions();
         io.tiercache.spi.InvalidationTransport transport;
         if ("streams".equalsIgnoreCase(properties.getInvalidation().getProfile())) {
             transport = new io.tiercache.redis.LettuceStreamsInvalidationTransport(
                     tiercacheRedisClient, new JdkCacheSerializer<>(), new JdkCacheSerializer<>());
         } else {
             transport = new LettucePubSubInvalidationTransport(tiercacheRedisClient,
-                    new JdkCacheSerializer<>());
+                    new JdkCacheSerializer<>(), new JdkCacheSerializer<>(), 64 * 1024, dispatchOptions);
         }
         io.tiercache.spi.InvalidationTransport selected = transport;
         CacheMetricsListener selectedMetrics = metrics.isPresent()
@@ -161,6 +164,7 @@ public class TiercacheMicronautConfiguration {
         } catch (IllegalArgumentException e) {
             throw new io.tiercache.CacheConfigurationException("Cache '<global defaults>': " + e.getMessage());
         }
+        properties.getInvalidation().getPubsub().toOptions();
         TierCacheFactory.Builder builder = TierCacheFactory.builder().defaults(defaults);
         overridesByName.forEach((name, props) -> builder.cache(name, props.toOverride()));
         if (properties.getAsyncExecutorThreads() > 0) {

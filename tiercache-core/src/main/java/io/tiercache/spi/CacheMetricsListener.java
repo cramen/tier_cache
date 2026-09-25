@@ -213,4 +213,16 @@ public interface CacheMetricsListener {
         return () -> { };
     }
 
+    /** Receiver-side dispatch loss; fixed reason vocabulary and no key/payload tags. */
+    enum DispatchReason { COUNT, BYTES, PENDING, DECODE, APPLY, ROUTING }
+    default void onDispatchRejected(DispatchReason reason, long messages) { }
+    /** Fixed outcome vocabulary: recovery outcomes, including failure, are not publication ACKs. */
+    default void onDispatchRepair(String cache, RecoveryResult.Status result) { }
+    /** Owned transport-level totals; bytes cover retained encoded frames only. */
+    default AutoCloseable registerDispatch(java.util.function.LongSupplier messages,
+            java.util.function.LongSupplier bytes) { return () -> { }; }
+    /** Owned per-registration pending state. */
+    default AutoCloseable registerDispatchPending(String cache, java.util.function.BooleanSupplier pending) {
+        return () -> { };
+    }
 }

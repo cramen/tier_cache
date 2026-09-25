@@ -26,7 +26,10 @@ class DashboardCoverageTest {
                 "tiercache_invalidation_total", "tiercache_invalidation_publish_total", "tiercache_degraded", "tiercache_breaker_state",
                 "tiercache_journal_size", "tiercache_last_load_age", "tiercache_null_entries_total",
                 "tiercache_l2_stale_hits_total", "tiercache_l2_revalidation_triggers_total",
-                "tiercache_l2_revalidation_completions_total", "tiercache_l2_revalidation_failures_total"}) {
+                "tiercache_l2_revalidation_completions_total", "tiercache_l2_revalidation_failures_total",
+                "tiercache_invalidation_dispatch_retained_messages", "tiercache_invalidation_dispatch_retained_bytes",
+                "tiercache_invalidation_dispatch_rejected_total", "tiercache_invalidation_dispatch_repair_pending_registrations",
+                "tiercache_invalidation_dispatch_repair_total"}) {
             assertTrue(json.contains(metric), "dashboard misses " + metric);
         }
     }

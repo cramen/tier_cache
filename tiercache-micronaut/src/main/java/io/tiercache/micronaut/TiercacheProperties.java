@@ -138,6 +138,42 @@ public class TiercacheProperties {
     @ConfigurationProperties("invalidation")
     public static class InvalidationProps {
 
+        private final PubsubProps pubsub;
+        public PubsubProps getPubsub() { return pubsub; }
+
+        @ConfigurationProperties("pubsub")
+        public static class PubsubProps {
+            private final String dispatchThreads;
+            private final String maxPendingMessages;
+            private final String maxPendingBytes;
+            @ConfigurationInject
+            public PubsubProps(@Nullable String dispatchThreads, @Nullable String maxPendingMessages,
+                    @Nullable String maxPendingBytes) {
+                this.dispatchThreads = dispatchThreads;
+                this.maxPendingMessages = maxPendingMessages;
+                this.maxPendingBytes = maxPendingBytes;
+            }
+            public int getDispatchThreads() { return integer("dispatch-threads", dispatchThreads, 2); }
+            public int getMaxPendingMessages() { return integer("max-pending-messages", maxPendingMessages, 1024); }
+            public long getMaxPendingBytes() { return number("max-pending-bytes", maxPendingBytes, 16_777_216); }
+            private static int integer(String name, String value, int fallback) {
+                long parsed = number(name, value, fallback);
+                if (parsed < Integer.MIN_VALUE || parsed > Integer.MAX_VALUE) {
+                    throw new IllegalArgumentException("tiercache.invalidation.pubsub." + name + " must fit a 32-bit integer");
+                }
+                return (int) parsed;
+            }
+            private static long number(String name, String value, long fallback) {
+                try { return value == null ? fallback : Long.parseLong(value.strip()); }
+                catch (NumberFormatException error) {
+                    throw new IllegalArgumentException("tiercache.invalidation.pubsub." + name + " must fit a 64-bit integer", error);
+                }
+            }
+            public io.tiercache.redis.PubSubDispatchOptions toOptions() {
+                return new io.tiercache.redis.PubSubDispatchOptions(getDispatchThreads(), getMaxPendingMessages(), getMaxPendingBytes());
+            }
+        }
+
         private final Boolean enabled;
         private final String profile;
         private final Integer journalCapacity;
@@ -155,9 +191,14 @@ public class TiercacheProperties {
          *                        stream; {@code null} means 10,000
          * @since 1.1.0
          */
+        public InvalidationProps(Boolean enabled, String profile, Integer journalCapacity) {
+            this(enabled, profile, journalCapacity, null);
+        }
+
         @ConfigurationInject
         public InvalidationProps(@Nullable Boolean enabled, @Nullable String profile,
-                @Nullable Integer journalCapacity) {
+                @Nullable Integer journalCapacity, @Nullable PubsubProps pubsub) {
+            this.pubsub = pubsub == null ? new PubsubProps(null, null, null) : pubsub;
             this.enabled = enabled;
             this.profile = profile;
             this.journalCapacity = journalCapacity;

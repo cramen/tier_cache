@@ -49,6 +49,20 @@ public interface InvalidationHandler extends AutoCloseable {
      */
     void registerTarget(String cache, InvalidationTarget target);
 
+    /** Registration readiness; legacy handlers finish their existing registration inline. */
+    default java.util.concurrent.CompletionStage<Void> registerTargetAsync(String cache, InvalidationTarget target) {
+        try {
+            registerTarget(cache, target);
+            return java.util.concurrent.CompletableFuture.completedFuture(null);
+        } catch (Throwable failure) {
+            return java.util.concurrent.CompletableFuture.failedFuture(failure);
+        }
+    }
+
+    /** Reject synchronous factory publication from a worker needed by registration. */
+    default void checkRegistrationWaitAllowed() { }
+
+
     /**
      * Registers the application-facing observer of inbound events, invoked
      * after each incoming event has been applied locally. Called once by the

@@ -142,7 +142,7 @@ class AsyncTierCacheTest {
         assertFalse(newWorkersSince(baseline).isEmpty(), "the shared executor must have run the work");
 
         factory.close();
-        awaitTrue(newWorkersSince(baseline)::isEmpty,
+        awaitTrue(() -> newWorkersSince(baseline).isEmpty(),
                 "executor workers must stop with factory close");
 
         // Rejection surfaces as a failed stage, never a synchronous throw

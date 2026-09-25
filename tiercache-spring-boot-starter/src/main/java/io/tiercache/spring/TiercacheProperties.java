@@ -174,6 +174,24 @@ public class TiercacheProperties {
      */
     public static class InvalidationProps {
 
+        private final PubsubProps pubsub = new PubsubProps();
+        public PubsubProps getPubsub() { return pubsub; }
+
+        public static class PubsubProps {
+            private int dispatchThreads = 2;
+            private int maxPendingMessages = 1024;
+            private long maxPendingBytes = 16_777_216;
+            public int getDispatchThreads() { return dispatchThreads; }
+            public void setDispatchThreads(int value) { dispatchThreads = value; }
+            public int getMaxPendingMessages() { return maxPendingMessages; }
+            public void setMaxPendingMessages(int value) { maxPendingMessages = value; }
+            public long getMaxPendingBytes() { return maxPendingBytes; }
+            public void setMaxPendingBytes(long value) { maxPendingBytes = value; }
+            public io.tiercache.redis.PubSubDispatchOptions toOptions() {
+                return new io.tiercache.redis.PubSubDispatchOptions(dispatchThreads, maxPendingMessages, maxPendingBytes);
+            }
+        }
+
         private boolean enabled = true;
 
         /** Invalidation transport profile: pubsub (default) or streams. */

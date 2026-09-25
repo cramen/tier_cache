@@ -114,6 +114,61 @@
       "targets": [
         {"expr": "sum by (cache) (rate(tiercache_invalidation_publish_total{outcome=\"failed\"}[5m])) / clamp_min(sum by (cache) (rate(tiercache_invalidation_publish_total{outcome=~\"acknowledged|failed\"}[5m])), 1e-9)", "legendFormat": "{{cache}}"}
       ]
+    },
+    {
+      "id": 15,
+      "title": "Pub/Sub retained messages",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(tiercache_invalidation_dispatch_retained_messages)",
+          "legendFormat": "messages"
+        }
+      ]
+    },
+    {
+      "id": 16,
+      "title": "Pub/Sub retained encoded bytes",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(tiercache_invalidation_dispatch_retained_bytes)",
+          "legendFormat": "bytes"
+        }
+      ]
+    },
+    {
+      "id": 17,
+      "title": "Pub/Sub rejected delivery",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum by (reason) (rate(tiercache_invalidation_dispatch_rejected_total[5m]))",
+          "legendFormat": "{{reason}}"
+        }
+      ]
+    },
+    {
+      "id": 18,
+      "title": "Pub/Sub pending repair registrations",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum by (cache) (tiercache_invalidation_dispatch_repair_pending_registrations)",
+          "legendFormat": "{{cache}}"
+        }
+      ]
+    },
+    {
+      "id": 19,
+      "title": "Pub/Sub repair outcomes",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum by (cache, result) (rate(tiercache_invalidation_dispatch_repair_total[5m]))",
+          "legendFormat": "{{cache}} {{result}}"
+        }
+      ]
     }
   ]
 }

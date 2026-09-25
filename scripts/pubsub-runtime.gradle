@@ -1,0 +1,10 @@
+gradle.projectsEvaluated {
+    def module = gradle.rootProject.project(':tiercache-transport-redis')
+    module.tasks.register('exportPubSubRuntime') {
+        dependsOn module.tasks.named('testClasses'), module.sourceSets.test.runtimeClasspath
+        doLast {
+            def destination = new File(module.providers.gradleProperty('pubsubClasspathFile').get())
+            destination.text = (module.sourceSets.test.runtimeClasspath.files).collect { it.absolutePath }.join(File.pathSeparator)
+        }
+    }
+}

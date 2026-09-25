@@ -16,6 +16,7 @@ import java.util.concurrent.*;
  */
 public final class InvalidationService implements InvalidationHandler {
     private static final Logger log = LoggerFactory.getLogger(InvalidationService.class);
+    private static final ThreadLocal<Boolean> INTERNAL_WORKER = ThreadLocal.withInitial(() -> false);
     private static final int READ_BATCH = 256;
     private static final int MAX_BATCHES = 16;
     private static final int WINDOW_CAP = 128;
@@ -55,13 +56,19 @@ public final class InvalidationService implements InvalidationHandler {
         long retryAt, nextCorruptionLog;
         RecoveryResult lastResult, safeResult;
         long safeTargetGeneration;
-        CompletableFuture<RecoveryResult> resetCompletion;
+        CompletableFuture<RecoveryResult> resetCompletion, localCompletion;
+        RecoveryResult localProof;
+        long localTargetGeneration;
+        CompletableFuture<Void> registrationCompletion;
+        boolean registrationQueued, registrationRunning, waitingFence;
+        long fenceSequence;
+        InvalidationDeliveryFence fence;
         CacheState(String cache) { this.cache = cache; }
     }
 
     private record Snapshot(long generation, long token, String cursor, long targetGeneration,
                             InvalidationTarget target, long deliverySequence) { }
-    private enum Kind { TICK_DONE, CAUGHT_UP, RESET_SAFE, NO_JOURNAL, FAILED, OBSOLETE }
+    private enum Kind { WAITING, WAITING_REPLAY, TICK_DONE, CAUGHT_UP, RESET_SAFE, NO_JOURNAL, FAILED, OBSOLETE }
     private record Pass(Kind kind, String baseline, long generation, long targetGeneration) {
         Pass(Kind kind, String baseline, long generation) { this(kind, baseline, generation, -1); }
     }
@@ -91,6 +98,16 @@ public final class InvalidationService implements InvalidationHandler {
         transport.setMetricsListener(this.metrics);
         transport.setGapHandler(new InvalidationGapHandler() {
             public CompletionStage<RecoveryResult> reset(String cache) { return resetAsync(cache); }
+            public CompletionStage<RecoveryResult> recoverLocalGap(String cache) { return localGapAsync(cache); }
+            public boolean isLocalRecoveryCurrent(String cache, RecoveryResult result) {
+                CacheState state = states.get(cache);
+                if (state == null) return false;
+                synchronized (state) {
+                    return !closed && !state.retired && state.ready && result != null && result.succeeded()
+                            && result == state.localProof && state.generation == result.generation()
+                            && state.target.recoveryGeneration() == state.localTargetGeneration;
+                }
+            }
             public RecoveryResult registrationBaseline(String cache) {
                 CacheState state = states.get(cache);
                 if (state == null) return null;
@@ -137,70 +154,205 @@ public final class InvalidationService implements InvalidationHandler {
         }
     }
 
-    @Override
-    public void registerTarget(String cache, InvalidationTarget target) {
+    @Override public void checkRegistrationWaitAllowed() {
+        if (transport.isDeliveryThread() || INTERNAL_WORKER.get()) {
+            throw new IllegalStateException("Synchronous registration cannot wait on a delivery/recovery worker; use registerTargetAsync");
+        }
+    }
+
+    @Override public void registerTarget(String cache, InvalidationTarget target) {
+        checkRegistrationWaitAllowed();
+        try { registerTarget(cache, target, true).toCompletableFuture().join(); }
+        catch (CompletionException failure) {
+            if (failure.getCause() instanceof RuntimeException cause) throw cause;
+            if (failure.getCause() instanceof Error cause) throw cause;
+            throw failure;
+        }
+    }
+
+    @Override public CompletionStage<Void> registerTargetAsync(String cache, InvalidationTarget target) {
+        return registerTarget(cache, target, false);
+    }
+
+    private CompletionStage<Void> registerTarget(String cache, InvalidationTarget target, boolean inline) {
+        Objects.requireNonNull(target, "target");
+        List<CompletableFuture<RecoveryResult>> retired = new ArrayList<>();
+        CompletableFuture<Void> previous, result;
         CacheState state;
-        long registration;
-        boolean resetRegistration = transport.requiresRegistrationReset();
-        AutoCloseable retiredSubscription;
+        boolean ready = false;
         synchronized (lifecycle) {
-            if (closed) return;
+            if (closed) return CompletableFuture.failedFuture(new CancellationException("Invalidation service closed"));
             state = states.computeIfAbsent(cache, CacheState::new);
             publications.register(cache);
             synchronized (state) {
-                if (state.ready && state.subscription != null && !resetRegistration) {
-                    state.target = target;
-                    state.generation++;
-                    state.lastResult = null;
-                    if (state.pending) { state.replay = true; schedule(state); }
-                    return;
-                }
-                retiredSubscription = state.subscription;
-                state.subscription = null;
+                previous = state.registrationCompletion;
+                if (state.resetCompletion != null) retired.add(state.resetCompletion);
+                if (state.localCompletion != null) retired.add(state.localCompletion);
+                state.resetCompletion = state.localCompletion = null;
+                state.localProof = state.lastResult = null;
                 state.target = target;
                 state.generation++;
-                registration = ++state.registration;
-                state.ready = false;
-                state.lastResult = null;
+                result = new CompletableFuture<>();
+                if (state.ready && state.subscription != null && !transport.requiresRegistrationReset()) {
+                    // Legacy transports keep their existing subscription/target-swap contract.
+                    state.registrationCompletion = null;
+                    ready = true;
+                    if (state.pending) { state.replay = true; schedule(state); }
+                } else {
+                    state.registration++;
+                    state.ready = false;
+                    state.registrationCompletion = result;
+                    if (!inline) scheduleRegistration(state);
+                }
             }
         }
-        // Initial baseline and subscription are outside service/state monitors.
-        closeQuietly(retiredSubscription);
-        String baseline = journal == null ? "0-0" : journal.endCursor(cache);
+        if (previous != null) previous.completeExceptionally(new CancellationException("Registration superseded"));
+        retired.forEach(future -> future.complete(RecoveryResult.closed()));
+        if (ready) result.complete(null);
+        else if (inline) {
+            INTERNAL_WORKER.set(true);
+            try { runRegistration(state); } finally { INTERNAL_WORKER.remove(); }
+        }
+        return result.minimalCompletionStage();
+    }
+
+    // One queued/running registration owner per cache, even during replacement churn.
+    private void scheduleRegistration(CacheState state) {
+        if (closed || state.retired || state.registrationQueued || state.registrationRunning
+                || state.waitingFence || state.registrationCompletion == null || state.registrationCompletion.isDone()) return;
+        state.registrationQueued = true;
+        workers().execute(() -> {
+            INTERNAL_WORKER.set(true);
+            try { runRegistration(state); }
+            finally { INTERNAL_WORKER.remove(); }
+        });
+    }
+
+    private void runRegistration(CacheState state) {
+        long registration;
+        InvalidationTarget target;
+        CompletableFuture<Void> result;
         synchronized (state) {
-            if (closed || state.registration != registration) return;
-            if (resetRegistration) {
-                long next = target.resetRecovery(target.recoveryGeneration());
-                if (next < 0 || target.recoveryGeneration() != next) throw new IllegalStateException("Registration reset was superseded");
-            }
-            state.cursor = baseline;
-            state.safeTargetGeneration = target.recoveryGeneration();
-            state.safeResult = journal == null ? null : new RecoveryResult(RecoveryResult.Status.RESET_SAFE, baseline, state.generation);
-            state.applied.clear();
-            state.confirmed.clear();
-            state.ready = true;
+            state.registrationQueued = false;
+            if (closed || state.retired || state.registrationRunning || state.registrationCompletion == null) return;
+            state.registrationRunning = true;
+            registration = state.registration;
+            target = state.target;
+            result = state.registrationCompletion;
         }
-        AutoCloseable subscription = transport.subscribe(cache, message -> onMessage(message, registration));
-        AutoCloseable previous;
-        boolean registerMetric = false;
+        AutoCloseable subscription = null, oldSubscription = null;
+        InvalidationDeliveryFence release = null;
+        Throwable failure = null;
+        boolean completed = false;
+        try {
+            if (!ensureFence(state)) return;
+            String baseline = journal == null ? "0-0" : journal.endCursor(state.cache);
+            if (baseline == null) throw new IllegalStateException("Registration journal baseline unavailable for " + state.cache);
+            synchronized (state) {
+                if (closed || state.retired || state.registration != registration) return;
+                if (transport.requiresRegistrationReset()) {
+                    long next = target.resetRecovery(target.recoveryGeneration());
+                    if (next < 0 || target.recoveryGeneration() != next) throw new IllegalStateException("Registration reset superseded");
+                }
+                state.cursor = baseline;
+                state.safeTargetGeneration = target.recoveryGeneration();
+                state.safeResult = journal == null ? null : new RecoveryResult(RecoveryResult.Status.RESET_SAFE, baseline, state.generation);
+                state.applied.clear(); state.confirmed.clear();
+                state.ready = true;
+            }
+            subscription = transport.subscribe(state.cache, message -> onMessage(message, registration));
+            synchronized (state) {
+                // A subscribe may itself replace the transport lane. Never reuse its old fence.
+                release = state.fence; state.fence = null;
+                if (!closed && !state.retired && state.registration == registration) {
+                    oldSubscription = state.subscription;
+                    state.subscription = subscription;
+                    subscription = null;
+                    completed = true;
+                }
+            }
+            if (completed) registerRecoveryMetric(state);
+        } catch (Throwable error) {
+            failure = error;
+            synchronized (state) {
+                if (state.registration == registration) {
+                    state.ready = false;
+                    state.registrationCompletion = null;
+                }
+            }
+        } finally {
+            closeQuietly(subscription); closeQuietly(oldSubscription);
+            if (release != null) release.release();
+            synchronized (state) {
+                state.registrationRunning = false;
+                if (state.registration != registration || (!completed && failure == null && state.fence != null)) {
+                    scheduleRegistration(state);
+                }
+                if (state.ready && state.pending) schedule(state);
+            }
+            if (failure != null) result.completeExceptionally(failure);
+            else if (completed) result.complete(null);
+            synchronized (state) {
+                if (state.registrationCompletion == result && result.isDone()) state.registrationCompletion = null;
+            }
+        }
+    }
+
+    private void registerRecoveryMetric(CacheState state) {
         synchronized (state) {
-            if (closed || state.registration != registration) previous = subscription;
-            else {
-                previous = state.subscription;
-                state.subscription = subscription;
-                if (!state.metricClaimed) { state.metricClaimed = true; registerMetric = true; }
+            if (state.metricClaimed || closed) return;
+            state.metricClaimed = true;
+        }
+        AutoCloseable gauge = null;
+        try { gauge = metrics.registerRecovery(state.cache, () -> state.pending); }
+        catch (Throwable e) { log.warn("Recovery metric registration failed ({})", e.getClass().getSimpleName()); }
+        boolean discard;
+        synchronized (state) { discard = closed; if (!discard) state.gauge = gauge; }
+        if (discard) closeQuietly(gauge);
+    }
+
+    /** External fence callbacks retain neither target nor service strongly. */
+    private record FenceCompletion(java.lang.ref.WeakReference<InvalidationService> owner,
+                                   String cache, long sequence) {
+        void complete(InvalidationDeliveryFence fence, Throwable error) {
+            InvalidationService service = owner.get();
+            if (service != null) service.fenceCompleted(cache, sequence, fence, error);
+        }
+    }
+
+    private boolean ensureFence(CacheState state) {
+        long sequence;
+        synchronized (state) {
+            if (state.fence != null) return true;
+            if (closed || state.retired || state.waitingFence) return false;
+            state.waitingFence = true;
+            sequence = ++state.fenceSequence;
+        }
+        var completion = new FenceCompletion(new java.lang.ref.WeakReference<>(this), state.cache, sequence);
+        try { transport.fenceDelivery(state.cache).whenComplete(completion::complete); }
+        catch (Throwable error) { completion.complete(null, error); }
+        synchronized (state) { return state.fence != null; }
+    }
+
+    private void fenceCompleted(String cache, long sequence, InvalidationDeliveryFence fence, Throwable error) {
+        CacheState state = states.get(cache);
+        if (state == null) return;
+        CompletableFuture<Void> failed = null;
+        synchronized (state) {
+            if (closed || state.retired || state.fenceSequence != sequence) return;
+            state.waitingFence = false;
+            if (error == null && fence != null) state.fence = fence;
+            else if (!state.ready && state.registrationCompletion != null) {
+                failed = state.registrationCompletion; state.registrationCompletion = null;
+            } else {
+                state.reset = true; state.pending = true;
+                state.retryAt = clock.getAsLong() + TimeUnit.SECONDS.toNanos(1);
             }
+            if (!state.ready) scheduleRegistration(state);
+            else schedule(state);
         }
-        closeQuietly(previous);
-        if (registerMetric) {
-            AutoCloseable gauge = null;
-            try { gauge = metrics.registerRecovery(cache, () -> state.pending); }
-            catch (Throwable e) { log.warn("Recovery metric registration failed ({})", e.getClass().getSimpleName()); }
-            boolean discard;
-            synchronized (state) { discard = closed; if (!discard) state.gauge = gauge; }
-            if (discard) closeQuietly(gauge);
-        }
-        synchronized (state) { if (state.pending) schedule(state); }
+        if (failed != null) failed.completeExceptionally(error == null
+                ? new IllegalStateException("Missing delivery fence") : error);
     }
 
     @Override
@@ -241,6 +393,16 @@ public final class InvalidationService implements InvalidationHandler {
     }
 
     private void onMessage(InvalidationMessage message, long registration) {
+        boolean nested = INTERNAL_WORKER.get();
+        INTERNAL_WORKER.set(true);
+        try { applyMessage(message, registration); }
+        finally {
+            if (nested) INTERNAL_WORKER.set(true);
+            else INTERNAL_WORKER.remove();
+        }
+    }
+
+    private void applyMessage(InvalidationMessage message, long registration) {
         if (closed) {
             if (transport.requiresRegistrationReset()) throw new IllegalStateException("Invalidation service is closed");
             return;
@@ -340,12 +502,30 @@ public final class InvalidationService implements InvalidationHandler {
         }
     }
 
+    private CompletionStage<RecoveryResult> localGapAsync(String cache) {
+        CacheState state = states.get(cache);
+        if (state == null || closed) return CompletableFuture.completedFuture(RecoveryResult.closed());
+        synchronized (state) {
+            if (closed || !state.ready) return CompletableFuture.completedFuture(RecoveryResult.closed());
+            if (state.localCompletion != null) return state.localCompletion.minimalCompletionStage();
+            state.localCompletion = new CompletableFuture<>();
+            state.generation++;
+            state.lastResult = state.localProof = null;
+            state.replay = state.pending = state.resetOnFailure = true;
+            schedule(state);
+            return state.localCompletion.minimalCompletionStage();
+        }
+    }
+
     // Caller owns the state gate. A running pass absorbs triggers; it alone
     // schedules its continuation. Thus at most one token exists per cache.
     private void schedule(CacheState state) {
-        if (closed || state.retired || !state.ready || state.running || state.scheduled != null) return;
+        if (closed || state.retired || !state.ready || state.running || state.registrationRunning || state.waitingFence || state.scheduled != null) return;
         long delay = state.retryAt == 0 ? 0 : Math.max(0, state.retryAt - clock.getAsLong());
-        try { state.scheduled = workers().schedule(() -> run(state), delay, TimeUnit.NANOSECONDS); }
+        try { state.scheduled = workers().schedule(() -> {
+            INTERNAL_WORKER.set(true);
+            try { run(state); } finally { INTERNAL_WORKER.remove(); }
+        }, delay, TimeUnit.NANOSECONDS); }
         catch (RejectedExecutionException e) { if (!closed) throw e; }
     }
 
@@ -369,7 +549,8 @@ public final class InvalidationService implements InvalidationHandler {
             log.warn("Recovery pass failed for cache '{}' ({})", state.cache, e.getClass().getSimpleName());
             result = new Pass(Kind.FAILED, null, generation);
         }
-        CompletableFuture<RecoveryResult> resetWaiter = null;
+        CompletableFuture<RecoveryResult> resetWaiter = null, localWaiter = null;
+        InvalidationDeliveryFence releaseFence = null;
         RecoveryResult completion = null;
         synchronized (state) {
             state.running = false;
@@ -378,7 +559,11 @@ public final class InvalidationService implements InvalidationHandler {
                     || (result.kind == Kind.RESET_SAFE && state.target.recoveryGeneration() != result.targetGeneration))) {
                 result = obsolete(state);
             }
-            if (result.kind == Kind.FAILED) {
+            if (result.kind == Kind.WAITING) {
+                state.reset = true;
+            } else if (result.kind == Kind.WAITING_REPLAY) {
+                state.replay = true;
+            } else if (result.kind == Kind.FAILED) {
                 state.resyncRequired = true;
                 state.applied.clear();
                 state.replay = true;
@@ -416,11 +601,21 @@ public final class InvalidationService implements InvalidationHandler {
                 }
                 resetWaiter = state.resetCompletion;
                 state.resetCompletion = null;
+                localWaiter = state.localCompletion;
+                state.localCompletion = null;
+                if (completion.succeeded()) {
+                    state.localProof = completion;
+                    state.localTargetGeneration = state.target.recoveryGeneration();
+                    releaseFence = state.fence;
+                    state.fence = null;
+                }
             } else completion = null;
             state.pending = state.replay || state.tick || state.reset || state.resyncRequired;
             if (state.pending) schedule(state);
         }
+        if (releaseFence != null) releaseFence.release();
         if (resetWaiter != null) resetWaiter.complete(completion);
+        if (localWaiter != null) localWaiter.complete(completion);
         checkAggregate();
     }
 
@@ -467,6 +662,11 @@ public final class InvalidationService implements InvalidationHandler {
                 return resetOnFailure ? reset(state, expectedGeneration)
                         : new Pass(Kind.FAILED, null, expectedGeneration);
             }
+            if (replay && range.startIntact()
+                    && rowsAfterCursor(range, snapshot.cursor).stream().anyMatch(row -> row.message().type() == InvalidationMessage.Type.EVICT_ALL)
+                    && !ensureFence(state)) {
+                return new Pass(Kind.WAITING_REPLAY, null, expectedGeneration);
+            }
             List<InvalidationMessage> notifications = new ArrayList<>();
             Pass done = null;
             synchronized (state) {
@@ -507,6 +707,7 @@ public final class InvalidationService implements InvalidationHandler {
     }
 
     private Pass reset(CacheState state, long expectedGeneration) {
+        if (!ensureFence(state)) return new Pass(Kind.WAITING, null, expectedGeneration);
         Snapshot snapshot;
         synchronized (state) {
             if (closed || state.retired) return new Pass(Kind.OBSOLETE, null, -1);
@@ -592,6 +793,7 @@ public final class InvalidationService implements InvalidationHandler {
     public void close() {
         List<AutoCloseable> resources = new ArrayList<>();
         List<CompletableFuture<RecoveryResult>> completions = new ArrayList<>();
+        List<CompletableFuture<Void>> registrations = new ArrayList<>();
         CompletableFuture<Boolean> recovery;
         synchronized (lifecycle) {
             if (closed) return;
@@ -606,11 +808,14 @@ public final class InvalidationService implements InvalidationHandler {
                 if (state.scheduled != null) state.scheduled.cancel(false);
                 state.scheduled = null;
                 if (state.resetCompletion != null) completions.add(state.resetCompletion);
+                if (state.localCompletion != null) completions.add(state.localCompletion);
+                if (state.registrationCompletion != null) registrations.add(state.registrationCompletion);
                 resources.add(state.subscription);
                 resources.add(state.gauge);
             }
             states.clear();
         }
+        registrations.forEach(future -> future.completeExceptionally(new CancellationException("Invalidation service closed")));
         if (recovery != null) recovery.complete(false);
         for (CompletableFuture<RecoveryResult> completion : completions) completion.complete(RecoveryResult.closed());
         resources.forEach(InvalidationService::closeQuietly);

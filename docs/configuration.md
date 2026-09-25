@@ -493,3 +493,52 @@ For GraalVM Native Image, applications using JDK serialization must register
 **their own key/value DTOs** for serialization. The library's String registration
 does not cover application classes. The native demo verifies its own payloads,
 not every application's serializer or DTO graph.
+
+## Pub/Sub receiver dispatch
+
+Pub/Sub uses ordered queues per logical cache over a fixed worker pool. Limits
+are shared by every cache on one transport, including messages already executing.
+
+| Property | Default | Meaning |
+| --- | ---: | --- |
+| `tiercache.invalidation.pubsub.dispatch-threads` | 2 | Maximum delivery/control workers |
+| `tiercache.invalidation.pubsub.max-pending-messages` | 1024 | Aggregate retained data messages; also the control attachment-group limit |
+| `tiercache.invalidation.pubsub.max-pending-bytes` | 16777216 | Aggregate retained encoded-frame bytes |
+
+Spring and Micronaut use these same names and reject nonpositive or numerically
+unrepresentable settings before connecting. Valid Pub/Sub settings do not alter
+the Streams profile. Programmatic users can supply `PubSubDispatchOptions` to the
+five-argument `LettucePubSubInvalidationTransport` constructor; existing constructors
+select the defaults. These defaults are starting values, not measured capacity limits.
+
+For example, a deployment handling larger bursts can configure:
+
+```yaml
+tiercache:
+  invalidation:
+    pubsub:
+      dispatch-threads: 2
+      max-pending-messages: 2048
+      max-pending-bytes: 33554432
+```
+
+The byte bound covers retained encoded frames. It does not bound Lettuce/network
+buffers, arbitrary deserialization expansion or all JVM memory. An oversized single
+frame is rejected into gap recovery. Increasing worker count does not parallelize
+handlers within one cache. With free workers, another cache can progress while one
+handler is slow; blocking every worker still stalls delivery.
+
+Overflow retires that cache's queued frames and pauses its normal delivery. Repair
+waits for its already admitted handler, then replays verified journal history or
+clears conservatively when history cannot be established. Arrivals during repair
+are accounted as further loss and require another check before delivery resumes.
+Sustained overload can remain pending. Without a recovery handler, the transport
+stays pending; it does not silently claim coherence. See [recovery](recovery.md).
+
+All asynchronous repair/fence attachment groups, including retired registrations
+awaiting custom stages, share the control budget. A custom stage that never completes
+can exhaust it: further repairs remain visibly pending without new attachments.
+Application callbacks should finish promptly and must not block on registration
+of their own lane. See [registration readiness](resource-lifecycle.md#registration-readiness).
+
+See [the dispatcher measurements and six-instance recovery trial](benchmarks/pubsub-dispatch.md) for reproducible evidence and workload limits.

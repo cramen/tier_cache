@@ -83,6 +83,50 @@ public final class MicrometerCacheMetrics
         });
     }
 
+    private final Map<String, DispatchGauge> dispatchGauges = new ConcurrentHashMap<>();
+    private static final class DispatchGauge {
+        final Map<Object, java.util.function.LongSupplier> sources = new ConcurrentHashMap<>();
+        Gauge meter;
+        double value() { return sources.values().stream().mapToDouble(java.util.function.LongSupplier::getAsLong).sum(); }
+    }
+    private AutoCloseable dispatchGauge(String meter, String cache, String unit, java.util.function.LongSupplier source) {
+        Object owner = new Object();
+        String key = meter + ":" + cache;
+        dispatchGauges.compute(key, (ignored, existing) -> {
+            var state = existing == null ? new DispatchGauge() : existing;
+            state.sources.put(owner, source);
+            if (state.meter == null) {
+                var builder = Gauge.builder(meter, state, DispatchGauge::value).baseUnit(unit);
+                if (cache != null) builder.tag("cache", cache);
+                state.meter = builder.register(registry);
+            }
+            return state;
+        });
+        return () -> dispatchGauges.computeIfPresent(key, (ignored, state) -> {
+            state.sources.remove(owner);
+            if (!state.sources.isEmpty()) return state;
+            registry.remove(state.meter); return null;
+        });
+    }
+    @Override public AutoCloseable registerDispatch(java.util.function.LongSupplier messages,
+            java.util.function.LongSupplier bytes) {
+        var count = dispatchGauge("tiercache.invalidation.dispatch.retained.messages", null, "messages", messages);
+        var size = dispatchGauge("tiercache.invalidation.dispatch.retained.bytes", null, "bytes", bytes);
+        return () -> { try { count.close(); } finally { size.close(); } };
+    }
+    @Override public AutoCloseable registerDispatchPending(String cache, java.util.function.BooleanSupplier pending) {
+        return dispatchGauge("tiercache.invalidation.dispatch.repair.pending", cache, "registrations", () -> pending.getAsBoolean() ? 1 : 0);
+    }
+    @Override public void onDispatchRejected(DispatchReason reason, long messages) {
+        Counter.builder("tiercache.invalidation.dispatch.rejected")
+                .tag("reason", reason.name().toLowerCase(java.util.Locale.ROOT)).register(registry).increment(messages);
+    }
+    @Override public void onDispatchRepair(String cache, io.tiercache.spi.RecoveryResult.Status result) {
+        Counter.builder("tiercache.invalidation.dispatch.repair")
+                .tag("cache", cache).tag("result", result.name().toLowerCase(java.util.Locale.ROOT))
+                .register(registry).increment();
+    }
+
     // --- CacheMetricsListener ---
 
     @Override

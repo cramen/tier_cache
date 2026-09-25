@@ -38,12 +38,16 @@ class GapAuthorizationTest {
     @Test void retargetBeforeResetCompletionCannotIssueTheOldProof() throws Exception {
         var transport = new Transport(); var first = new RecoveryProtocolTest.Target(); var second = new RecoveryProtocolTest.Target();
         var owner = new AtomicReference<InvalidationService>(); var once = new AtomicBoolean();
+        var replacement = new CompletableFuture<CompletionStage<Void>>();
         try (var service = new InvalidationService(transport, new InMemoryJournal(100), UUID.randomUUID(), cache -> {
-            if (once.compareAndSet(false, true)) owner.get().registerTarget(cache, second);
+            if (once.compareAndSet(false, true)) replacement.complete(owner.get().registerTargetAsync(cache, second));
         })) {
             owner.set(service); service.registerTarget("c", first);
             var result = transport.gaps.reset("c").toCompletableFuture().get(5, TimeUnit.SECONDS);
-            assertTrue(transport.gaps.isCurrent("c", result)); assertEquals(2, second.clears.get());
+            assertFalse(transport.gaps.isCurrent("c", result), "retired waiter must not issue a proof");
+            replacement.get(5, TimeUnit.SECONDS).toCompletableFuture().get(5, TimeUnit.SECONDS);
+            var current = transport.gaps.reset("c").toCompletableFuture().get(5, TimeUnit.SECONDS);
+            assertTrue(transport.gaps.isCurrent("c", current)); assertEquals(2, second.clears.get());
         }
     }
 }

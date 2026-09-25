@@ -9,19 +9,21 @@ import io.lettuce.core.pubsub.StatefulRedisPubSubConnection;
 import io.tiercache.InvalidationMessage;
 import io.tiercache.invalidation.MessageCodec;
 import io.tiercache.spi.InvalidationTransport;
+import io.tiercache.spi.InvalidationGapHandler;
+import io.tiercache.spi.InvalidationDeliveryFence;
 
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 
 /**
  * Default invalidation transport profile: Redis Pub/Sub (minimal latency).
  * One Pub/Sub connection per instance; per-cache channels
  * ({@code tiercache:v2:inv:<token(cache)>}); inbound events are dispatched on a
- * single daemon executor, off the I/O thread, preserving per-channel order.
+ * bounded shared worker pool, off the I/O thread, preserving per-channel order.
  *
  * <p>On reconnect (detected via the Lettuce event bus) the registered
  * reconnect listener fires so the engine can replay the journal — Pub/Sub
@@ -45,8 +47,10 @@ public final class LettucePubSubInvalidationTransport implements InvalidationTra
     private final CacheSerializer<Object> valueSerializer;
     private final long payloadCapBytes;
     private final StatefulRedisPubSubConnection<byte[], byte[]> connection;
-    private final Map<String, Consumer<InvalidationMessage>> handlers = new ConcurrentHashMap<>();
-    private final ExecutorService dispatcher;
+    private record Registration(String cache, AutoCloseable lane) { }
+    private final Map<String, Registration> channels = new ConcurrentHashMap<>();
+    private final ReentrantLock subscriptions = new ReentrantLock();
+    private final PubSubDispatcher dispatcher;
 
     private volatile Runnable reconnectListener = () -> {
     };
@@ -79,25 +83,29 @@ public final class LettucePubSubInvalidationTransport implements InvalidationTra
     public LettucePubSubInvalidationTransport(RedisClient client,
             CacheSerializer<Object> keySerializer, CacheSerializer<Object> valueSerializer,
             long payloadCapBytes) {
+        this(client, keySerializer, valueSerializer, payloadCapBytes, PubSubDispatchOptions.DEFAULT);
+    }
+
+    /** Creates a receiver with explicit aggregate dispatch bounds. */
+    public LettucePubSubInvalidationTransport(RedisClient client,
+            CacheSerializer<Object> keySerializer, CacheSerializer<Object> valueSerializer,
+            long payloadCapBytes, PubSubDispatchOptions options) {
+        java.util.Objects.requireNonNull(options, "options");
         this.client = client;
         this.keySerializer = keySerializer;
         this.valueSerializer = valueSerializer;
         this.payloadCapBytes = payloadCapBytes;
         this.connection = client.connectPubSub(ByteArrayCodec.INSTANCE);
-        this.dispatcher = Executors.newSingleThreadExecutor(r -> {
-            Thread t = new Thread(r, "tiercache-invalidation");
-            t.setDaemon(true);
-            return t;
-        });
+        this.dispatcher = new PubSubDispatcher(options);
         connection.addListener(new RedisPubSubAdapter<>() {
             @Override
             public void message(byte[] channel, byte[] message) {
-                MessageCodec.Decoded decoded = MessageCodec.decode(message);
-                Consumer<InvalidationMessage> handler = handlers.get(decoded.cache());
-                if (handler == null) {
+                Registration registration = channels.get(channelKey(channel));
+                if (registration == null) {
+                    dispatcher.gap(null);
                     return;
                 }
-                dispatcher.execute(() -> handler.accept(toMessage(decoded)));
+                dispatcher.accept(registration.cache(), message);
             }
         });
         // On reconnect the engine replays the journal (Pub/Sub is not durable).
@@ -140,13 +148,48 @@ public final class LettucePubSubInvalidationTransport implements InvalidationTra
 
     @Override
     public AutoCloseable subscribe(String cache, Consumer<InvalidationMessage> handler) {
-        byte[] channel = channelName(cache); // validate before registering a handler
-        handlers.put(cache, handler);
-        connection.sync().subscribe(channel);
-        return () -> {
-            handlers.remove(cache);
-            connection.async().unsubscribe(channel);
-        };
+        byte[] channel = channelName(cache);
+        String route = channelKey(channel);
+        subscriptions.lock();
+        try {
+            AutoCloseable lane = dispatcher.register(cache, bytes -> {
+                InvalidationMessage message;
+                try {
+                    MessageCodec.Decoded decoded = MessageCodec.decode(bytes);
+                    if (!cache.equals(decoded.cache())) throw new IllegalArgumentException("Invalidation channel mismatch");
+                    message = toMessage(decoded);
+                } catch (Throwable failure) { throw new PubSubDispatcher.DecodeFailure(failure); }
+                handler.accept(message);
+            });
+            Registration registration = new Registration(cache, lane);
+            channels.put(route, registration);
+            try { connection.sync().subscribe(channel); }
+            catch (RuntimeException failure) {
+                channels.remove(route, registration);
+                try { lane.close(); } catch (Exception cleanup) { failure.addSuppressed(cleanup); }
+                throw failure;
+            }
+            return () -> {
+                subscriptions.lock();
+                try {
+                    lane.close();
+                    if (channels.remove(route, registration)) connection.async().unsubscribe(channel);
+                } finally { subscriptions.unlock(); }
+            };
+        } finally { subscriptions.unlock(); }
+    }
+
+    private static String channelKey(byte[] channel) {
+        return new String(channel, java.nio.charset.StandardCharsets.ISO_8859_1);
+    }
+
+    @Override public boolean requiresRegistrationReset() { return true; }
+    @Override public boolean isDeliveryThread() { return dispatcher.isDeliveryThread(); }
+    @Override public void setMetricsListener(io.tiercache.spi.CacheMetricsListener metrics) { dispatcher.metrics(metrics); }
+    @Override public void setGapHandler(InvalidationGapHandler handler) { dispatcher.recovery(handler); }
+
+    @Override public CompletionStage<InvalidationDeliveryFence> fenceDelivery(String cache) {
+        return dispatcher.fence(cache);
     }
 
     @Override
@@ -168,7 +211,8 @@ public final class LettucePubSubInvalidationTransport implements InvalidationTra
 
     @Override
     public void close() {
-        dispatcher.shutdownNow();
+        dispatcher.close();
+        channels.clear();
         connection.close();
     }
 }

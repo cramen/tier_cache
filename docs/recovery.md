@@ -118,3 +118,25 @@ ACK handling](streams-recovery.md). Its reader contributes a separate pending
 source while settlement/resync is outstanding, including without a capable
 handler. A failed clear is reported as failure with backoff and never grants
 safe-reset authorization.
+
+## Local Pub/Sub delivery gaps
+
+Receiver overload and decode/application failures are explicit gaps. The affected
+cache stops normal delivery, discards its queued frames and waits for the admitted
+handler to finish. The standard service requests per-cache checked catch-up from
+its confirmed cursor. A long intact catch-up may span several bounded passes without
+forcing a clear or discarding unaffected entries.
+
+When history is trimmed, corrupt or unavailable, the existing baseline-before-clear
+protocol applies. A failed baseline leaves recovery pending and preserves the old
+cursor; it never authorizes normal delivery. Without a journal, a configured service
+clears conservatively and reports `no_journal`. Without a usable recovery handler,
+a standalone transport remains pending.
+
+A later discarded arrival invalidates an earlier repair attempt's authority to resume.
+Retries coalesce and need no new live message to progress after ingress becomes quiet.
+Reconnect, breaker recovery, explicit reset and registration replacement also fence
+old queued delivery before reset: a queued UPDATE must not restore a value after clear.
+Local catch-up proofs are separate from the Streams RESET_SAFE coverage proof and do
+not change consumer ownership or ACK rules. Events never recorded in Redis cannot be
+reconstructed by this mechanism.

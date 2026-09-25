@@ -94,3 +94,22 @@ Spring retrieval, Reactor, Kotlin and Micronaut inherit this factory admission
 bound. Adapter cancellation rules remain unchanged; in particular, Kotlin loaders
 retain their originating coroutine scope ownership. No adapter adds another
 singleflight map or an unmanaged executor.
+
+## Registration readiness
+
+A factory publishes a new cache only after invalidation registration succeeds.
+Waiting for that readiness does not hold the factory lifecycle or cache-map monitor;
+other cache creation and factory close can proceed. A registration failure is visible
+rather than exposing a cache whose required baseline, reset or subscription is incomplete.
+
+The internal `InvalidationHandler.registerTargetAsync` SPI reports readiness through
+a `CompletionStage`. Its compatibility default invokes a legacy handler's registration.
+The stock service waits for queued-delivery quiescence asynchronously, without occupying
+recovery or transport workers. Replacing a registration or closing the service settles
+its pending readiness; obsolete completions cannot clear or publish the replacement.
+
+The synchronous `registerTarget` entry point remains available off internal workers.
+Registration from a delivery/recovery callback must use the asynchronous operation;
+a synchronous attempt is rejected with an actionable error instead of waiting on itself.
+Calling `getCache` to create a new cache from such a callback is rejected for the same
+reason. An already-created cache remains accessible.

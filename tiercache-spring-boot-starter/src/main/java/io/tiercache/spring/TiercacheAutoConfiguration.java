@@ -64,6 +64,7 @@ public class TiercacheAutoConfiguration {
     @Bean(destroyMethod = "shutdown")
     @ConditionalOnMissingBean(RemoteCache.class)
     RedisClient tiercacheRedisClient(TiercacheProperties properties) {
+        properties.getInvalidation().getPubsub().toOptions();
         if (properties.getInvalidation().isEnabled()) {
             JournalProtocol.requireCapacity(properties.getInvalidation().getJournalCapacity());
         }
@@ -94,6 +95,7 @@ public class TiercacheAutoConfiguration {
     RedisStreamJournal tiercacheInvalidationJournal(RedisClient tiercacheRedisClient,
             TiercacheProperties properties) {
         JournalProtocol.requireCapacity(properties.getInvalidation().getJournalCapacity());
+        properties.getInvalidation().getPubsub().toOptions();
         return new RedisStreamJournal(tiercacheRedisClient.connect(ByteArrayCodec.INSTANCE),
                 properties.getInvalidation().getJournalCapacity(), new JdkCacheSerializer<>());
     }
@@ -116,13 +118,14 @@ public class TiercacheAutoConfiguration {
             RedisClient tiercacheRedisClient, RedisStreamJournal journal,
             TiercacheProperties properties,
             ObjectProvider<io.tiercache.spi.CacheMetricsListener> metrics) {
+        var dispatchOptions = properties.getInvalidation().getPubsub().toOptions();
         io.tiercache.spi.InvalidationTransport transport;
         if ("streams".equalsIgnoreCase(properties.getInvalidation().getProfile())) {
             transport = new io.tiercache.redis.LettuceStreamsInvalidationTransport(
                     tiercacheRedisClient, new JdkCacheSerializer<>(), new JdkCacheSerializer<>());
         } else {
             transport = new LettucePubSubInvalidationTransport(tiercacheRedisClient,
-                    new JdkCacheSerializer<>());
+                    new JdkCacheSerializer<>(), new JdkCacheSerializer<>(), 64 * 1024, dispatchOptions);
         }
         io.tiercache.spi.InvalidationTransport selected = transport;
         io.tiercache.spi.CacheMetricsListener selectedMetrics =
@@ -146,6 +149,7 @@ public class TiercacheAutoConfiguration {
         } catch (IllegalArgumentException e) {
             throw new io.tiercache.CacheConfigurationException("Cache '<global defaults>': " + e.getMessage());
         }
+        properties.getInvalidation().getPubsub().toOptions();
         TierCacheFactory.Builder builder = TierCacheFactory.builder().defaults(defaults);
         properties.getCaches().forEach((name, props) -> builder.cache(name, props.toOverride()));
         if (properties.getAsyncExecutorThreads() > 0) {

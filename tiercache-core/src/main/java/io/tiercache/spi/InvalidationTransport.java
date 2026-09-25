@@ -67,6 +67,14 @@ public interface InvalidationTransport extends AutoCloseable {
     /** Installs optional Streams diagnostics; callbacks must run outside state monitors. */
     default void setMetricsListener(CacheMetricsListener metrics) { }
 
+    /** True while the calling thread owns delivery/control work needed by a fence. */
+    default boolean isDeliveryThread() { return false; }
+
+    /** Pause old queued delivery and asynchronously wait for its admitted handler. */
+    default java.util.concurrent.CompletionStage<InvalidationDeliveryFence> fenceDelivery(String cache) {
+        return java.util.concurrent.CompletableFuture.completedFuture(InvalidationDeliveryFence.NOOP);
+    }
+
     /** Side-effect-free capability: registration must establish an empty L1 before serving traffic. */
     default boolean requiresRegistrationReset() { return false; }
 
