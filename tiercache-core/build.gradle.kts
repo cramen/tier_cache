@@ -259,6 +259,7 @@ tasks.register<JavaExec>("sharedL1Benchmark") {
         "-p", "feature=" + providers.gradleProperty("sharedL1.features").orElse("plain,stale").get(),
         "-p", "keys=" + providers.gradleProperty("sharedL1.keys").orElse("hot,distributed").get(),
         "-p", "workload=" + providers.gradleProperty("sharedL1.workload").orElse("read").get(),
+        "-p", "provider=" + providers.gradleProperty("sharedL1.provider").orElse("builtin").get(),
         "-p", "api=" + providers.gradleProperty("sharedL1.api").orElse("get").get(),
         "-p", "valueKind=" + providers.gradleProperty("sharedL1.valueKind").orElse("value").get(),
         "-bm", providers.gradleProperty("sharedL1.mode").orElse("thrpt").get(),

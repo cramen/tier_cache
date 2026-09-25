@@ -84,22 +84,4 @@ public interface LocalCache<K, V> {
         throw new UnsupportedOperationException("LocalCache does not support atomic replacement");
     }
 
-    /** Optional atomic freshness-read capability; old providers keep the engine fallback. */
-    default boolean supportsAtomicFreshnessRead() { return false; }
-
-    /**
-     * Observes the current physically present holder and its own immutable lifetime.
-     * Only a logically fresh holder is refreshed: logical expiry becomes observation
-     * time plus accessTtl, the stale cutoff follows by staleTtl, and physical retention
-     * preserves the store-time floor. Stale/unknown holders never gain retention.
-     * Must not insert an absent mapping, reuse a caller's earlier holder, invoke
-     * application callbacks, or perform remote I/O. Providers use the same monotonic
-     * clock domain as their expiry and the engine and sample it inside the transaction.
-     * Both durations must be positive. This operation does not decide whether L2
-     * rejection authorizes serving a STALE_ALLOWED result; the engine still does.
-     */
-    default LocalFreshnessResult<V> readFreshness(K key, Duration accessTtl, Duration staleTtl) {
-        throw new UnsupportedOperationException("LocalCache does not support atomic freshness reads");
-    }
-
 }

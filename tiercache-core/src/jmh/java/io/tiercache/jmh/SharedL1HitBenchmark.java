@@ -2,6 +2,9 @@ package io.tiercache.jmh;
 
 import io.tiercache.*;
 import io.tiercache.spi.InvalidationTarget;
+import io.tiercache.spi.LocalCache;
+import io.tiercache.spi.StoredEntry;
+import io.tiercache.internal.CaffeineLocalCache;
 import io.tiercache.testkit.FreshHitRemoteCache;
 import org.openjdk.jmh.annotations.*;
 import org.openjdk.jmh.infra.ThreadParams;
@@ -22,6 +25,7 @@ public class SharedL1HitBenchmark {
         @Param({"read"}) public String workload;
         @Param({"value"}) public String valueKind;
         @Param({"get"}) public String api;
+        @Param({"builtin"}) public String provider;
         public TierCacheFactory factory;
         public TierCache<Integer, String> cache;
         public final Integer[] keySet = new Integer[64];
@@ -39,7 +43,11 @@ public class SharedL1HitBenchmark {
                     Duration.ofHours(3), 0, NullPolicy.allow(Duration.ofMinutes(30)),
                     d.invalidationMode(), d.payloadCapBytes(), Duration.ZERO, false,
                     d.xfetchBeta(), feature.startsWith("stale") ? Duration.ofMinutes(5) : Duration.ZERO);
-            factory = TierCacheFactory.builder().defaults(settings).remoteCache(remote).build();
+            var builder = TierCacheFactory.builder().defaults(settings).remoteCache(remote);
+            if (provider.equals("fallback")) {
+                builder.localCacheFactory((name, configured) -> new LegacyProvider<>(configured));
+            }
+            factory = builder.build();
             cache = factory.getCache("shared-l1");
             for (int i = 0; i < keySet.length; i++) {
                 // Identical low six bits in engine stripes, distinct CHM spread hashes.
@@ -102,6 +110,23 @@ public class SharedL1HitBenchmark {
             case "compute" -> state.cache.getOrCompute(key, state.loader);
             default -> state.cache.get(key);
         };
+    }
+
+    /** Deliberately implements only the pre-atomic-freshness SPI, preserving fallback selection. */
+    private static final class LegacyProvider<K, V> implements LocalCache<K, V> {
+        private final CaffeineLocalCache<K, V> delegate;
+        LegacyProvider(CacheSettings settings) { delegate = new CaffeineLocalCache<>(settings); }
+        public StoredEntry<V> get(K key) { return delegate.get(key); }
+        public void put(K key, StoredEntry<V> value, Duration ttl) { delegate.put(key, value, ttl); }
+        public void evict(K key) { delegate.evict(key); }
+        public void clear() { delegate.clear(); }
+        public boolean setIfAbsent(K key, StoredEntry<V> value, Duration ttl) {
+            return delegate.setIfAbsent(key, value, ttl);
+        }
+        public boolean supportsAtomicReplace() { return true; }
+        public boolean replaceIfSame(K key, StoredEntry<V> expected, StoredEntry<V> value, Duration ttl) {
+            return delegate.replaceIfSame(key, expected, value, ttl);
+        }
     }
 
     private static void cacheWrite(CacheState state, Integer key) {

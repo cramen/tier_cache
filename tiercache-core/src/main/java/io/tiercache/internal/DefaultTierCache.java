@@ -1464,8 +1464,8 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
 
     /**
      * Classifies the current L1 lifetime. Pure classification needs no
-     * stripe; an access-expiry refresh uses the per-key stripe so a fresh
-     * access slides deadlines and physical retention only for the current
+     * stripe; access refresh uses a provider transaction or the legacy
+     * stripe so deadlines and physical retention slide only for the current
      * holder. A concurrent replacement cannot inherit another value's TTL.
      * A stale access never moves anything.
      */
@@ -1485,12 +1485,26 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         if (settings.l1ExpireAfterAccess() == null) {
             return readOnlyFreshness(key);
         }
+        return l1.supportsAtomicFreshnessRead() ? providerFreshness(key) : accessFreshness(key);
+    }
+
+    private FreshnessSnapshot<V> providerFreshness(K key) {
+        var result = l1.readFreshness(key, settings.l1ExpireAfterAccess(), degradationStaleTtl);
+        L1Freshness freshness = switch (result.state()) {
+            case FRESH -> L1Freshness.FRESH;
+            case STALE_ALLOWED -> L1Freshness.STALE_ALLOWED;
+            case EXPIRED -> L1Freshness.EXPIRED;
+        };
+        return new FreshnessSnapshot<>(result.entry(), freshness);
+    }
+
+    private FreshnessSnapshot<V> accessFreshness(K key) {
         synchronized (l1LockFor(key)) {
             // Coherent snapshot under the lock: the entry is re-read here,
             // so a completed concurrent write can never be overwritten by a
             // stale caller-side read. Its immutable local descriptor belongs
             // to this exact holder, independently of fencing-map eviction.
-            entry = l1.get(key);
+            StoredEntry<V> entry = l1.get(key);
             if (entry == null) return new FreshnessSnapshot<>(null, L1Freshness.EXPIRED);
             StoredEntry.LocalFreshness meta = entry.localFreshness();
             if (meta == null) return new FreshnessSnapshot<>(entry, L1Freshness.EXPIRED);

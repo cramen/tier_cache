@@ -62,4 +62,45 @@ class DegradationLifetimeTest {
             }
         }
     }
+    @Test void atomicAccessRefreshKeepsTheRedisOutageCutoffAndPhysicalFloor() throws Exception {
+        var now = new AtomicLong(1); var stale = new AtomicInteger();
+        var settings = new CacheSettings(100, Duration.ofMinutes(30), Duration.ofMinutes(2),
+                Duration.ofHours(2), 0, NullPolicy.deny(), InvalidationMode.INVALIDATE, 65536,
+                Duration.ZERO, false, Duration.ofSeconds(1), Duration.ofMinutes(10));
+        try (var redis = new GenericContainer<>(DockerImageName.parse("redis:6.2-alpine")).withExposedPorts(6379)) {
+            redis.start();
+            try (var remote = LettuceRemoteCache.<String, String>builder("redis://" + redis.getHost() + ":" + redis.getMappedPort(6379))
+                    .commandTimeout(Duration.ofSeconds(1)).build()) {
+                var breaker = new CircuitBreaker(new CircuitBreaker.Config(1, 1, 1, Duration.ofDays(1), 1),
+                        new CircuitBreaker.Listener() { public void onOpen() { } public void onClose() { } });
+                var l1 = new CaffeineLocalCache<String, String>(settings, now::get);
+                assertTrue(l1.supportsAtomicFreshnessRead());
+                var cache = new DefaultTierCache<>("atomic-lifetime", l1, new CircuitBreakerRemoteCache<>(remote, breaker),
+                        settings, true, null, null, new VersionGenerator(), null, breaker, new CacheMetricsListener() {
+                            public void onRequest(String name, Outcome outcome) { if (outcome == Outcome.STALE_DEGRADED) stale.incrementAndGet(); }
+                        }, null, new TtlJitter(), () -> true, now::get);
+                cache.put("x", "original"); l1.clear(); assertEquals("original", cache.get("x"));
+                assertNull(remote.get("x").localFreshness());
+                redis.getDockerClient().pauseContainerCmd(redis.getContainerId()).exec();
+                try {
+                    assertNull(cache.get("probe")); assertTrue(breaker.isOpen());
+                    now.set(1 + Duration.ofMinutes(1).toNanos()); assertEquals("original", cache.get("x"));
+                    var holder = l1.get("x");
+                    assertEquals(1 + Duration.ofMinutes(3).toNanos(), holder.localFreshness().logicalDeadlineNanos());
+                    assertEquals(1 + Duration.ofMinutes(40).toNanos(), holder.localFreshness().retentionUntilNanos());
+                    for (int minute = 3; minute < 13; minute++) {
+                        now.set(1 + Duration.ofMinutes(minute).toNanos());
+                        assertEquals("original", cache.getOrCompute("x", key -> { fail("stale source load"); return null; }));
+                        assertSame(holder, l1.get("x"));
+                    }
+                    assertEquals(10, stale.get()); now.set(1 + Duration.ofMinutes(13).toNanos());
+                    assertNull(cache.get("x")); assertNotNull(l1.get("x"));
+                    now.set(1 + Duration.ofMinutes(40).toNanos()); assertNull(l1.get("x"));
+                    assertEquals("local-new", cache.getOrCompute("x", key -> "local-new"));
+                } finally { redis.getDockerClient().unpauseContainerCmd(redis.getContainerId()).exec(); }
+                assertEquals("original", remote.get("x").value());
+            }
+        }
+    }
+
 }

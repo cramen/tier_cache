@@ -276,11 +276,29 @@ this operation. An unsupported provider fails at cache creation with the cache
 name and required capability; other configurations remain compatible. These
 local deadlines are never serialized into Redis frames.
 
+The built-in Caffeine provider also supports the optional
+`supportsAtomicFreshnessRead()` / `readFreshness(key, accessTtl, staleTtl)`
+operation. With retention and access expiry enabled, the engine uses its coherent
+current-entry result instead of the engine stripe and a separate replacement.
+Providers that implement only the previous SPI keep the existing fallback;
+implementing the new capability does not remove the atomic-replacement validation.
+A result is an immutable observation (`LocalFreshnessResult`); custom providers
+can construct one with `LocalFreshnessResult.of(entry, state)`. `STALE_ALLOWED`
+classifies age only: the engine still requires an L2 rejection before stale serving.
+
+The provider must use the same monotonic clock domain as local freshness, update
+only the currently present fresh lifetime, preserve the store-time physical floor,
+and never reinsert an absent mapping. Repeated stale or unknown-metadata reads
+must not reset physical expiry. Caffeine uses absolute retained deadlines to
+preserve that rule even when an internal mapping operation invokes expiry-update
+logic. There is no new configuration switch. The measured contention/allocation
+trade-off is documented in [atomic access refresh](benchmarks/atomic-access-refresh.md).
+
 
 Trade-offs to weigh before enabling: entries live longer in L1 (memory
 bounded by `window / L1 TTL x working set`, still capped by `l1-max-size`),
-and the knob changes nothing in normal mode — it only serves staleness
-during outages. Writes made while Redis is fully down are L1-only and are
+and enabling retention also changes freshness bookkeeping on normal reads.
+Serving stale values still requires the documented L2 rejection. Writes made while Redis is fully down are L1-only and are
 NOT healed by journal replay: a stale L2 copy can re-warm L1 after recovery.
 With write-based expiry, no access sliding or SWR, and no later stale
 writes, budget its remaining L2 TTL plus one final L1 warm. During an

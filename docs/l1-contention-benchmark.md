@@ -18,6 +18,7 @@ The task compiles with the project's Java 17 baseline and selects the requested 
 | `sharedL1.threads` | Caller count; default `8`; use `1, 2, 4, 8, 16, 32` in separate runs |
 | `sharedL1.features` | Comma-separated `plain`, `plainAccess`, `stale`, `staleAccess`; default `plain,stale` |
 | `sharedL1.keys` | Comma-separated `hot`, `distributed`, `skewed`, `stripe`; default `hot,distributed` |
+| `sharedL1.provider` | `builtin` (default), or `fallback` to wrap Caffeine using only the previous replacement SPI |
 | `sharedL1.method` | `shared` (default), or `threadLocal` for independent-cache control |
 | `sharedL1.api` | `get` (default), `lookup`, `compute` |
 | `sharedL1.valueKind` | `value` (default), `null` for cached-null markers |
@@ -61,3 +62,5 @@ Keep the fixture, JVM, heap, key distribution, cache occupancy and caller counts
 For the read-only freshness change, acceptance requires repeatable improvement in the affected retained hot-key profile, no extra cascade work, no increased retained-read allocation, and no repeatable regression greater than 10% in unaffected profiles. Tiny nonzero GC-normalized byte counts can reflect profiler/background overhead; inspect raw values and GC counts before claiming per-operation allocations. Keep default reads within the existing zero-allocation expectation. Results on one machine do not establish a universal operations-per-second or HTTP-capacity guarantee.
 
 The change's measured evidence is recorded in [the read-only freshness comparison](benchmarks/read-only-freshness.md).
+
+For the optional provider transaction and its throughput/allocation trade-off, see [atomic access refresh](benchmarks/atomic-access-refresh.md). The fallback control uses the same Caffeine implementation with the new capability hidden; it is not a different cache backend.
