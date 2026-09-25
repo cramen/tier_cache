@@ -68,6 +68,7 @@ public final class TierCacheFactory implements AutoCloseable {
     private final TtlJitter jitter;
     private final java.util.concurrent.ExecutorService revalidationExecutor;
     private final java.util.concurrent.ExecutorService asyncExecutor;
+    private final io.tiercache.internal.AsyncAdmission asyncAdmission;
     private final Map<String, TierCache<?, ?>> liveCaches = new java.util.concurrent.ConcurrentHashMap<>();
     private final Map<String, AsyncTierCache<?, ?>> liveAsyncCaches = new java.util.concurrent.ConcurrentHashMap<>();
     /**
@@ -141,6 +142,7 @@ public final class TierCacheFactory implements AutoCloseable {
         int asyncThreads = builder.asyncExecutorThreads > 0
                 ? builder.asyncExecutorThreads
                 : Math.max(4, Runtime.getRuntime().availableProcessors());
+        this.asyncAdmission = new io.tiercache.internal.AsyncAdmission(asyncThreads);
         this.asyncExecutor = new java.util.concurrent.ThreadPoolExecutor(
                 asyncThreads, asyncThreads, 0L, java.util.concurrent.TimeUnit.MILLISECONDS,
                 new java.util.concurrent.LinkedBlockingQueue<>(10_000),
@@ -270,7 +272,7 @@ public final class TierCacheFactory implements AutoCloseable {
             }
             viewCreationProbe.run();
             return (AsyncTierCache<K, V>) liveAsyncCaches.computeIfAbsent(name,
-                    n -> new DefaultAsyncTierCache<>(getCache(n), asyncExecutor));
+                    n -> new DefaultAsyncTierCache<>(getCache(n), asyncExecutor, asyncAdmission, () -> !closed));
         }
     }
 
@@ -360,7 +362,9 @@ public final class TierCacheFactory implements AutoCloseable {
         for (Runnable task : revalidationExecutor.shutdownNow()) {
             if (task instanceof DefaultTierCache.DiscardableTask discarded) discarded.discard();
         }
-        asyncExecutor.shutdownNow();
+        for (Runnable task : asyncExecutor.shutdownNow()) {
+            if (task instanceof DefaultTierCache.DiscardableTask discarded) discarded.discard();
+        }
         if (watchdog != null) {
             watchdog.shutdownNow();
         }

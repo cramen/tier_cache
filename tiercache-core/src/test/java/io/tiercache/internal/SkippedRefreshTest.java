@@ -41,7 +41,8 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /** A skipped refresh is coordination control flow, not evidence of a missing value. */
 class SkippedRefreshTest {
-    private static final String KEY = "key";
+    boolean detached() { return false; }
+    static final String KEY = "key";
     private static final Duration L2_TTL = Duration.ofMinutes(10);
 
     @Test
@@ -65,10 +66,10 @@ class SkippedRefreshTest {
             rig.removeCachedValue();
             AtomicInteger foregroundLoads = new AtomicInteger();
             rig.metrics.joined = new CountDownLatch(1);
-            Future<String> caller = rig.workers.submit(() -> rig.cache.getOrCompute(KEY, key -> {
+            Future<String> caller = rig.read(key -> {
                 foregroundLoads.incrementAndGet();
                 return "current";
-            }));
+            });
             await(rig.metrics.joined);
             background.run();
             assertEquals("current", caller.get(5, TimeUnit.SECONDS));
@@ -131,7 +132,7 @@ class SkippedRefreshTest {
             LoadClaim<String, String> old = rig.claims.get(KEY);
             rig.removeCachedValue();
             rig.claims.parkNextJoin.set(true);
-            Future<String> caller = rig.workers.submit(() -> rig.cache.getOrCompute(KEY, loader));
+            Future<String> caller = rig.read(loader);
             await(rig.claims.captured);
 
             CountDownLatch completed = new CountDownLatch(1);
@@ -161,7 +162,7 @@ class SkippedRefreshTest {
                     await(completed);
                 }
             } else if (replacement == Replacement.FOREGROUND) {
-                competingForeground = rig.workers.submit(() -> rig.cache.getOrCompute(KEY, loader));
+                competingForeground = rig.read(loader);
                 await(loading);
             }
 
@@ -180,7 +181,7 @@ class SkippedRefreshTest {
             assertSame(selected, rig.claims.get(KEY), "old cleanup must retain the replacement");
 
             rig.metrics.joined = new CountDownLatch(1);
-            Future<String> follower = rig.workers.submit(() -> rig.cache.getOrCompute(KEY, loader));
+            Future<String> follower = rig.read(loader);
             await(rig.metrics.joined);
             assertEquals(1, loads.get(), "replacement keeps one local owner");
             releaseLoad.countDown();
@@ -211,10 +212,10 @@ class SkippedRefreshTest {
             AtomicInteger loads = new AtomicInteger();
             List<Future<String>> callers = new ArrayList<>();
             for (int i = 0; i < count; i++) {
-                callers.add(rig.workers.submit(() -> rig.cache.getOrCompute(KEY, key -> {
+                callers.add(rig.read(key -> {
                     loads.incrementAndGet();
                     return "current";
-                })));
+                }));
             }
             await(rig.metrics.joined);
             refresh.run();
@@ -245,8 +246,7 @@ class SkippedRefreshTest {
             Runnable refresh = rig.refresh.take();
             rig.removeCachedValue();
             rig.metrics.joined = new CountDownLatch(1);
-            Future<String> caller = rig.workers.submit(() -> rig.cache.getOrCompute(KEY,
-                    key -> fail("genuine null is a result, not skipped coordination")));
+            Future<String> caller = rig.read(key -> fail("genuine null is a result, not skipped coordination"));
             await(rig.metrics.joined);
             refresh.run();
             assertNull(caller.get(5, TimeUnit.SECONDS));
@@ -268,8 +268,7 @@ class SkippedRefreshTest {
             Runnable refresh = rig.refresh.take();
             rig.removeCachedValue();
             rig.metrics.joined = new CountDownLatch(1);
-            Future<String> caller = rig.workers.submit(() -> rig.cache.getOrCompute(KEY,
-                    key -> fail("double-check supplies foreground result")));
+            Future<String> caller = rig.read(key -> fail("double-check supplies foreground result"));
             await(rig.metrics.joined);
             rig.l2.put(KEY, StoredEntry.ofValue("newer", null, System.currentTimeMillis()),
                     Duration.ofHours(1));
@@ -300,8 +299,7 @@ class SkippedRefreshTest {
             Runnable refresh = rig.refresh.take();
             rig.removeCachedValue();
             rig.metrics.joined = new CountDownLatch(1);
-            Future<String> caller = rig.workers.submit(() -> rig.cache.getOrCompute(KEY,
-                    key -> fail("joined failure must not start a second loader")));
+            Future<String> caller = rig.read(key -> fail("joined failure must not start a second loader"));
             await(rig.metrics.joined);
             if (failure instanceof Error) {
                 assertSame(failure, assertThrows(Error.class, refresh::run));
@@ -310,7 +308,8 @@ class SkippedRefreshTest {
             }
             ExecutionException thrown = assertThrows(ExecutionException.class,
                     () -> caller.get(5, TimeUnit.SECONDS));
-            assertSame(failure, assertInstanceOf(CompletionException.class, thrown.getCause()).getCause());
+            assertSame(failure, detached() ? thrown.getCause()
+                    : assertInstanceOf(CompletionException.class, thrown.getCause()).getCause());
             assertTrue(rig.claims.isEmpty());
             assertEquals("retry", rig.cache.getOrCompute(KEY, key -> "retry"));
         }
@@ -328,19 +327,18 @@ class SkippedRefreshTest {
         };
         try (Rig rig = new Rig(false, NullPolicy.deny(), 0, rejected)) {
             rig.seed();
-            Future<String> stale = rig.workers.submit(() -> rig.cache.getOrCompute(KEY,
-                    key -> fail("rejected task cannot load")));
+            Future<String> stale = rig.read(key -> fail("rejected task cannot load"));
             await(submitted);
             rig.removeCachedValue();
             rig.metrics.joined = new CountDownLatch(1);
-            Future<String> caller = rig.workers.submit(() -> rig.cache.getOrCompute(KEY,
-                    key -> fail("a joined rejected claim must fail")));
+            Future<String> caller = rig.read(key -> fail("a joined rejected claim must fail"));
             await(rig.metrics.joined);
             reject.countDown();
             assertEquals("cached", stale.get(5, TimeUnit.SECONDS));
             ExecutionException thrown = assertThrows(ExecutionException.class,
                     () -> caller.get(5, TimeUnit.SECONDS));
-            assertSame(failure, assertInstanceOf(CompletionException.class, thrown.getCause()).getCause());
+            assertSame(failure, detached() ? thrown.getCause()
+                    : assertInstanceOf(CompletionException.class, thrown.getCause()).getCause());
             assertTrue(rig.claims.isEmpty());
             assertEquals("retry", rig.cache.getOrCompute(KEY, key -> "retry"));
         } finally {
@@ -357,12 +355,12 @@ class SkippedRefreshTest {
             rig.l2.rejectWrites = true;
             rig.metrics.joined = new CountDownLatch(1);
             AtomicInteger loads = new AtomicInteger();
-            Future<String> caller = rig.workers.submit(() -> rig.cache.getOrCompute(KEY, key -> {
+            Future<String> caller = rig.read(key -> {
                 int attempt = loads.incrementAndGet();
                 rig.cache.evictAllL1();
                 rig.cache.evictAllL1();
                 return "value-" + attempt;
-            }));
+            });
             await(rig.metrics.joined);
             refresh.run();
             assertEquals("value-2", caller.get(5, TimeUnit.SECONDS));
@@ -389,8 +387,7 @@ class SkippedRefreshTest {
                 return "expired-budget-result";
             }, System.nanoTime() - 1)));
             rig.metrics.joined = new CountDownLatch(1);
-            Future<String> caller = rig.workers.submit(() -> rig.cache.getOrCompute(KEY,
-                    key -> fail("a later waiter must not replace the first demand")));
+            Future<String> caller = rig.read(key -> fail("a later waiter must not replace the first demand"));
             await(rig.metrics.joined);
             Future<?> background = rig.workers.submit(refresh);
             assertEquals("expired-budget-result", caller.get(5, TimeUnit.SECONDS));
@@ -417,10 +414,10 @@ class SkippedRefreshTest {
                 rig.cache.evictAllL1();
                 return "bounded-" + loads.incrementAndGet();
             }, System.nanoTime() - 1);
-            Method recover = DefaultTierCache.class.getDeclaredMethod("recoverSkippedRefresh",
-                    Object.class, LoadClaim.class, LoadClaim.Demand.class);
+            Method recover = DefaultTierCache.class.getDeclaredMethod("followOrPromote",
+                    Object.class, LoadClaim.class, LoadClaim.Demand.class, java.util.function.Consumer.class);
             recover.setAccessible(true);
-            Future<Object> result = rig.workers.submit(() -> recover.invoke(rig.cache, KEY, skipped, demand));
+            Future<Object> result = rig.workers.submit(() -> recover.invoke(rig.cache, KEY, skipped, demand, null));
             assertEquals("bounded-2", result.get(5, TimeUnit.SECONDS));
             assertEquals(1, rig.acquisitions.get(), "recovery must not restart coordination");
             assertEquals(2, loads.get());
@@ -428,7 +425,7 @@ class SkippedRefreshTest {
         }
     }
 
-    private static void await(CountDownLatch latch) {
+    static void await(CountDownLatch latch) {
         try {
             assertTrue(latch.await(5, TimeUnit.SECONDS), "controlled step did not complete");
         } catch (InterruptedException e) {
@@ -437,7 +434,7 @@ class SkippedRefreshTest {
         }
     }
 
-    private static final class Rig implements AutoCloseable {
+    final class Rig implements AutoCloseable {
         final CountingLocalCache<String, String> l1 = new CountingLocalCache<>();
         final TestRemote l2 = new TestRemote();
         final QueuedExecutor refresh = new QueuedExecutor();
@@ -449,6 +446,7 @@ class SkippedRefreshTest {
         final ScheduledExecutorService watchdog = Executors.newSingleThreadScheduledExecutor();
         final DefaultTierCache<String, String> cache;
         final boolean xfetch;
+        final DefaultAsyncTierCache<String, String> async;
 
         Rig(boolean xfetch, NullPolicy policy, int refusedLocks) throws Exception {
             this(xfetch, policy, refusedLocks, null);
@@ -463,6 +461,7 @@ class SkippedRefreshTest {
                     Duration.ofMinutes(5), xfetch, Duration.ofNanos(1));
             cache = new DefaultTierCache<>("cache", l1, l2, settings, true, provider, watchdog,
                     new VersionGenerator(), null, null, metrics, executor == null ? refresh : executor);
+            async = new DefaultAsyncTierCache<>(cache, workers);
             Field field = DefaultTierCache.class.getDeclaredField("inflight");
             field.setAccessible(true);
             field.set(cache, claims);
@@ -471,6 +470,11 @@ class SkippedRefreshTest {
                 field.setAccessible(true);
                 ((AtomicLong) field.get(cache)).set(TimeUnit.SECONDS.toNanos(1));
             }
+        }
+
+        Future<String> read(Function<String, String> loader) {
+            return detached() ? async.getOrComputeAsync(KEY, loader).toCompletableFuture()
+                    : workers.submit(() -> cache.getOrCompute(KEY, loader));
         }
 
         void seed() {
@@ -492,6 +496,7 @@ class SkippedRefreshTest {
         @Override
         public void close() {
             claims.releaseJoin.countDown();
+            async.closeOutstanding();
             workers.shutdownNow();
             watchdog.shutdownNow();
         }
@@ -511,7 +516,7 @@ class SkippedRefreshTest {
         };
     }
 
-    private static final class QueuedExecutor implements Executor {
+    static final class QueuedExecutor implements Executor {
         private final BlockingQueue<Runnable> tasks = new LinkedBlockingQueue<>();
 
         @Override
@@ -543,7 +548,7 @@ class SkippedRefreshTest {
         }
     }
 
-    private static final class ClaimMap extends ConcurrentHashMap<String, LoadClaim<String, String>> {
+    static final class ClaimMap extends ConcurrentHashMap<String, LoadClaim<String, String>> {
         final AtomicBoolean parkNextJoin = new AtomicBoolean();
         final CountDownLatch captured = new CountDownLatch(1);
         final CountDownLatch releaseJoin = new CountDownLatch(1);

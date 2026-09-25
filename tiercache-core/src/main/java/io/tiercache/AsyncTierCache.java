@@ -19,9 +19,19 @@ import java.util.function.Function;
  *
  * <p>Obtain the view from {@link TierCacheFactory#asyncCache(String)};
  * it is memoized alongside the cache. Closing the factory shuts down the
- * shared executor, after which async operations reject submissions with
- * {@link java.util.concurrent.RejectedExecutionException} instead of
- * running cache work on the calling thread.
+ * shared executor and cancels pending caller stages; subsequent operations
+ * on that view fail with {@link java.util.concurrent.CancellationException}.
+ * Saturation instead fails stages with {@link java.util.concurrent.RejectedExecutionException}.
+ *
+ * <p>Followers of an existing load release their API worker while waiting.
+ * Load owners still occupy a worker, including while joining an asynchronous
+ * loader stage. All views share a retained-resource budget of the configured
+ * worker count plus 10,000. A cancelled caller's queued task or shared-result
+ * attachment keeps its credit until that resource retires. Saturation can
+ * therefore reject requests even with an empty executor queue. Cancelling a
+ * follower does not cancel the shared load or another caller's result.
+ * Terminal callbacks may execute on the shared owner's completion thread;
+ * callback thread affinity is not guaranteed.
  *
  * @param <K> key type
  * @param <V> value type

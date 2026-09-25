@@ -115,7 +115,12 @@ present. Ordinary `sync = false` annotations retain separate read/invoke/write
 behavior and gain no coalescing guarantee. Synchronous values, CachePut and
 CacheEvict keep their existing semantics.
 
-The core currently occupies an async worker while awaiting the supplier's stage.
+The load owner occupies an async worker while awaiting the supplier's stage;
+coalesced followers release their workers. All views share the factory's retained
+resource limit (worker count + 10,000). Cancelling a caller does not release a
+credit until its queued/running task or shared-result attachment retires;
+saturation fails new retrievals even if executor queue slots are available. See
+[async resource ownership](resource-lifecycle.md#async-followers-and-retained-work).
 Slow suppliers can therefore saturate the shared bounded pool. Overflow returns a
 failed future with RejectedExecutionException; work never falls back to the caller
 or a new executor. Factory close settles queued/running retrieval futures with the

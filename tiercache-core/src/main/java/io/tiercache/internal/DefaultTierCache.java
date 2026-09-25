@@ -447,6 +447,12 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
 
     @Override
     public V getOrCompute(K key, Function<? super K, ? extends V> loader) {
+        return getOrComputeDispatch(key, loader, null);
+    }
+
+    /** Worker-only dispatch: a follower is handed off after demand arbitration. */
+    V getOrComputeDispatch(K key, Function<? super K, ? extends V> loader,
+            java.util.function.Consumer<LoadClaim<K, V>> follower) {
         long g0 = l1Generation.get();
         StoredEntry<V> entry = l1.get(key);
         if (entry != null) {
@@ -503,35 +509,36 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         if (existing == null) {
             return runForegroundClaim(key, claim, demand, true);
         }
-        existing.requireResult(demand);
         metrics.onRequest(cacheName, CacheMetricsListener.Outcome.COALESCED);
-        LoadClaim.Outcome<V> outcome = existing.result.join();
-        if (!outcome.isSkipped()) {
-            return unwrap(outcome.resultEntry());
-        }
-        return recoverSkippedRefresh(key, existing, demand);
+        return followOrPromote(key, existing, demand, follower);
     }
 
-    /**
-     * One map transition replaces a terminal skip or promotes its replacement.
-     * The selected claim cannot skip again: foreground demand is registered
-     * before the map transition ends. The old owner's finally uses identity
-     * removal and cannot delete this replacement.
-     */
-    private V recoverSkippedRefresh(K key, LoadClaim<K, V> skipped,
-            LoadClaim.Demand<K, V> demand) {
-        LoadClaim<K, V> replacement = new LoadClaim<>(demand);
-        LoadClaim<K, V> selected = inflight.compute(key, (ignored, current) -> {
-            if (current == null || current == skipped || !current.requireResult(demand)) {
-                return replacement;
+    private V followOrPromote(K key, LoadClaim<K, V> selected,
+            LoadClaim.Demand<K, V> demand,
+            java.util.function.Consumer<LoadClaim<K, V>> follower) {
+        for (;;) {
+            if (selected.requireResult(demand)) {
+                if (follower != null) {
+                    follower.accept(selected);
+                    return null; // The operation now owns a terminal notification.
+                }
+                LoadClaim.Outcome<V> outcome = selected.result.join();
+                if (!outcome.isSkipped()) return unwrap(outcome.resultEntry());
+                // Shutdown can discard queued refresh work despite accepted demand.
+                // Surviving synchronous views retain their replacement-load behavior.
             }
-            return current;
-        });
-        if (selected == replacement) {
-            // The original request was already counted as coalesced.
-            return runForegroundClaim(key, replacement, demand, false);
+            LoadClaim<K, V> skipped = selected;
+            LoadClaim<K, V> replacement = new LoadClaim<>(demand);
+            selected = inflight.compute(key, (ignored, current) -> {
+                if (current == null || current == skipped || !current.requireResult(demand)) {
+                    return replacement;
+                }
+                return current;
+            });
+            if (selected == replacement) {
+                return runForegroundClaim(key, replacement, demand, false);
+            }
         }
-        return unwrap(selected.result.join().resultEntry());
     }
 
     private V runForegroundClaim(K key, LoadClaim<K, V> claim,
@@ -542,9 +549,11 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
                 metrics.onRequest(cacheName, loaded != null && !loaded.isNullMarker()
                         ? CacheMetricsListener.Outcome.LOAD : CacheMetricsListener.Outcome.MISS);
             }
+            inflight.remove(key, claim);
             claim.result.complete(LoadClaim.Outcome.result(loaded));
             return unwrap(loaded);
         } catch (RuntimeException | Error e) {
+            inflight.remove(key, claim);
             claim.result.completeExceptionally(e);
             throw e;
         } finally {
@@ -1014,11 +1023,9 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
             metrics.onRevalidationTriggered(cacheName);
             revalidationExecutor.execute(new RevalidationTask(key, loader, servedWriteTimestamp, claim));
         } catch (RuntimeException e) {
-            // Executor rejected (saturated or shut down): complete the claim
-            // first so waiters already joined on it fail fast instead of
-            // hanging, then release the slot so a later read retries.
-            claim.result.completeExceptionally(e);
+            // Retire map ownership before notifications can run user callbacks.
             inflight.remove(key, claim);
+            claim.result.completeExceptionally(e);
             metrics.onRevalidationFailed(cacheName);
             log.warn("Revalidation for key '{}' in cache '{}' could not be submitted "
                     + "(executor saturated or shut down); the stale entry keeps serving "
@@ -1064,9 +1071,11 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
                             loadPath(key, demand.loader(), demand.deadlineNanos()));
                 }
             }
+            inflight.remove(key, claim);
             claim.result.complete(refreshed);
             metrics.onRevalidationCompleted(cacheName);
         } catch (RuntimeException | Error e) {
+            inflight.remove(key, claim);
             claim.result.completeExceptionally(e);
             metrics.onRevalidationFailed(cacheName);
             log.warn("Revalidation failed for key '{}' in cache '{}'; the stale entry "

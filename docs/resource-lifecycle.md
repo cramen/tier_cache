@@ -63,3 +63,34 @@ new owner's lock. Shutdown retires compensation bookkeeping and stops rescheduli
 An already-dispatched acquire can still have executed remotely. Cleanup is best
 effort; if connection shutdown prevents it, the orphan expires within its lease.
 The compensation cap, retry window and lease settings are unchanged.
+
+## Async followers and retained work
+
+An async read joining an existing load releases its API worker and waits through
+a private completion attachment. Synchronous reads, async reads and background
+refresh still use one engine claim. An async owner keeps its worker until the
+load finishes, including the wait for an `AsyncLoader` stage. This is not native
+asynchronous source execution or a concurrency limit across all source callers.
+Even L1 hits enter through the API executor; no caller-thread fast path is used.
+
+Every async view of a factory shares one admission budget: configured API workers
+plus 10,000. Queued tasks, running tasks and detached attachments consume credits.
+Cancelling or manually completing the returned future does not release a credit
+while its task or attachment remains retained. A never-finishing shared load can
+therefore saturate admission even with an empty executor queue. Further requests
+fail with `RejectedExecutionException`, without executing cache work. Closed views
+instead fail with `CancellationException`, regardless of budget occupancy.
+
+Close cancels pending caller stages and disposes queued tasks. Running owners and
+attached followers keep their credits until their actual work or notification
+ends; close does not cancel an application-supplied loader stage. Already-completed
+results survive. A completed load is removed from singleflight before notifying
+followers, so a blocked user continuation cannot make a later miss join an old
+result. It can still delay notification of other participants in that old round.
+Avoid blocking completion callbacks: they may run on the thread completing the
+shared owner, and keep the associated credit until they return.
+
+Spring retrieval, Reactor, Kotlin and Micronaut inherit this factory admission
+bound. Adapter cancellation rules remain unchanged; in particular, Kotlin loaders
+retain their originating coroutine scope ownership. No adapter adds another
+singleflight map or an unmanaged executor.

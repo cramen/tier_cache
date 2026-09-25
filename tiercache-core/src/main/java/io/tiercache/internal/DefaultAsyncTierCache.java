@@ -13,10 +13,10 @@ import java.util.concurrent.Executor;
 import java.util.function.Function;
 
 /**
- * Default {@link AsyncTierCache}: a thin view delegating every operation
- * to the synchronous engine on the factory's shared daemon executor
- * (supplyAsync-style). Adds no coalescing of its own — concurrent calls
- * for one key join the engine's inflight singleflight entry.
+ * Default {@link AsyncTierCache}: cache work runs on the factory's shared
+ * daemon executor. A coalesced follower subscribes to the engine's existing
+ * claim and releases its worker; load owners remain blocking. Retained tasks
+ * and attachments share one bounded factory admission budget.
  *
  * <p><b>Internal — not part of the supported API.</b>
  *
@@ -28,6 +28,8 @@ public final class DefaultAsyncTierCache<K, V> implements AsyncTierCache<K, V> {
 
     private final TierCache<K, V> delegate;
     private final Executor executor;
+    private final AsyncAdmission admission;
+    private final java.util.function.BooleanSupplier factoryOpen;
     /**
      * Single ordering point for the submission path and {@link
      * #closeOutstanding()}: the closed check, registry insertion and task
@@ -52,6 +54,15 @@ public final class DefaultAsyncTierCache<K, V> implements AsyncTierCache<K, V> {
      * @since 0.3.0
      */
     public DefaultAsyncTierCache(TierCache<K, V> delegate, Executor executor) {
+        this(delegate, executor, new AsyncAdmission(Math.max(4,
+                Runtime.getRuntime().availableProcessors())), () -> true);
+    }
+
+    /** Internal factory wiring: all views share physical resource accounting. */
+    public DefaultAsyncTierCache(TierCache<K, V> delegate, Executor executor,
+            AsyncAdmission admission, java.util.function.BooleanSupplier factoryOpen) {
+        this.admission = Objects.requireNonNull(admission, "admission");
+        this.factoryOpen = Objects.requireNonNull(factoryOpen, "factoryOpen");
         this.delegate = Objects.requireNonNull(delegate, "delegate");
         this.executor = Objects.requireNonNull(executor, "executor");
     }
@@ -96,13 +107,13 @@ public final class DefaultAsyncTierCache<K, V> implements AsyncTierCache<K, V> {
     @Override
     public CompletionStage<V> getOrComputeAsync(K key, Function<? super K, ? extends V> loader) {
         Objects.requireNonNull(loader, "loader");
-        return supply(() -> delegate.getOrCompute(key, loader));
+        return compute(key, loader);
     }
 
     @Override
     public CompletionStage<V> getOrComputeAsyncStage(K key, AsyncLoader<? super K, ? extends V> loader) {
         Objects.requireNonNull(loader, "loader");
-        return supply(() -> delegate.getOrCompute(key, k -> joinLoader(loader, k)));
+        return compute(key, k -> joinLoader(loader, k));
     }
 
     @Override
@@ -159,27 +170,103 @@ public final class DefaultAsyncTierCache<K, V> implements AsyncTierCache<K, V> {
      * the registered stage in its drain — never neither.
      */
     private <T> CompletionStage<T> supply(java.util.function.Supplier<T> task) {
+        return submit(operation -> task.get());
+    }
+
+    private CompletionStage<V> compute(K key, Function<? super K, ? extends V> loader) {
+        return submit(operation -> {
+            if (delegate instanceof DefaultTierCache<K, V> engine) {
+                return engine.getOrComputeDispatch(key, loader, operation::attach);
+            }
+            return delegate.getOrCompute(key, loader);
+        });
+    }
+
+    private <T> CompletionStage<T> submit(Function<Operation<T>, T> task) {
+        Operation<T> operation;
+        java.util.concurrent.RejectedExecutionException rejected = null;
         synchronized (lifecycleLock) {
             if (closed) {
                 return CompletableFuture.failedFuture(
                         new java.util.concurrent.CancellationException("TierCacheFactory closed"));
             }
-            CompletableFuture<T> future = new CompletableFuture<>();
-            outstanding.add(future);
-            future.whenComplete((value, error) -> outstanding.remove(future));
-            try {
-                executor.execute(() -> {
-                    try {
-                        future.complete(task.get());
-                    } catch (Throwable t) {
-                        future.completeExceptionally(t);
-                    }
-                });
-            } catch (java.util.concurrent.RejectedExecutionException e) {
-                outstanding.remove(future);
-                return CompletableFuture.failedFuture(e);
+            if (!admission.acquire()) {
+                return CompletableFuture.failedFuture(new java.util.concurrent.RejectedExecutionException(
+                        "TierCacheFactory retained async resource capacity exhausted"));
             }
-            return future;
+            operation = new Operation<>(task);
+            outstanding.add(operation.future);
+            operation.future.whenComplete((value, error) -> outstanding.remove(operation.future));
+            try {
+                executor.execute(operation);
+            } catch (java.util.concurrent.RejectedExecutionException e) {
+                rejected = e;
+            }
+        }
+        if (rejected != null) {
+            try { operation.future.completeExceptionally(rejected); }
+            finally { operation.discard(); }
+        }
+        return operation.future;
+    }
+
+    /** Task and attachment own independent references; outer completion owns none. */
+    private final class Operation<T> implements DefaultTierCache.DiscardableTask {
+        private final CompletableFuture<T> future = new CompletableFuture<>();
+        private final java.util.concurrent.atomic.AtomicInteger owners =
+                new java.util.concurrent.atomic.AtomicInteger(1);
+        private final java.util.concurrent.atomic.AtomicBoolean claimed =
+                new java.util.concurrent.atomic.AtomicBoolean();
+        private Function<Operation<T>, T> task;
+        private boolean attached;
+
+        Operation(Function<Operation<T>, T> task) { this.task = task; }
+
+        @Override public void run() {
+            if (!claimed.compareAndSet(false, true)) return;
+            try {
+                T value = task.apply(this);
+                if (!attached) future.complete(value);
+            } catch (Throwable error) {
+                future.completeExceptionally(error);
+            } finally {
+                task = null;
+                retire();
+            }
+        }
+
+        void attach(LoadClaim<K, T> claim) {
+            attached = true;
+            owners.incrementAndGet(); // Before registration: completion can be inline.
+            claim.result.whenComplete((outcome, error) -> {
+                try {
+                    if (error != null) {
+                        // Match CompletableFuture.join on the synchronous follower path.
+                        future.completeExceptionally(error instanceof CompletionException
+                                || error instanceof java.util.concurrent.CancellationException
+                                ? error : new CompletionException(error));
+                    } else if (outcome.isSkipped() && !factoryOpen.getAsBoolean()) {
+                        future.completeExceptionally(new java.util.concurrent.CancellationException(
+                                "TierCacheFactory closed"));
+                    } else {
+                        var entry = outcome.resultEntry();
+                        future.complete(entry == null || entry.isNullMarker() ? null : entry.value());
+                    }
+                } catch (Throwable failure) {
+                    future.completeExceptionally(failure);
+                } finally { retire(); }
+            });
+        }
+
+        @Override public void discard() {
+            if (claimed.compareAndSet(false, true)) {
+                task = null;
+                retire();
+            }
+        }
+
+        private void retire() {
+            if (owners.decrementAndGet() == 0) admission.release();
         }
     }
 
