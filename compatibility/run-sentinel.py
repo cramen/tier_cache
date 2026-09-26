@@ -114,6 +114,22 @@ def scenario(mode):
         # Index zero is a valid master after an outage.
         elected=elected['master']
         event('elected',master=elected)
+        # Sentinel agreement precedes demotion of the old primary. Writes during
+        # this interval can be acknowledged there and discarded on resync. Keep
+        # fault traffic running until the live topology has actually converged;
+        # only then let the probe assert post-recovery writes and lock exclusion.
+        def converged_topology():
+            primary=topology()
+            if primary is None:return False
+            for i,n in enumerate(nodes):
+                if i==primary or (mode=='abrupt' and i==0):continue
+                info=dict(x.split(':',1) for x in cli(n,'INFO','replication').splitlines() if ':' in x)
+                if (info.get('role')!='slave' or info.get('master_host')!=node_ips[primary]
+                        or info.get('master_port')!='6379' or info.get('master_link_status')!='up'
+                        or info.get('master_sync_in_progress')!='0'):return False
+            return {'master':primary}
+        elected=until('live replicas follow elected primary',converged_topology)['master']
+        event('topology-converged',master=elected)
         (control/'topology-ready').write_text(str(elected))
         code=command(['docker','wait',probe],timeout=130)
         logs=subprocess.run(['docker','logs',probe],capture_output=True,text=True,timeout=10)

@@ -118,10 +118,19 @@ class BoundedPubSubRecoveryIT {
                         });
                     }
                 });
+                var pendingLosses = new AtomicLong();
+                receiver.setMetricsListener(new CacheMetricsListener() {
+                    @Override public void onDispatchRejected(DispatchReason reason, long messages) {
+                        if (reason == DispatchReason.PENDING) pendingLosses.addAndGet(messages);
+                    }
+                });
                 // Malformed frame is attributed through the real subscribed channel.
                 connection.sync().publish(RedisKeyspace.channel(cache), new byte[]{1}); gate(repaired);
                 send(publisher, journal, message(cache, 2, "latest"));
-                await(() -> dispatch.pending(cache));
+                // Pending was already true before publish. Observe this frame's actual
+                // rejection before acknowledging repair, rather than racing delivery.
+                await(() -> pendingLosses.get() == 1);
+                assertTrue(dispatch.pending(cache));
                 allowCompletion.complete(null);
                 await(() -> !dispatch.pending(cache) && "latest".equals(target.values.get("key")));
                 assertTrue(attempts.get() >= 2);

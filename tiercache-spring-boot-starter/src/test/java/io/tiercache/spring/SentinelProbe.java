@@ -57,6 +57,10 @@ public final class SentinelProbe {
         try (var a = application("a", ma); var b = application("b", mb)) {
             var fa = a.getBean(TierCacheFactory.class); var fb = b.getBean(TierCacheFactory.class);
             TierCache<String,String> ca = fa.getCache("sentinel"), cb = fb.getCache("sentinel");
+            // Keep fault traffic separate from the deliberately replicated history.
+            // Writes acknowledged by the old primary during promotion may be lost;
+            // advancing this cache's replay cursor would invalidate the intact-history control.
+            TierCache<String,String> trafficCache = fa.getCache("sentinel-traffic");
             ca.put("changed", "v1"); ca.put("unaffected", "stable");
             assertEquals("v1", cb.get("changed")); assertEquals("stable", cb.get("unaffected"));
             if (!mode.equals("outage")) {
@@ -81,7 +85,7 @@ public final class SentinelProbe {
                     int count=0; long max=0;
                     while (!Files.exists(CONTROL.resolve("topology-ready"))) {
                         long start=System.nanoTime();
-                        String value=ca.getOrCompute("traffic-"+count, k -> "source-v1");
+                        String value=trafficCache.getOrCompute("traffic-"+count, k -> "source-v1");
                         assertEquals("source-v1", value);
                         max=Math.max(max,System.nanoTime()-start); count++;
                         assertTrue(max<TimeUnit.SECONDS.toNanos(5), "protected call exceeded five seconds");
