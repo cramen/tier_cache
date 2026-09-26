@@ -1,0 +1,739 @@
+{
+  "baselineRevision": "9942245",
+  "java17TckBuild": "passed",
+  "java17TestCounts": {
+    "tests": 71,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "requiredMissingRuntime": "failed as expected for explicitly requested JDK 999; no fallback",
+  "runs": [
+    {
+      "jdk": 21,
+      "fork": 1,
+      "passed": true,
+      "phases": [
+        {
+          "runId": "2a71cfc4-c029-43a4-a3f5-d261ab961e87",
+          "phase": "cold",
+          "status": "DIAGNOSTIC_COMPLETE",
+          "pid": 84333,
+          "javaVersion": "21+35-2513",
+          "javaVendor": "Oracle Corporation",
+          "measured": {
+            "setupHotPuts": 1000,
+            "initialLoaderKeys": 0,
+            "verifiedAbsentLoaderKeys": 1000,
+            "cancelled": 0,
+            "failedWorkers": 0,
+            "submitted": 100000,
+            "completed": 100000,
+            "terminated": true,
+            "elapsedNanos": 751718000,
+            "operations": 2000000,
+            "loaderExecutions": 1001
+          },
+          "events": {
+            "testOnly": 0,
+            "aggregateWaitNanosAcrossThreads": 0,
+            "total": 0,
+            "jdkOrOther": 0,
+            "blockingOperations": {},
+            "product": 0,
+            "optionalFields": {
+              "blockingOperation": "unavailable",
+              "pinnedReason": "unavailable"
+            },
+            "maxDurationNanos": 0,
+            "reasons": {}
+          }
+        },
+        {
+          "runId": "6d7b3a76-93bd-4b92-b44a-36c7a6dcbbe5",
+          "phase": "steady",
+          "status": "PASS",
+          "pid": 84336,
+          "javaVersion": "21+35-2513",
+          "javaVendor": "Oracle Corporation",
+          "measured": {
+            "setupHotPuts": 1000,
+            "initialLoaderKeys": 0,
+            "verifiedAbsentLoaderKeys": 1000,
+            "cancelled": 0,
+            "failedWorkers": 0,
+            "submitted": 100000,
+            "completed": 100000,
+            "terminated": true,
+            "elapsedNanos": 874171625,
+            "operations": 2000000,
+            "loaderExecutions": 1006
+          },
+          "events": {
+            "product": 0,
+            "optionalFields": {
+              "blockingOperation": "unavailable",
+              "pinnedReason": "unavailable"
+            },
+            "maxDurationNanos": 0,
+            "reasons": {},
+            "testOnly": 0,
+            "aggregateWaitNanosAcrossThreads": 0,
+            "total": 0,
+            "jdkOrOther": 0,
+            "blockingOperations": {}
+          }
+        }
+      ],
+      "exitCode": 0,
+      "suites": [
+        {
+          "name": "io.tiercache.tck.VirtualThreadColdStartTest",
+          "tests": "1",
+          "failures": "0",
+          "errors": "0",
+          "skipped": "0"
+        },
+        {
+          "name": "io.tiercache.tck.VirtualThreadStressTest",
+          "tests": "1",
+          "failures": "0",
+          "errors": "0",
+          "skipped": "0"
+        },
+        {
+          "name": "io.tiercache.tck.VirtualThreadPhaseFailureTest",
+          "tests": "2",
+          "failures": "0",
+          "errors": "0",
+          "skipped": "0"
+        },
+        {
+          "name": "io.tiercache.tck.RecoveryJfrTest",
+          "tests": "1",
+          "failures": "0",
+          "errors": "0",
+          "skipped": "0"
+        },
+        {
+          "name": "io.tiercache.tck.LockLifecycleJfrTest",
+          "tests": "1",
+          "failures": "0",
+          "errors": "0",
+          "skipped": "0"
+        }
+      ]
+    },
+    {
+      "jdk": 21,
+      "fork": 2,
+      "passed": true,
+      "phases": [
+        {
+          "runId": "d0d1da92-6864-4861-9748-a0b0e189f70d",
+          "phase": "cold",
+          "status": "DIAGNOSTIC_COMPLETE",
+          "pid": 84397,
+          "javaVersion": "21+35-2513",
+          "javaVendor": "Oracle Corporation",
+          "measured": {
+            "setupHotPuts": 1000,
+            "initialLoaderKeys": 0,
+            "verifiedAbsentLoaderKeys": 1000,
+            "cancelled": 0,
+            "failedWorkers": 0,
+            "submitted": 100000,
+            "completed": 100000,
+            "terminated": true,
+            "elapsedNanos": 535220250,
+            "operations": 2000000,
+            "loaderExecutions": 1002
+          },
+          "events": {
+            "blockingOperations": {},
+            "jdkOrOther": 0,
+            "total": 0,
+            "aggregateWaitNanosAcrossThreads": 0,
+            "testOnly": 0,
+            "reasons": {},
+            "maxDurationNanos": 0,
+            "optionalFields": {
+              "blockingOperation": "unavailable",
+              "pinnedReason": "unavailable"
+            },
+            "product": 0
+          }
+        },
+        {
+          "runId": "18261103-ccc4-43bb-9ef9-53d1d8050156",
+          "phase": "steady",
+          "status": "PASS",
+          "pid": 84402,
+          "javaVersion": "21+35-2513",
+          "javaVendor": "Oracle Corporation",
+          "measured": {
+            "setupHotPuts": 1000,
+            "initialLoaderKeys": 0,
+            "verifiedAbsentLoaderKeys": 1000,
+            "cancelled": 0,
+            "failedWorkers": 0,
+            "submitted": 100000,
+            "completed": 100000,
+            "terminated": true,
+            "elapsedNanos": 718443125,
+            "operations": 2000000,
+            "loaderExecutions": 1006
+          },
+          "events": {
+            "jdkOrOther": 0,
+            "blockingOperations": {},
+            "product": 0,
+            "optionalFields": {
+              "blockingOperation": "unavailable",
+              "pinnedReason": "unavailable"
+            },
+            "maxDurationNanos": 0,
+            "reasons": {},
+            "testOnly": 0,
+            "aggregateWaitNanosAcrossThreads": 0,
+            "total": 0
+          }
+        }
+      ],
+      "exitCode": 0,
+      "suites": [
+        {
+          "name": "io.tiercache.tck.VirtualThreadColdStartTest",
+          "tests": "1",
+          "failures": "0",
+          "errors": "0",
+          "skipped": "0"
+        },
+        {
+          "name": "io.tiercache.tck.VirtualThreadStressTest",
+          "tests": "1",
+          "failures": "0",
+          "errors": "0",
+          "skipped": "0"
+        },
+        {
+          "name": "io.tiercache.tck.VirtualThreadPhaseFailureTest",
+          "tests": "2",
+          "failures": "0",
+          "errors": "0",
+          "skipped": "0"
+        },
+        {
+          "name": "io.tiercache.tck.RecoveryJfrTest",
+          "tests": "1",
+          "failures": "0",
+          "errors": "0",
+          "skipped": "0"
+        },
+        {
+          "name": "io.tiercache.tck.LockLifecycleJfrTest",
+          "tests": "1",
+          "failures": "0",
+          "errors": "0",
+          "skipped": "0"
+        }
+      ]
+    },
+    {
+      "jdk": 21,
+      "fork": 3,
+      "passed": true,
+      "phases": [
+        {
+          "runId": "73dd05b4-7136-4ccb-9426-b576cd3c1f6c",
+          "phase": "cold",
+          "status": "DIAGNOSTIC_COMPLETE",
+          "pid": 84449,
+          "javaVersion": "21+35-2513",
+          "javaVendor": "Oracle Corporation",
+          "measured": {
+            "setupHotPuts": 1000,
+            "initialLoaderKeys": 0,
+            "verifiedAbsentLoaderKeys": 1000,
+            "cancelled": 0,
+            "failedWorkers": 0,
+            "submitted": 100000,
+            "completed": 100000,
+            "terminated": true,
+            "elapsedNanos": 574253125,
+            "operations": 2000000,
+            "loaderExecutions": 1001
+          },
+          "events": {
+            "maxDurationNanos": 0,
+            "reasons": {},
+            "testOnly": 0,
+            "aggregateWaitNanosAcrossThreads": 0,
+            "total": 0,
+            "jdkOrOther": 0,
+            "blockingOperations": {},
+            "product": 0,
+            "optionalFields": {
+              "blockingOperation": "unavailable",
+              "pinnedReason": "unavailable"
+            }
+          }
+        },
+        {
+          "runId": "72e93006-1486-4607-8e82-b00939cb5d35",
+          "phase": "steady",
+          "status": "PASS",
+          "pid": 84454,
+          "javaVersion": "21+35-2513",
+          "javaVendor": "Oracle Corporation",
+          "measured": {
+            "setupHotPuts": 1000,
+            "initialLoaderKeys": 0,
+            "verifiedAbsentLoaderKeys": 1000,
+            "cancelled": 0,
+            "failedWorkers": 0,
+            "submitted": 100000,
+            "completed": 100000,
+            "terminated": true,
+            "elapsedNanos": 481729041,
+            "operations": 2000000,
+            "loaderExecutions": 1002
+          },
+          "events": {
+            "blockingOperations": {},
+            "product": 0,
+            "optionalFields": {
+              "blockingOperation": "unavailable",
+              "pinnedReason": "unavailable"
+            },
+            "maxDurationNanos": 0,
+            "reasons": {},
+            "testOnly": 0,
+            "aggregateWaitNanosAcrossThreads": 0,
+            "total": 0,
+            "jdkOrOther": 0
+          }
+        }
+      ],
+      "exitCode": 0,
+      "suites": [
+        {
+          "name": "io.tiercache.tck.VirtualThreadColdStartTest",
+          "tests": "1",
+          "failures": "0",
+          "errors": "0",
+          "skipped": "0"
+        },
+        {
+          "name": "io.tiercache.tck.VirtualThreadStressTest",
+          "tests": "1",
+          "failures": "0",
+          "errors": "0",
+          "skipped": "0"
+        },
+        {
+          "name": "io.tiercache.tck.VirtualThreadPhaseFailureTest",
+          "tests": "2",
+          "failures": "0",
+          "errors": "0",
+          "skipped": "0"
+        },
+        {
+          "name": "io.tiercache.tck.RecoveryJfrTest",
+          "tests": "1",
+          "failures": "0",
+          "errors": "0",
+          "skipped": "0"
+        },
+        {
+          "name": "io.tiercache.tck.LockLifecycleJfrTest",
+          "tests": "1",
+          "failures": "0",
+          "errors": "0",
+          "skipped": "0"
+        }
+      ]
+    },
+    {
+      "jdk": 25,
+      "fork": 1,
+      "passed": true,
+      "phases": [
+        {
+          "runId": "eee5873d-03fe-4fd3-b92a-3ee4fd3493ec",
+          "phase": "cold",
+          "status": "DIAGNOSTIC_COMPLETE",
+          "pid": 84505,
+          "javaVersion": "25+37-LTS-jvmci-b01",
+          "javaVendor": "Oracle Corporation",
+          "measured": {
+            "setupHotPuts": 1000,
+            "initialLoaderKeys": 0,
+            "verifiedAbsentLoaderKeys": 1000,
+            "cancelled": 0,
+            "failedWorkers": 0,
+            "submitted": 100000,
+            "completed": 100000,
+            "terminated": true,
+            "elapsedNanos": 427229833,
+            "operations": 2000000,
+            "loaderExecutions": 1003
+          },
+          "events": {
+            "blockingOperations": {
+              "Contended monitor enter": 59,
+              "Object.wait": 16
+            },
+            "jdkOrOther": 0,
+            "total": 75,
+            "aggregateWaitNanosAcrossThreads": 16051798,
+            "testOnly": 0,
+            "reasons": {
+              "Freeze or preempt failed (2)": 57,
+              "VM call to io.tiercache.spi.CacheMetricsListener$Level.<clinit> on stack": 2,
+              "Waited for initialization of io.tiercache.internal.DefaultTierCache$FreshnessSnapshot by another thread": 1,
+              "Waited for initialization of io.tiercache.internal.DefaultTierCache$L1Freshness by another thread": 2,
+              "Waited for initialization of io.tiercache.internal.LoadClaim$Demand by another thread": 1,
+              "Waited for initialization of io.tiercache.internal.LoadClaim$Kind by another thread": 1,
+              "Waited for initialization of io.tiercache.internal.LoadClaim$Outcome by another thread": 1,
+              "Waited for initialization of io.tiercache.spi.CacheMetricsListener$Level by another thread": 6,
+              "Waited for initialization of io.tiercache.spi.CacheMetricsListener$Outcome by another thread": 4
+            },
+            "maxDurationNanos": 967083,
+            "optionalFields": {
+              "blockingOperation": "available",
+              "pinnedReason": "available"
+            },
+            "product": 75
+          }
+        },
+        {
+          "runId": "1625e680-586a-4122-a899-66c968f6d6f6",
+          "phase": "steady",
+          "status": "PASS",
+          "pid": 84512,
+          "javaVersion": "25+37-LTS-jvmci-b01",
+          "javaVendor": "Oracle Corporation",
+          "measured": {
+            "setupHotPuts": 1000,
+            "initialLoaderKeys": 0,
+            "verifiedAbsentLoaderKeys": 1000,
+            "cancelled": 0,
+            "failedWorkers": 0,
+            "submitted": 100000,
+            "completed": 100000,
+            "terminated": true,
+            "elapsedNanos": 455902500,
+            "operations": 2000000,
+            "loaderExecutions": 1002
+          },
+          "events": {
+            "optionalFields": {
+              "blockingOperation": "available",
+              "pinnedReason": "available"
+            },
+            "product": 0,
+            "blockingOperations": {},
+            "jdkOrOther": 0,
+            "total": 0,
+            "aggregateWaitNanosAcrossThreads": 0,
+            "testOnly": 0,
+            "reasons": {},
+            "maxDurationNanos": 0
+          }
+        }
+      ],
+      "exitCode": 0,
+      "suites": [
+        {
+          "name": "io.tiercache.tck.VirtualThreadColdStartTest",
+          "tests": "1",
+          "failures": "0",
+          "errors": "0",
+          "skipped": "0"
+        },
+        {
+          "name": "io.tiercache.tck.VirtualThreadStressTest",
+          "tests": "1",
+          "failures": "0",
+          "errors": "0",
+          "skipped": "0"
+        },
+        {
+          "name": "io.tiercache.tck.VirtualThreadPhaseFailureTest",
+          "tests": "2",
+          "failures": "0",
+          "errors": "0",
+          "skipped": "0"
+        },
+        {
+          "name": "io.tiercache.tck.RecoveryJfrTest",
+          "tests": "1",
+          "failures": "0",
+          "errors": "0",
+          "skipped": "0"
+        },
+        {
+          "name": "io.tiercache.tck.LockLifecycleJfrTest",
+          "tests": "1",
+          "failures": "0",
+          "errors": "0",
+          "skipped": "0"
+        }
+      ]
+    },
+    {
+      "jdk": 25,
+      "fork": 2,
+      "passed": true,
+      "phases": [
+        {
+          "runId": "c4fd7721-fd57-48a5-a47d-70094e8d5aa8",
+          "phase": "cold",
+          "status": "DIAGNOSTIC_COMPLETE",
+          "pid": 84563,
+          "javaVersion": "25+37-LTS-jvmci-b01",
+          "javaVendor": "Oracle Corporation",
+          "measured": {
+            "setupHotPuts": 1000,
+            "initialLoaderKeys": 0,
+            "verifiedAbsentLoaderKeys": 1000,
+            "cancelled": 0,
+            "failedWorkers": 0,
+            "submitted": 100000,
+            "completed": 100000,
+            "terminated": true,
+            "elapsedNanos": 502864167,
+            "operations": 2000000,
+            "loaderExecutions": 1000
+          },
+          "events": {
+            "testOnly": 3,
+            "aggregateWaitNanosAcrossThreads": 16330919,
+            "total": 49,
+            "jdkOrOther": 0,
+            "blockingOperations": {
+              "Contended monitor enter": 41,
+              "Object.wait": 8
+            },
+            "product": 46,
+            "optionalFields": {
+              "blockingOperation": "available",
+              "pinnedReason": "available"
+            },
+            "maxDurationNanos": 793500,
+            "reasons": {
+              "Freeze or preempt failed (2)": 41,
+              "Waited for initialization of io.tiercache.internal.DefaultTierCache$L1Freshness by another thread": 3,
+              "Waited for initialization of io.tiercache.internal.LoadClaim$Kind by another thread": 1,
+              "Waited for initialization of io.tiercache.spi.CacheMetricsListener$Level by another thread": 1,
+              "Waited for initialization of io.tiercache.spi.CacheMetricsListener$Outcome by another thread": 3
+            }
+          }
+        },
+        {
+          "runId": "ee71cbaf-4a04-47de-8b56-3036729eca40",
+          "phase": "steady",
+          "status": "PASS",
+          "pid": 84568,
+          "javaVersion": "25+37-LTS-jvmci-b01",
+          "javaVendor": "Oracle Corporation",
+          "measured": {
+            "setupHotPuts": 1000,
+            "initialLoaderKeys": 0,
+            "verifiedAbsentLoaderKeys": 1000,
+            "cancelled": 0,
+            "failedWorkers": 0,
+            "submitted": 100000,
+            "completed": 100000,
+            "terminated": true,
+            "elapsedNanos": 419494042,
+            "operations": 2000000,
+            "loaderExecutions": 1008
+          },
+          "events": {
+            "product": 0,
+            "blockingOperations": {},
+            "jdkOrOther": 0,
+            "total": 0,
+            "aggregateWaitNanosAcrossThreads": 0,
+            "testOnly": 0,
+            "reasons": {},
+            "maxDurationNanos": 0,
+            "optionalFields": {
+              "blockingOperation": "available",
+              "pinnedReason": "available"
+            }
+          }
+        }
+      ],
+      "exitCode": 0,
+      "suites": [
+        {
+          "name": "io.tiercache.tck.VirtualThreadColdStartTest",
+          "tests": "1",
+          "failures": "0",
+          "errors": "0",
+          "skipped": "0"
+        },
+        {
+          "name": "io.tiercache.tck.VirtualThreadStressTest",
+          "tests": "1",
+          "failures": "0",
+          "errors": "0",
+          "skipped": "0"
+        },
+        {
+          "name": "io.tiercache.tck.VirtualThreadPhaseFailureTest",
+          "tests": "2",
+          "failures": "0",
+          "errors": "0",
+          "skipped": "0"
+        },
+        {
+          "name": "io.tiercache.tck.RecoveryJfrTest",
+          "tests": "1",
+          "failures": "0",
+          "errors": "0",
+          "skipped": "0"
+        },
+        {
+          "name": "io.tiercache.tck.LockLifecycleJfrTest",
+          "tests": "1",
+          "failures": "0",
+          "errors": "0",
+          "skipped": "0"
+        }
+      ]
+    },
+    {
+      "jdk": 25,
+      "fork": 3,
+      "passed": true,
+      "phases": [
+        {
+          "runId": "8199d3ec-d0be-42d5-881b-e38838f8e98b",
+          "phase": "cold",
+          "status": "DIAGNOSTIC_COMPLETE",
+          "pid": 84614,
+          "javaVersion": "25+37-LTS-jvmci-b01",
+          "javaVendor": "Oracle Corporation",
+          "measured": {
+            "setupHotPuts": 1000,
+            "initialLoaderKeys": 0,
+            "verifiedAbsentLoaderKeys": 1000,
+            "cancelled": 0,
+            "failedWorkers": 0,
+            "submitted": 100000,
+            "completed": 100000,
+            "terminated": true,
+            "elapsedNanos": 475011125,
+            "operations": 2000000,
+            "loaderExecutions": 1001
+          },
+          "events": {
+            "jdkOrOther": 0,
+            "total": 63,
+            "aggregateWaitNanosAcrossThreads": 41311002,
+            "testOnly": 0,
+            "reasons": {
+              "Freeze or preempt failed (2)": 55,
+              "VM call to io.tiercache.internal.LoadClaim$Kind.<clinit> on stack": 1,
+              "VM call to io.tiercache.internal.caffeine.cache.RemovalCause.<clinit> on stack": 1,
+              "VM call to io.tiercache.spi.CacheMetricsListener$Level.<clinit> on stack": 1,
+              "Waited for initialization of io.tiercache.internal.DefaultTierCache$L1Freshness by another thread": 1,
+              "Waited for initialization of io.tiercache.internal.LoadClaim$Kind by another thread": 1,
+              "Waited for initialization of io.tiercache.internal.caffeine.cache.RemovalCause by another thread": 1,
+              "Waited for initialization of io.tiercache.spi.CacheMetricsListener$Level by another thread": 1,
+              "Waited for initialization of io.tiercache.spi.CacheMetricsListener$Outcome by another thread": 1
+            },
+            "maxDurationNanos": 7737334,
+            "optionalFields": {
+              "blockingOperation": "available",
+              "pinnedReason": "available"
+            },
+            "product": 63,
+            "blockingOperations": {
+              "Contended monitor enter": 58,
+              "Object.wait": 5
+            }
+          }
+        },
+        {
+          "runId": "0559c558-0e80-41bf-b3eb-b62e7a825e49",
+          "phase": "steady",
+          "status": "PASS",
+          "pid": 84622,
+          "javaVersion": "25+37-LTS-jvmci-b01",
+          "javaVendor": "Oracle Corporation",
+          "measured": {
+            "setupHotPuts": 1000,
+            "initialLoaderKeys": 0,
+            "verifiedAbsentLoaderKeys": 1000,
+            "cancelled": 0,
+            "failedWorkers": 0,
+            "submitted": 100000,
+            "completed": 100000,
+            "terminated": true,
+            "elapsedNanos": 389144708,
+            "operations": 2000000,
+            "loaderExecutions": 1014
+          },
+          "events": {
+            "testOnly": 0,
+            "reasons": {},
+            "maxDurationNanos": 0,
+            "optionalFields": {
+              "blockingOperation": "available",
+              "pinnedReason": "available"
+            },
+            "product": 0,
+            "blockingOperations": {},
+            "jdkOrOther": 0,
+            "total": 0,
+            "aggregateWaitNanosAcrossThreads": 0
+          }
+        }
+      ],
+      "exitCode": 0,
+      "suites": [
+        {
+          "name": "io.tiercache.tck.VirtualThreadColdStartTest",
+          "tests": "1",
+          "failures": "0",
+          "errors": "0",
+          "skipped": "0"
+        },
+        {
+          "name": "io.tiercache.tck.VirtualThreadStressTest",
+          "tests": "1",
+          "failures": "0",
+          "errors": "0",
+          "skipped": "0"
+        },
+        {
+          "name": "io.tiercache.tck.VirtualThreadPhaseFailureTest",
+          "tests": "2",
+          "failures": "0",
+          "errors": "0",
+          "skipped": "0"
+        },
+        {
+          "name": "io.tiercache.tck.RecoveryJfrTest",
+          "tests": "1",
+          "failures": "0",
+          "errors": "0",
+          "skipped": "0"
+        },
+        {
+          "name": "io.tiercache.tck.LockLifecycleJfrTest",
+          "tests": "1",
+          "failures": "0",
+          "errors": "0",
+          "skipped": "0"
+        }
+      ]
+    }
+  ],
+  "scope": "test harness, Gradle, CI and docs; no production library changes"
+}

@@ -92,13 +92,15 @@ All of the following are excluded from `check`; run them explicitly.
 | Command | What it does | Budget |
 |---|---|---|
 | `./gradlew :tiercache-tck:soakTest` | Churn soak against a real L2 container. Default duration PT10M; override with `-Dtiercache.soak.duration=PT24H` for the full profile. Not run in CI (hosted runners kill long jobs) — run it locally or on your own hardware before releases. | Each memory series ≤ 5%, complete workload, bounded journal |
-| `./gradlew :tiercache-tck:vtStressTest` | 100k virtual threads over the read path; fails on any `jdk.VirtualThreadPinned` event on library frames. Requires a JDK 21+ toolchain; skipped loudly otherwise. | Zero pinning events |
+| `./gradlew :tiercache-tck:vtStressTest -PtiercacheVtJdk=21` | Separate fresh-JVM cold diagnostic and strict steady-state read gate, plus recovery/lock checks. Use 25 to select Java 25 explicitly. | Zero steady-state product pinning; complete workload and valid evidence in both phases |
 | `./gradlew :tiercache-tck:jmhBenchmark` | Throughput benchmark against a Redis container: `mixedWorkload` (95% hot L1 hits / 5% cold cascade reads, reference profile), `cascadeRead` (pure cascade, worst-case reference), `l1Hit` (attribution control). Results in `tiercache-tck/build/results/jmh-benchmark/results.txt`. | No absolute budget — trend/regression measurement (throughput is environment-dependent) |
 | `./gradlew :tiercache-tck:propagationBenchmark` | Invalidation propagation latency harness (two Pub/Sub instances, 10k events by default; override with `-Dtiercache.propagation.events`). Results in `tiercache-tck/build/results/propagation/results.txt`. | p99 ≤ 5 ms publish-to-applied (single AZ) |
 
 The propagation harness (`io.tiercache.tck.PropagationBenchmark`) is a plain
 `main` class inside the `tests` jar, so consumers can also run it from the
 artifact on a classpath assembled as shown above.
+
+See [VT validation](implementation/virtual-thread-validation.md) for accepted startup policy, fixed warmup on separate state, failure checks, evidence paths and the repeated 21/25 runtime command.
 
 ### Real-journal recovery and virtual threads
 
@@ -108,7 +110,7 @@ callback. Deterministic gates verify callbacks return before replay; JFR
 checks library-attributed monitor pinning on JDK 21. Run it with
 `./gradlew :tiercache-tck:vtStressTest --tests '*RecoveryJfrTest'`; use
 `-PtiercacheVtJdk=25` for newer-JDK functional coverage. Recordings remain in
-`tiercache-tck/build/reports/recovery-jdk*.jfr`. See [recovery](recovery.md).
+`tiercache-tck/build/reports/vt/jdk-*/independent/*/`. See [recovery](recovery.md).
 
 ### Streams pending and corruption
 

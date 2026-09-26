@@ -109,7 +109,7 @@ not prove absence of monitor serialization.
 ./gradlew :tiercache-tck:vtStressTest --tests '*RecoveryJfrTest' -PtiercacheVtJdk=25
 ```
 
-Recordings are retained in `tiercache-tck/build/reports/recovery-jdk*.jfr`.
+Recordings are retained in `tiercache-tck/build/reports/vt/jdk-*/independent/*/recovery.jfr`.
 
 The Streams transport consumes per-cache reset proofs through the compatible
 gap handler. A proof must still belong to the current registration/reset
@@ -140,3 +140,5 @@ old queued delivery before reset: a queued UPDATE must not restore a value after
 Local catch-up proofs are separate from the Streams RESET_SAFE coverage proof and do
 not change consumer ownership or ACK rules. Events never recorded in Redis cannot be
 reconstructed by this mechanism.
+
+The aggregate VT entry point also runs isolated cold-start and steady-state phases. Their policies and retained per-run JFR locations are documented in [VT validation](implementation/virtual-thread-validation.md).

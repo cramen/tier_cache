@@ -28,7 +28,7 @@ Gradle (Kotlin DSL) multi-module build, Java 17 toolchain. Modules present: `tie
 - `./gradlew :tiercache-core:test` — core unit/contract tests.
 - `./gradlew :tiercache-tck:test` — TCK chaos tests (Testcontainers: stampede single- and multi-instance over real Redis).
 - `./gradlew :tiercache-tck:soakTest` — churn soak gate (memory ≤5% growth, bounded journal; default PT10M, override with `-Dtiercache.soak.duration=PT24H` for the full profile). Excluded from `check` and not run in CI (hosted runners cap job duration) — run it locally or on your own hardware before releases.
-- `./gradlew :tiercache-tck:vtStressTest` — virtual-thread pinning gate (100k VTs, zero `jdk.VirtualThreadPinned` on library frames). Requires a JDK 21+ toolchain; skipped loudly otherwise. Excluded from `check`.
+- `./gradlew :tiercache-tck:vtStressTest` — virtual-thread validation (fresh-JVM cold-start diagnostic, 100k-VT steady-state zero product pinning, plus recovery/lock checks). Use `-PtiercacheVtJdk=21` or `25`; explicitly selected missing runtimes fail, implicit unavailable local runtime is a loud skip. See docs/implementation/virtual-thread-validation.md. Excluded from `check`.
 - `./gradlew :tiercache-transport-redis:test` — transport contract suite against Redis 6.2 and Valkey containers (needs Docker).
 - `./gradlew :tiercache-spring-boot-starter:test` — Spring adapter, auto-config, and Spring Cache migration tests (no Docker needed).
 - `./gradlew :tiercache-kotlin:test` — Kotlin coroutines API tests (no Docker needed).
@@ -108,7 +108,7 @@ Do not implement, and reject proposals for:
 ## Coding conventions
 
 - **Java 17 baseline**; no language features beyond 17 in `core`.
-- **Virtual-thread safety:** no `synchronized` on I/O paths (pinning); verified by the virtual-thread stress test (zero `jdk.VirtualThreadPinned` JFR events on library paths under 100k virtual threads).
+- **Virtual-thread safety:** no `synchronized` on I/O paths (pinning); verified by isolated virtual-thread phases (zero product-attributed `jdk.VirtualThreadPinned` events under the 100k-thread steady-state workload, plus mandatory cold-start diagnostics and independent recovery/lock checks).
 - **Zero allocations** on steady-state L1-hit path (verified by JMH gc profiler).
 - Core depends on **SLF4J API only** for logging.
 - Secrets (e.g. Redis passwords) are never logged at any level, including diagnostic mode.

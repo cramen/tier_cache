@@ -30,7 +30,7 @@ class LockLifecycleJfrTest {
                     return c;
                 }
             }
-            Path path=Path.of("build/reports/lock-lifecycle-jdk21.jfr");Files.createDirectories(path.getParent());
+            Path path=Path.of(System.getProperty("tiercache.lock.jfr", "build/reports/lock-lifecycle-jdk"+Runtime.version().feature()+".jfr"));Files.createDirectories(path.getParent());
             try(var client=new PausedClient();var threads=Executors.newVirtualThreadPerTaskExecutor();var recording=new Recording()) {
                 recording.enable("jdk.VirtualThreadPinned").withThreshold(Duration.ZERO).withStackTrace();
                 recording.setDestination(path);recording.start();

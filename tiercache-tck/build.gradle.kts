@@ -1,3 +1,6 @@
+import java.time.Duration
+import java.util.UUID
+
 plugins {
     `java-library`
     `maven-publish`
@@ -16,7 +19,10 @@ java {
 // Java 17 baseline toolchain.
 val vtStress = sourceSets.create("vtStress") {
     java.srcDir("src/vtStress/java")
+    java.srcDir("src/runtimeTestSupport/java")
 }
+
+sourceSets.test { java.srcDir("src/runtimeTestSupport/java") }
 
 // Benchmark source set for the cascade throughput benchmark (benchmark-suite
 // design D1): JMH against a real Redis container. The JMH plugin is applied
@@ -70,6 +76,7 @@ configurations {
 // when no 21+ JDK is installed the compile/test tasks below are skipped with
 // a loud log line instead of failing (or downloading a JDK).
 val vtJavaVersion = providers.gradleProperty("tiercacheVtJdk").map { it.toInt() }.orElse(21)
+require(vtJavaVersion.get() >= 21) { "tiercacheVtJdk must select Java 21 or newer" }
 val vtCompiler = javaToolchains.compilerFor {
     languageVersion = JavaLanguageVersion.of(vtJavaVersion.get())
 }
@@ -87,6 +94,10 @@ fun vtToolchainAvailable(): Boolean = try {
 fun Task.skipUnlessVtToolchain() {
     onlyIf("the virtual-thread stress gate requires a JDK 21+ toolchain") {
         val available = vtToolchainAvailable()
+        if (!available && providers.gradleProperty("tiercacheVtJdk").isPresent) {
+            logger.error("$path FAILED: required VT toolchain ${vtJavaVersion.get()} is unavailable; install that JDK or select an installed supported runtime")
+            throw GradleException("Required VT toolchain ${vtJavaVersion.get()} is unavailable; this is not a passing gate")
+        }
         if (!available) {
             logger.lifecycle("$path SKIPPED: the virtual-thread stress gate requires a JDK 21+ toolchain, none found")
         }
@@ -110,15 +121,58 @@ tasks.named<Test>("test") {
     }
 }
 
-tasks.register<Test>("vtStressTest") {
-    description = "Virtual-thread stress gate (JDK 21+): zero carrier pinning on library read paths."
+fun Test.vtRuntime() {
     group = "verification"
     testClassesDirs = vtStress.output.classesDirs
     classpath = vtStress.runtimeClasspath
     javaLauncher = vtLauncher
-    systemProperty("tiercache.recovery.jfr", layout.buildDirectory.file(
-        "reports/recovery-jdk${vtJavaVersion.get()}.jfr").get().asFile.absolutePath)
+    maxParallelForks = 1
+    forkEvery = 1
+    timeout.set(Duration.ofMinutes(5))
+    outputs.upToDateWhen { false }
+    outputs.cacheIf { false }
+    systemProperty("tiercache.vt.requestedJdk", vtJavaVersion.get())
+    systemProperty("tiercache.vt.output", providers.gradleProperty("tiercacheVtOutput")
+        .orElse(layout.buildDirectory.dir("reports/vt").map { it.asFile.absolutePath }).get())
+    for (key in listOf("warmupSeconds", "workSeconds", "cleanupSeconds")) {
+        providers.systemProperty("tiercache.vt.$key").orNull?.let { systemProperty("tiercache.vt.$key", it) }
+    }
+    doFirst {
+        require(vtJavaVersion.get() >= 21) { "VT runtime must be Java 21+" }
+        logger.lifecycle("VT verification JVM: ${javaLauncher.get().metadata.installationPath}")
+        systemProperty("tiercache.vt.revision", providers.exec {
+            commandLine("git", "rev-parse", "HEAD")
+        }.standardOutput.asText.get().trim())
+        systemProperty("tiercache.vt.dirty", providers.exec {
+            commandLine("git", "status", "--porcelain")
+        }.standardOutput.asText.get().isNotBlank())
+        val independent = file(systemProperties["tiercache.vt.output"].toString())
+            .resolve("jdk-${vtJavaVersion.get()}/independent/${UUID.randomUUID()}")
+        systemProperty("tiercache.recovery.jfr", independent.resolve("recovery.jfr").absolutePath)
+        systemProperty("tiercache.lock.jfr", independent.resolve("lock-lifecycle.jfr").absolutePath)
+    }
     skipUnlessVtToolchain()
+}
+val vtColdStartTest = tasks.register<Test>("vtColdStartTest") {
+    description = "Fresh-JVM cold-start VT diagnostic; workload and evidence failures remain blocking."
+    vtRuntime()
+    filter { includeTestsMatching("io.tiercache.tck.VirtualThreadColdStartTest") }
+}
+val vtSteadyStateTest = tasks.register<Test>("vtSteadyStateTest") {
+    description = "Fresh-JVM steady-state VT gate: zero product-attributed pinning."
+    vtRuntime()
+    filter { includeTestsMatching("io.tiercache.tck.VirtualThreadStressTest") }
+    mustRunAfter(vtColdStartTest)
+}
+tasks.register<Test>("vtStressTest") {
+    description = "Complete VT validation: cold diagnostic, strict steady state, recovery and lock lifecycle."
+    vtRuntime()
+    dependsOn(vtColdStartTest, vtSteadyStateTest)
+    filter {
+        includeTestsMatching("io.tiercache.tck.RecoveryJfrTest")
+        includeTestsMatching("io.tiercache.tck.LockLifecycleJfrTest")
+        includeTestsMatching("io.tiercache.tck.VirtualThreadPhaseFailureTest")
+    }
 }
 
 tasks.register<Test>("soakTest") {

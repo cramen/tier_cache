@@ -21,8 +21,8 @@ jobs:
 
       # The main sources compile against a Java 17 toolchain, so every leg
       # needs JDK 17 installed next to the matrix JDK. The 21-leg relies on
-      # its primary JDK for the vtStress toolchain; the 25-leg gets JDK 21
-      # as an extra toolchain for the same purpose.
+      # its primary JDK for the VT toolchain; the 25-leg explicitly selects
+      # Java 25 for VT validation rather than inheriting the Java 21 default.
       - uses: actions/setup-java@v6
         with:
           distribution: temurin
@@ -41,12 +41,21 @@ jobs:
         if: matrix.jdk != '17'
         run: ./gradlew build -x :tiercache-tck:test
 
-      # The virtual-thread gate compiles/runs on a JDK 21+ toolchain; on the
-      # 17-leg no such toolchain is installed, so the task skips loudly by
-      # design.
+      # Explicitly exercise the requested runtime, with retained evidence
+      # for cold start, steady state and independent lifecycle checks.
       - name: Virtual-thread stress gate
         if: matrix.jdk != '17'
-        run: ./gradlew :tiercache-tck:vtStressTest
+        run: ./gradlew :tiercache-tck:vtStressTest -PtiercacheVtJdk=${{ matrix.jdk }}
+
+      - name: Retain virtual-thread evidence
+        if: always() && matrix.jdk != '17'
+        uses: actions/upload-artifact@v7
+        with:
+          name: vt-evidence-jdk-${{ matrix.jdk }}
+          path: |
+            tiercache-tck/build/reports/vt/
+            tiercache-tck/build/test-results/vt*/
+          if-no-files-found: error
 
       # SBOM (supply-chain design D1): per-module CycloneDX SBOMs plus the
       # whole-repo aggregate, collected into one flat artifact. Main/PR builds
