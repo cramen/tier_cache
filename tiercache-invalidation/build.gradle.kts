@@ -49,3 +49,6 @@ mavenPublishing {
         )
     }
 }
+
+// Shared scheduling for full mutation runs.
+apply(from = rootProject.file("gradle/pitest-execution.gradle"))

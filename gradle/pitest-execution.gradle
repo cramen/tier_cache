@@ -1,0 +1,10 @@
+import org.gradle.process.CommandLineArgumentProvider
+
+// Keep every mutant, but avoid assigning an entire large coordination class
+// to one worker. This only changes scheduling, not mutation scope or budgets.
+pitest {
+    threads.set(providers.gradleProperty('pitestThreads').map { it.toInteger() }.orElse(2))
+}
+tasks.named('pitest') {
+    argumentProviders.add({ ['--mutationUnitSize=20'] } as CommandLineArgumentProvider)
+}

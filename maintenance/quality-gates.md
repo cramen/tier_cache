@@ -11,6 +11,19 @@ TCK artifact, see the [TCK user guide](../docs/tck.md).
 
 This is part of the aggregate `./gradlew build` and requires Docker.
 
+## Mutation testing
+
+`./gradlew :tiercache-core:pitest :tiercache-invalidation:pitest` checks the full
+configured mutation scope with the unchanged 75% threshold. Mutation units contain
+at most 20 mutants and use two workers by default, allowing large coordination
+classes to share the workers. Override the worker count with `-PpitestThreads=4`
+on a suitably sized machine. Batching changes scheduling, not the set of mutants;
+it does not filter classes, methods or mutation operators.
+
+Nightly retains HTML/XML mutation reports even when the threshold fails. Use the
+reports to distinguish surviving or uncovered mutants from timeout detections;
+repeated minion timeout warnings alone are not the final gate result.
+
 ## Optional gates
 
 All of the following are excluded from `check`; run them explicitly.

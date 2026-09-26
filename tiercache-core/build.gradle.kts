@@ -267,3 +267,6 @@ tasks.register<JavaExec>("sharedL1Benchmark") {
         "-jvmArgs", "-Xms512m -Xmx512m -XX:+UseG1GC")
     providers.gradleProperty("sharedL1.profiler").orNull?.let { args("-prof", it) }
 }
+
+// Shared scheduling for full mutation runs.
+apply(from = rootProject.file("gradle/pitest-execution.gradle"))
