@@ -25,7 +25,7 @@ The cache is eventually consistent by design; no strong-consistency guarantees a
 
 ```kotlin
 // build.gradle.kts
-implementation("io.github.cramen:tiercache-spring-boot-starter:2.0.0")
+implementation("io.github.cramen:tiercache-spring-boot-starter:2.1.0")
 ```
 
 ```yaml
@@ -41,7 +41,7 @@ The starter replaces the standard cache manager: `@Cacheable` / `@CachePut` / `@
 
 ```kotlin
 // build.gradle.kts
-implementation("io.github.cramen:tiercache-micronaut:2.0.0")
+implementation("io.github.cramen:tiercache-micronaut:2.1.0")
 ```
 
 ```yaml
@@ -57,8 +57,8 @@ The module replaces Micronaut's `DefaultCacheManager`: `@Cacheable` / `@CachePut
 
 ```kotlin
 // build.gradle.kts
-implementation("io.github.cramen:tiercache-core:2.0.0")
-implementation("io.github.cramen:tiercache-transport-redis:2.0.0")
+implementation("io.github.cramen:tiercache-core:2.1.0")
+implementation("io.github.cramen:tiercache-transport-redis:2.1.0")
 ```
 
 ```java

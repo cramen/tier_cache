@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-09-26
+
+### Changed
+
+- Reduced shared-monitor contention for read-only L1 freshness checks, atomic access-expiry refresh and CLOSED circuit-breaker admission while preserving entry identity, retention floors and breaker epoch accounting.
+- Async singleflight followers no longer occupy API workers while waiting for the leader. Cancellation, completion and shutdown release follower registrations.
+- Pub/Sub invalidations now use bounded, ordered per-cache queues over a shared worker pool. Message, encoded-byte and recovery attachment budgets prevent unbounded retention; overflow triggers explicit gap recovery. Spring and Micronaut expose the dispatch limits and Micrometer reports receiver pressure.
+- Journal replay applies events in bounded slices, allowing other recovery work to progress between slices.
+- User documentation is separated from maintainer procedures; the documentation index links configuration, recovery, observability and integration guides.
+
+### Fixed
+
+- Successfully committed remote writes preserve local coherence even when invalidation barriers race with local publication. Rejected writes cannot overwrite the winning value in L1.
+- Cache registration waits for invalidation readiness, and dispatch overflow remains visibly pending until verified replay or conservative clear restores a safe baseline.
+
+### Validation
+
+- Virtual-thread checks separate cold-start diagnostics from the strict steady-state gate on Java 21 and 25.
+- Lock-provider shutdown tests observe the provider's owned executor termination instead of unrelated JVM thread counts.
+- Six-instance tests exercised Sentinel failover, Redis outages, instance isolation and restart, Pub/Sub reconnect and source failures. Follow-up checks converged on all instances; transient stale reads during Redis failures remain possible under the documented eventual-consistency contract.
+
 ## [2.0.0] - 2026-09-23
 
 ### Changed

@@ -7,6 +7,25 @@ target versions.
 
 For the full list of additions and fixes, see [CHANGELOG.md](CHANGELOG.md).
 
+## 2.1.0: bounded invalidation dispatch and concurrency improvements
+
+The Redis v2 keyspace and value format are unchanged. No data migration is
+required when upgrading from 2.0.0.
+
+Pub/Sub delivery now has shared per-transport limits: two workers, 1024 pending
+messages and 16 MiB of retained encoded frames by default. Overflow pauses the
+affected cache lane until journal replay or conservative clear establishes a safe
+baseline. Sustained overload can keep recovery pending. Review the
+[dispatch settings](docs/configuration.md#pubsub-receiver-dispatch) and
+[receiver-pressure metrics](docs/observability.md#pubsub-receiver-pressure).
+Custom invalidation handlers must complete their readiness/recovery stages and
+avoid blocking on registration of their own lane.
+
+Custom LocalCache implementations retain the compatible freshness fallback.
+The built-in Caffeine implementation supports the optional atomic freshness-read
+extension for access expiry. Async singleflight and breaker optimizations preserve
+the public cache contracts; acknowledged-write races now preserve L1 coherence.
+
 ## 2.0.0: observable invalidation publication
 
 The void transport method remains available; legacy implementations adapt to
