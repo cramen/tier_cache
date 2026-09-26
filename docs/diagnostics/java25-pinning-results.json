@@ -1,0 +1,87 @@
+[
+  {
+    "recording": "vt-cold-2.jfr",
+    "events": 48,
+    "productStackEvents": 45,
+    "maxDurationMs": 6.732792,
+    "aggregateDurationMs": 52.348043000000004,
+    "reasons": {
+      "Freeze or preempt failed (2)": 48
+    }
+  },
+  {
+    "recording": "vt-cold-3.jfr",
+    "events": 44,
+    "productStackEvents": 43,
+    "maxDurationMs": 2.539792,
+    "aggregateDurationMs": 17.245206,
+    "reasons": {
+      "Freeze or preempt failed (2)": 37,
+      "Waited for initialization of io.tiercache.internal.DefaultTierCache$FreshnessSnapshot by another thread": 1,
+      "Waited for initialization of io.tiercache.internal.DefaultTierCache$L1Freshness by another thread": 2,
+      "Waited for initialization of io.tiercache.spi.CacheMetricsListener$Outcome by another thread": 1,
+      "Waited for initialization of io.tiercache.internal.LoadClaim$Kind by another thread": 1,
+      "Waited for initialization of io.tiercache.internal.caffeine.cache.RemovalCause by another thread": 2
+    }
+  },
+  {
+    "recording": "vt-cold-4.jfr",
+    "events": 26,
+    "productStackEvents": 26,
+    "maxDurationMs": 9.303959,
+    "aggregateDurationMs": 24.950625000000002,
+    "reasons": {
+      "Freeze or preempt failed (2)": 22,
+      "Waited for initialization of io.tiercache.internal.DefaultTierCache$L1Freshness by another thread": 1,
+      "Waited for initialization of io.tiercache.internal.LoadClaim by another thread": 1,
+      "Waited for initialization of io.tiercache.internal.LoadClaim$Kind by another thread": 2
+    }
+  },
+  {
+    "recording": "vt-cold.jfr",
+    "events": 66,
+    "productStackEvents": 63,
+    "maxDurationMs": 4.636165999999999,
+    "aggregateDurationMs": 42.186043,
+    "reasons": {
+      "Freeze or preempt failed (2)": 46,
+      "Waited for initialization of io.tiercache.internal.DefaultTierCache$L1Freshness by another thread": 8,
+      "Waited for initialization of io.tiercache.spi.CacheMetricsListener$Outcome by another thread": 2,
+      "Waited for initialization of io.tiercache.spi.CacheMetricsListener$Level by another thread": 1,
+      "VM call to io.tiercache.internal.caffeine.cache.RemovalCause.<clinit> on stack": 2,
+      "Waited for initialization of io.tiercache.internal.caffeine.cache.RemovalCause by another thread": 7
+    }
+  },
+  {
+    "recording": "vt-warm-1.jfr",
+    "events": 0,
+    "productStackEvents": 0,
+    "maxDurationMs": 0,
+    "aggregateDurationMs": 0,
+    "reasons": {}
+  },
+  {
+    "recording": "vt-warm-2.jfr",
+    "events": 0,
+    "productStackEvents": 0,
+    "maxDurationMs": 0,
+    "aggregateDurationMs": 0,
+    "reasons": {}
+  },
+  {
+    "recording": "vt-warm-3.jfr",
+    "events": 0,
+    "productStackEvents": 0,
+    "maxDurationMs": 0,
+    "aggregateDurationMs": 0,
+    "reasons": {}
+  },
+  {
+    "recording": "vt-warm-4.jfr",
+    "events": 0,
+    "productStackEvents": 0,
+    "maxDurationMs": 0,
+    "aggregateDurationMs": 0,
+    "reasons": {}
+  }
+]

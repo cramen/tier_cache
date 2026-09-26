@@ -566,6 +566,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         // Write order: L2 first, then L1, then publish. Overwrites any marker.
         long g0 = l1Generation.get();
         Version version = nextVersion();
+        StoredEntry<V> previous = versionlessEntryBeforeWrite(key, version);
         StoredEntry<V> entry = StoredEntry.ofValue(value, version);
         Boolean stored = l2ConditionalPut(key, entry, settings.l2Ttl(), version != null);
         if (stored == null) {
@@ -583,7 +584,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
             }
             return;
         }
-        warmL1(key, entry, g0);
+        commitAcknowledgedWrite(key, entry, null, g0, previous);
         publishStore(key, entry, version);
     }
 
@@ -592,6 +593,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         // Atomic at L2; L1 warm-up and publish only for the winner.
         long g0 = l1Generation.get();
         Version version = nextVersion();
+        StoredEntry<V> previous = versionlessEntryBeforeWrite(key, version);
         Boolean won = l2SetIfAbsent(key, StoredEntry.ofValue(value, version), settings.l2Ttl());
         if (won == null) {
             // Degraded: per-instance atomicity on L1 only — the winner gets
@@ -611,7 +613,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         }
         if (won) {
             StoredEntry<V> stored = StoredEntry.ofValue(value, version);
-            warmL1(key, stored, g0);
+            commitAcknowledgedWrite(key, stored, null, g0, previous);
             publishStore(key, stored, version);
         }
         return won;
@@ -666,6 +668,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
         }
         long g0 = l1Generation.get();
         Version version = nextVersion();
+        StoredEntry<V> previous = versionlessEntryBeforeWrite(key, version);
         StoredEntry<V> entry = StoredEntry.ofValue(value, version);
         if (breaker != null && breaker.isOpen()) {
             warmL1(key, entry, g0);
@@ -690,7 +693,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
             }
             return;
         }
-        warmL1(key, entry, g0);
+        commitAcknowledgedWrite(key, entry, null, g0, previous);
         publishStore(key, entry, version);
     }
 
@@ -852,6 +855,34 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
                     degradationStaleEnabled ? ttl.plus(degradationStaleTtl) : ttl);
             l1Metas.put(key, barrier);
             return true;
+        }
+    }
+
+    /** Only versionless compatibility needs a pre-I/O identity snapshot. */
+    private StoredEntry<V> versionlessEntryBeforeWrite(K key, Version version) {
+        if (version != null) return null;
+        synchronized (l1LockFor(key)) { return l1.get(key); }
+    }
+
+    /**
+     * A remote commit remains successful even if a local fill is fenced.
+     * In that case discard only an older retained value, preserving newer
+     * values and every surviving barrier. Optional read/degraded fills do
+     * not use this policy.
+     */
+    private void commitAcknowledgedWrite(K key, StoredEntry<V> entry, Duration ttlOverride,
+            long generationAtStart, StoredEntry<V> previous) {
+        Duration ttl = ttlOverride != null ? ttlOverride
+                : jitter.apply(settings.l1ExpireAfterWrite(), settings.jitterAmplitude());
+        synchronized (l1LockFor(key)) {
+            if (commitL1(key, entry, ttl, generationAtStart)) return;
+            StoredEntry<V> current = l1.get(key);
+            if (current == null) return;
+            Version accepted = entry.version();
+            boolean older = accepted != null
+                    ? current.version() == null || current.version().compareTo(accepted) < 0
+                    : current == previous;
+            if (older) l1.evict(key); // never evictLocal: it also forgets protection
         }
     }
 
@@ -1354,6 +1385,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
      */
     private StoredEntry<V> storeVersioned(K key, StoredEntry<V> entry, Duration l2Ttl,
             Version version, Duration l1TtlOverride, long generationAtStart) {
+        StoredEntry<V> previous = versionlessEntryBeforeWrite(key, version);
         Boolean stored = l2ConditionalPut(key, entry, l2Ttl, version != null);
         if (stored == null) {
             commitL1(key, entry, l1TtlOverride != null ? l1TtlOverride
@@ -1370,11 +1402,7 @@ public final class DefaultTierCache<K, V> implements TierCache<K, V>, Invalidati
             evictLocal(key);
             return null; // lost to a tombstone/absence
         }
-        if (l1TtlOverride != null) {
-            commitL1(key, entry, l1TtlOverride, generationAtStart);
-        } else {
-            warmL1(key, entry, generationAtStart);
-        }
+        commitAcknowledgedWrite(key, entry, l1TtlOverride, generationAtStart, previous);
         publishStore(key, entry, version);
         return entry;
     }

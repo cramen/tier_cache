@@ -1,0 +1,313 @@
+{
+  "baselineRevision": "7e566e7",
+  "candidate": "working tree for preserve-l1-coherence-after-committed-writes",
+  "baseline": {
+    "coreControlled": {
+      "tests": 2,
+      "failures": 2
+    },
+    "redisValkeyControlled": {
+      "tests": 2,
+      "failures": 2
+    },
+    "replacementOnlyControl": {
+      "tests": 2,
+      "failures": 1
+    }
+  },
+  "java17Build": "passed",
+  "java17": {
+    "core": {
+      "tests": 471,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "invalidation": {
+      "tests": 80,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "transport-redis": {
+      "tests": 195,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "micrometer": {
+      "tests": 26,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "micronaut": {
+      "tests": 47,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "spring-boot-starter": {
+      "tests": 57,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "kotlin": {
+      "tests": 25,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "reactor": {
+      "tests": 13,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "tck": {
+      "tests": 60,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "additionalRuntimes": [
+    {
+      "jdk": 21,
+      "exitCode": 0,
+      "modules": {
+        "core": {
+          "tests": 471,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "invalidation": {
+          "tests": 80,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "transport-redis": {
+          "tests": 195,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        }
+      }
+    },
+    {
+      "jdk": 25,
+      "exitCode": 1,
+      "modules": {
+        "core": {
+          "tests": 471,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "invalidation": {
+          "tests": 80,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "transport-redis": {
+          "tests": 195,
+          "failures": 1,
+          "errors": 0,
+          "skipped": 0
+        }
+      }
+    }
+  ],
+  "coreBranchCoverage": {
+    "covered": 826,
+    "missed": 88,
+    "percent": 90.37
+  },
+  "dependencyAudit": "passed",
+  "convergence": {
+    "revision": "7e566e7f680086bfe56a93d51ffd3cd878d8a8c4",
+    "dirty": true,
+    "command": [
+      "./gradlew",
+      "-I",
+      "scripts/convergence-runtime.gradle",
+      ":tiercache-tck:test",
+      "--tests",
+      "*CommittedWriteConvergenceTest",
+      "--tests",
+      "*InvalidationRaceTest",
+      "--offline",
+      "--console=plain"
+    ],
+    "runs": [
+      {
+        "run": 1,
+        "exitCode": 0,
+        "passed": true,
+        "suites": [
+          {
+            "name": "io.tiercache.tck.ValkeyInvalidationRaceTest",
+            "tests": "1",
+            "failures": "0",
+            "errors": "0",
+            "skipped": "0",
+            "timestamp": "2026-09-26T13:46:32.305Z"
+          },
+          {
+            "name": "io.tiercache.tck.CommittedWriteConvergenceTest",
+            "tests": "4",
+            "failures": "0",
+            "errors": "0",
+            "skipped": "0",
+            "timestamp": "2026-09-26T13:46:27.080Z"
+          },
+          {
+            "name": "io.tiercache.tck.RedisInvalidationRaceTest",
+            "tests": "1",
+            "failures": "0",
+            "errors": "0",
+            "skipped": "0",
+            "timestamp": "2026-09-26T13:46:31.535Z"
+          }
+        ]
+      },
+      {
+        "run": 2,
+        "exitCode": 0,
+        "passed": true,
+        "suites": [
+          {
+            "name": "io.tiercache.tck.ValkeyInvalidationRaceTest",
+            "tests": "1",
+            "failures": "0",
+            "errors": "0",
+            "skipped": "0",
+            "timestamp": "2026-09-26T13:46:41.221Z"
+          },
+          {
+            "name": "io.tiercache.tck.CommittedWriteConvergenceTest",
+            "tests": "4",
+            "failures": "0",
+            "errors": "0",
+            "skipped": "0",
+            "timestamp": "2026-09-26T13:46:35.902Z"
+          },
+          {
+            "name": "io.tiercache.tck.RedisInvalidationRaceTest",
+            "tests": "1",
+            "failures": "0",
+            "errors": "0",
+            "skipped": "0",
+            "timestamp": "2026-09-26T13:46:40.415Z"
+          }
+        ]
+      },
+      {
+        "run": 3,
+        "exitCode": 0,
+        "passed": true,
+        "suites": [
+          {
+            "name": "io.tiercache.tck.ValkeyInvalidationRaceTest",
+            "tests": "1",
+            "failures": "0",
+            "errors": "0",
+            "skipped": "0",
+            "timestamp": "2026-09-26T13:46:49.176Z"
+          },
+          {
+            "name": "io.tiercache.tck.CommittedWriteConvergenceTest",
+            "tests": "4",
+            "failures": "0",
+            "errors": "0",
+            "skipped": "0",
+            "timestamp": "2026-09-26T13:46:44.644Z"
+          },
+          {
+            "name": "io.tiercache.tck.RedisInvalidationRaceTest",
+            "tests": "1",
+            "failures": "0",
+            "errors": "0",
+            "skipped": "0",
+            "timestamp": "2026-09-26T13:46:48.507Z"
+          }
+        ]
+      },
+      {
+        "run": 4,
+        "exitCode": 0,
+        "passed": true,
+        "suites": [
+          {
+            "name": "io.tiercache.tck.ValkeyInvalidationRaceTest",
+            "tests": "1",
+            "failures": "0",
+            "errors": "0",
+            "skipped": "0",
+            "timestamp": "2026-09-26T13:46:55.434Z"
+          },
+          {
+            "name": "io.tiercache.tck.CommittedWriteConvergenceTest",
+            "tests": "4",
+            "failures": "0",
+            "errors": "0",
+            "skipped": "0",
+            "timestamp": "2026-09-26T13:46:51.222Z"
+          },
+          {
+            "name": "io.tiercache.tck.RedisInvalidationRaceTest",
+            "tests": "1",
+            "failures": "0",
+            "errors": "0",
+            "skipped": "0",
+            "timestamp": "2026-09-26T13:46:54.766Z"
+          }
+        ]
+      },
+      {
+        "run": 5,
+        "exitCode": 0,
+        "passed": true,
+        "suites": [
+          {
+            "name": "io.tiercache.tck.ValkeyInvalidationRaceTest",
+            "tests": "1",
+            "failures": "0",
+            "errors": "0",
+            "skipped": "0",
+            "timestamp": "2026-09-26T13:47:02.449Z"
+          },
+          {
+            "name": "io.tiercache.tck.CommittedWriteConvergenceTest",
+            "tests": "4",
+            "failures": "0",
+            "errors": "0",
+            "skipped": "0",
+            "timestamp": "2026-09-26T13:46:57.501Z"
+          },
+          {
+            "name": "io.tiercache.tck.RedisInvalidationRaceTest",
+            "tests": "1",
+            "failures": "0",
+            "errors": "0",
+            "skipped": "0",
+            "timestamp": "2026-09-26T13:47:01.634Z"
+          }
+        ]
+      }
+    ],
+    "passed": true
+  },
+  "java25UnrelatedFailure": {
+    "test": "LettuceLockProviderCompensationTest.closeRacingSchedulerPublicationLeavesNoPool",
+    "observed": "round 29: expected 0 live compensation threads after close, observed 1",
+    "isolatedRetry": "passed",
+    "productionPathChanged": false,
+    "rootCauseConfirmed": false
+  },
+  "vtGate": "not rerun; separate planned change"
+}

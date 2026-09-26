@@ -62,7 +62,7 @@ abstract class AbstractInvalidationRaceTest extends AbstractInvalidationChaosTes
                 // All writes are done, so the L2 truth is stable; poll until the
                 // in-flight invalidation events have landed on both instances.
                 // A timeout here means a genuinely lost event, not a slow one.
-                waitFor(() -> {
+                try { waitFor(() -> {
                     for (String key : keys) {
                         String truth = l2Truth(a, key);
                         if (!java.util.Objects.equals(truth, a.cache.get(key))
@@ -71,12 +71,48 @@ abstract class AbstractInvalidationRaceTest extends AbstractInvalidationChaosTes
                         }
                     }
                     return true;
-                });
+                }); } catch (AssertionError failure) {
+                    try {
+                    System.err.println("Convergence failure: image=" + image() + ", seed=42, writes=" + futures.size());
+                    for (String key : keys) {
+                        for (Side side : List.of(a,b)) {
+                            var target=(io.tiercache.spi.InvalidationTarget)side.cache;
+                            System.err.println("key="+key+", side="+(side==a?"a":"b")
+                                    +", remote="+describe(side.l2.get(key))+", localVersion="+target.versionOfL1Entry(key)
+                                    +", generation="+diagnosticField(side.cache,"l1Generation")
+                                    +", local="+diagnosticLocal(side,key)+", barrier="+diagnosticBarrier(side,key));
+                        }
+                    }
+                    for (var row : a.journal.readRange(CACHE,null)) System.err.println("journal="+row);
+                    } catch (Throwable diagnosticFailure) { failure.addSuppressed(diagnosticFailure); }
+                    throw failure;
+                }
             } finally {
                 a.close();
                 b.close();
             }
         }
+    }
+
+    private static String describe(io.tiercache.spi.StoredEntry<?> entry) {
+        return entry == null ? "absent" : "{value="+entry.value()+", marker="+entry.isNullMarker()
+                +", version="+entry.version()+", freshness="+entry.localFreshness()+"}";
+    }
+    private static Object diagnosticBarrier(Side side, String key) {
+        Object barriers=diagnosticField(side.cache,"l1Metas");
+        try { var m=barriers.getClass().getDeclaredMethod("get",Object.class); m.setAccessible(true); return m.invoke(barriers,key); }
+        catch (ReflectiveOperationException error) { return error.toString(); }
+    }
+
+    private static Object diagnosticField(Object object, String name) {
+        try { var f=object.getClass().getDeclaredField(name); f.setAccessible(true); return f.get(object); }
+        catch (ReflectiveOperationException error) { return error.toString(); }
+    }
+    @SuppressWarnings("unchecked")
+    private static Object diagnosticLocal(Side side, String key) {
+        Object local=diagnosticField(side.cache,"l1");
+        return local instanceof io.tiercache.spi.LocalCache<?,?>
+                ? describe(((io.tiercache.spi.LocalCache<String,String>)local).get(key)) : local;
     }
 
     private static void sleepQuietly(long millis) {

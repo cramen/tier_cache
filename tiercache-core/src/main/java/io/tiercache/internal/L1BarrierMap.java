@@ -52,7 +52,13 @@ final class L1BarrierMap<K> {
                 // call: the generation bump they drive is part of the
                 // commit's correctness, not a best-effort notification.
                 .executor(command -> command.run())
-                .<K, L1Meta>removalListener((key, value, cause) -> onProtection.run())
+                .<K, L1Meta>removalListener((key, value, cause) -> {
+                    // A monotonic replacement keeps protection; only actual
+                    // removal can make an older in-flight fill unsafe.
+                    if (cause != com.github.benmanes.caffeine.cache.RemovalCause.REPLACED) {
+                        onProtection.run();
+                    }
+                })
                 .build();
     }
 

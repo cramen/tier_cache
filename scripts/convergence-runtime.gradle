@@ -1,0 +1,6 @@
+// Each invocation launches fresh TCK test workers, even for unchanged inputs.
+allprojects {
+    if (name == 'tiercache-tck') plugins.withId('java') {
+        tasks.named('test') { outputs.upToDateWhen { false } }
+    }
+}
