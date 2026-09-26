@@ -28,7 +28,7 @@ Gradle (Kotlin DSL) multi-module build, Java 17 toolchain. Modules present: `tie
 - `./gradlew :tiercache-core:test` — core unit/contract tests.
 - `./gradlew :tiercache-tck:test` — TCK chaos tests (Testcontainers: stampede single- and multi-instance over real Redis).
 - `./gradlew :tiercache-tck:soakTest` — churn soak gate (memory ≤5% growth, bounded journal; default PT10M, override with `-Dtiercache.soak.duration=PT24H` for the full profile). Excluded from `check` and not run in CI (hosted runners cap job duration) — run it locally or on your own hardware before releases.
-- `./gradlew :tiercache-tck:vtStressTest` — virtual-thread validation (fresh-JVM cold-start diagnostic, 100k-VT steady-state zero product pinning, plus recovery/lock checks). Use `-PtiercacheVtJdk=21` or `25`; explicitly selected missing runtimes fail, implicit unavailable local runtime is a loud skip. See docs/implementation/virtual-thread-validation.md. Excluded from `check`.
+- `./gradlew :tiercache-tck:vtStressTest` — virtual-thread validation (fresh-JVM cold-start diagnostic, 100k-VT steady-state zero product pinning, plus recovery/lock checks). Use `-PtiercacheVtJdk=21` or `25`; explicitly selected missing runtimes fail, implicit unavailable local runtime is a loud skip. See maintenance/virtual-thread-validation.md. Excluded from `check`.
 - `./gradlew :tiercache-transport-redis:test` — transport contract suite against Redis 6.2 and Valkey containers (needs Docker).
 - `./gradlew :tiercache-spring-boot-starter:test` — Spring adapter, auto-config, and Spring Cache migration tests (no Docker needed).
 - `./gradlew :tiercache-kotlin:test` — Kotlin coroutines API tests (no Docker needed).
@@ -46,7 +46,7 @@ Gradle (Kotlin DSL) multi-module build, Java 17 toolchain. Modules present: `tie
 
 - `.github/workflows/ci.yml` — push to `main` and PRs. JDK matrix 17/21/25: the 17-leg runs the full `./gradlew build` (all tests, TCK, coverage gates); the 21/25 legs run a lean build (`-x :tiercache-tck:test`) plus `:tiercache-tck:vtStressTest`. TCK runs on the 17-leg only — it validates runtime behavior, not compiler compatibility, so tripling its wall time buys nothing. The 17-leg also publishes the CycloneDX `sbom` artifact. The `offline-build` job proves `build --offline` works on a primed cache (Docker tasks excluded — image pulls are outside the offline artifact-build scope).
 - `.github/workflows/nightly.yml` — scheduled (03:47 UTC) and manual (`workflow_dispatch`). Jobs: `pitest` (≥75% gate), `reproducible-build` (core shaded jar must be byte-identical across two independent checkouts), `cve-scan` (resolved SBOM completeness plus blocking unexcepted HIGH/CRITICAL acceptance), `native-smoke`, `benchmarks`, `jmh` (informational; hosted-runner numbers never gate). The soak gate is deliberately NOT in CI: hosted runners kill long jobs, so soak runs locally/on-premises via `./gradlew :tiercache-tck:soakTest`.
-- `.github/workflows/release-candidate.yml` — manual explicit ref/version dispatch. Trial permits development snapshots; final requires a matching stable version tag and clean checkout. Builds all nine publications including core fixtures and TCK tests, checks resolved SBOMs and CVEs, and signs/attests the complete checksum-manifest bundle. Final mode attaches evidence to an existing release without creating/publishing a release or uploading to Central. See docs/release-evidence.md.
+- `.github/workflows/release-candidate.yml` — manual explicit ref/version dispatch. Trial permits development snapshots; final requires a matching stable version tag and clean checkout. Builds all nine publications including core fixtures and TCK tests, checks resolved SBOMs and CVEs, and signs/attests the complete checksum-manifest bundle. Final mode attaches evidence to an existing release without creating/publishing a release or uploading to Central. See maintenance/release-evidence.md.
 - Blocking gates: build+tests+coverage (per push), PIT, reproducible-build (nightly), soak (local, before releases). Informational: JMH and benchmarks. Incomplete dependency evidence and unexcepted HIGH/CRITICAL findings reject release acceptance. A red nightly does not block merges but must be investigated the same day.
 - Dependency hygiene: Dependabot runs weekly for Gradle and GitHub Actions (grouped minor/patch PRs).
 - To rerun nightly manually: `gh workflow run nightly.yml`.
@@ -60,6 +60,13 @@ Gradle (Kotlin DSL) multi-module build, Java 17 toolchain. Modules present: `tie
 - Local native builds work if a GraalVM 25 toolchain is installed (`native-image` lives under `lib/svm/bin`, NBT probes it automatically): `./gradlew :examples:demo-spring:nativeCompile`.
 
 ## User documentation
+
+`docs/` contains end-user guides and deployable monitoring assets only; start at
+`docs/README.md`. Keep maintainer procedures in `maintenance/`. Run-specific
+benchmark results, diagnostic source copies, raw JSON/JFR/logs and acceptance
+reports belong in ignored build output or external evidence storage, not in
+`docs/`. The Grafana dashboard and alert rules are user-facing configuration
+assets and remain in `docs/grafana/`.
 
 - `README.md` — front page: features, quick starts (Spring Boot and programmatic), requirements, docs index.
 - `docs/configuration.md` — full configuration reference (every core knob and starter property, defaults, invariants, validation).

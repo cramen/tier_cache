@@ -130,21 +130,27 @@ Everything else — builders, transport internals, metrics helpers, and any type
 
 ## Documentation
 
+Start with the [documentation index](docs/README.md).
+
 - [Configuration reference](docs/configuration.md)
 - [Migration from Spring Cache](docs/migration-from-spring-cache.md)
 - [Migration from Redisson](docs/migration-from-redisson.md)
 - [Migration from JetCache](docs/migration-from-jetcache.md)
 - [Troubleshooting](docs/troubleshooting.md)
-- [Release verification evidence](docs/release-evidence.md)
+- [Verifying release artifacts](docs/release-evidence.md)
 - [Sizing and TTL guidance](docs/sizing-and-ttl.md)
 - [Observability: metrics, tracing, dashboards](docs/observability.md)
+- [Recovery and fallback semantics](docs/recovery.md)
 - [Running the TCK chaos suite](docs/tck.md)
 - [Grafana dashboard and alert rules](docs/grafana/)
 - [Security policy and supply-chain verification](SECURITY.md)
 - [Demo application](examples/demo-spring/)
 
+## Development
+
+Maintainer build, validation and release procedures are collected in
+[maintenance](maintenance/README.md).
+
 ## License
 
 [Apache License 2.0](LICENSE)
-
-Recovery completion, HALF_OPEN admission and fallback limits are described in [the recovery guide](docs/recovery.md).

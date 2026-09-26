@@ -103,7 +103,8 @@ aggregate factories. See [observability scope](observability.md#coverage-and-dia
 ## Verification and release decisions
 
 Use the [platform matrix](compatibility.md) for tested combinations and the
-[release evidence procedure](release-evidence.md) for dependency acceptance.
+[release verification guide](release-evidence.md) to check artifact provenance
+and dependency evidence.
 A functional consumer PASS is not a clean application CVE scan; an enforced
 application BOM can override the library's patched defaults. A signed trial bundle
 is not a final release or proof that separately published Central bytes match.

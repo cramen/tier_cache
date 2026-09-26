@@ -8,7 +8,7 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 
-/** Standalone before/after harness; see docs/benchmarks/async-followers.md. */
+/** Standalone before/after harness for bounded asynchronous followers. */
 public final class AsyncFollowerBenchmark {
     private static final int WORKERS = 4;
     private final TierCacheFactory factory = TierCacheFactory.builder()

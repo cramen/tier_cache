@@ -92,25 +92,6 @@ inside its existing per-key commit protocol. Legacy target defaults preserve
 source compatibility but cannot invent atomic clear ordering for a custom
 implementation. No stored value or invalidation wire format changes here.
 
-## Verification
-
-Deterministic gates cover parked reads versus delivery, clear, repeated
-recovery and close; baseline-before-clear and failed-baseline outcomes;
-throwing observers; one-token-per-cache scheduling, fairness and backoff;
-and epoch-guarded breaker completion. The real Redis JFR case holds journal
-recovery while a virtual-thread HTTP request and registered reconnect
-callback must return. It then delays actual Redis reads and verifies no
-library-attributed `jdk.VirtualThreadPinned` events on JDK 21. Repeat on a
-newer JDK for functional ordering; lack of pinning on newer JVMs alone does
-not prove absence of monitor serialization.
-
-```sh
-./gradlew :tiercache-tck:vtStressTest --tests '*RecoveryJfrTest'
-./gradlew :tiercache-tck:vtStressTest --tests '*RecoveryJfrTest' -PtiercacheVtJdk=25
-```
-
-Recordings are retained in `tiercache-tck/build/reports/vt/jdk-*/independent/*/recovery.jfr`.
-
 The Streams transport consumes per-cache reset proofs through the compatible
 gap handler. A proof must still belong to the current registration/reset
 and may cover only IDs at or below its baseline. See [Streams pending and
@@ -141,4 +122,5 @@ Local catch-up proofs are separate from the Streams RESET_SAFE coverage proof an
 not change consumer ownership or ACK rules. Events never recorded in Redis cannot be
 reconstructed by this mechanism.
 
-The aggregate VT entry point also runs isolated cold-start and steady-state phases. Their policies and retained per-run JFR locations are documented in [VT validation](implementation/virtual-thread-validation.md).
+For validation scope and supported runtimes, see the [TCK guide](tck.md) and
+[virtual-thread compatibility notes](compatibility.md#virtual-threads).

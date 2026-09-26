@@ -1,125 +1,33 @@
-# Release dependency evidence
+# Verifying release artifacts
 
-Release acceptance checks the dependencies of the actual built publications. A
-filesystem scan of Kotlin DSL sources, dependency checksums, and a successful
-build are not substitutes for a vulnerability scan.
+Use the evidence attached to the release you intend to deploy. A checksum checks
+bytes, a signature authenticates evidence, provenance identifies a build, and a
+vulnerability scan evaluates dependencies against a dated database. None of
+these alone provides all the other guarantees.
 
-## What is covered
+## What to inspect
 
-`./gradlew releaseEvidenceInputs` builds the files declared by the Maven
-publications and generates an independent resolved-artifact inventory at
-`build/release-inputs/inventory.json`. It includes all nine library/TCK modules,
-main, sources and documentation JARs, core `unshaded`, `test-fixtures` and
-`test-fixtures-sources`, TCK `tests`, and matching POM/Gradle module metadata.
-It never collects arbitrary `build/libs/*.jar` leftovers.
+For releases that provide an evidence bundle, download `tiercache-evidence.tar.gz`,
+its `tiercache-evidence.sigstore.json` signature bundle and the corresponding
+GitHub attestation. The bundle contains a manifest, publication files, dependency
+inventories, CycloneDX SBOMs and scan results.
 
-Module CycloneDX SBOMs describe the selected runtime graph. Core additionally
-includes its fixture runtime; TCK includes its published compliance-suite runtime.
-Embedded Caffeine must be present in both the core inventory and SBOM, and the
-shaded class must be present in the main JAR. Demo applications are excluded from
-the release aggregate. Root coordinates are `io.github.cramen:tiercache:<version>`.
+Check that the manifest identifies the intended version and source commit and
+that it is final release evidence rather than a development trial. A trial or
+historical report does not certify another commit or a separately rebuilt artifact.
 
-Completeness checks compare every module's resolved group/name/version set with
-its SBOM, verify classifier coverage, check the aggregate, and compare publication
-metadata and artifact hashes. Dependencies selected by conflict resolution are
-recorded, not inferred from version catalog declarations. Optional application
-integrations and consumer BOM overrides still require scanning the final
-application's own graph.
+Publication coverage includes the library and TCK modules, their sources and
+documentation, published classifiers such as core test fixtures and TCK tests,
+and POM/Gradle metadata. Shaded Caffeine is included in dependency evidence.
+Demo applications and your application's final dependency graph are not covered
+by the library release scan.
 
-## Vulnerability acceptance
+## Verify the signature and provenance
 
-The scanner is Trivy 0.74.0, installed from an upstream archive using checked-in
-SHA-256 values. Updating the scanner requires reviewing that version and updating
-its hashes. The scanner and database versions, timestamps, database hash, exact
-SBOM hashes, raw JSON results and a readable summary are retained.
-
-Each scan first validates a synthetic SBOM containing Log4j 2.14.1 and requires
-recognition of CVE-2021-44228. No vulnerable JAR is added to runtime dependencies.
-That self-test result is separate from shipped dependency findings.
-
-Every module SBOM and the aggregate are scanned in SBOM mode. All package results
-are requested, and reported package identities are compared with SBOM contents.
-Missing/empty documents, omitted dependencies, unparsed scanner output, failed
-scanner processes, unavailable or expired databases and unexcepted HIGH/CRITICAL
-findings reject acceptance. Lower severities remain visible. Infrastructure
-failure is reported as an incomplete scan, never a clean result.
-
-`scripts/release/exceptions.json` starts empty. An exception requires exactly:
-
-```json
-{
-  "id": "CVE-YYYY-NNNN",
-  "package": "pkg:maven/exact.group/exact-artifact@exact-version",
-  "owner": "accountable-owner",
-  "reason": "Reviewed exposure, compensating control and remediation plan",
-  "expires": "YYYY-MM-DD"
-}
-```
-
-The expiration date must be strictly after the evaluation date in UTC. Wildcard,
-empty, duplicate, expired and unmatched entries fail validation. Exceptions apply
-only to the exact vulnerability/package/version and require maintainer review;
-they are not generated automatically when a scan fails.
-
-## Trial and final evidence
-
-The manual `release-candidate` workflow requires an explicit source ref, intended
-version and mode. Both modes resolve the ref to the checked-out commit and require
-the intended version to equal `gradle.properties`.
-
-- **trial** permits SNAPSHOT development and creates downloadable candidate
-  evidence without publishing anything or attaching assets to a release.
-- **final** requires a clean checkout, stable non-SNAPSHOT `X.Y.Z` version and
-  `refs/tags/vX.Y.Z`. It attaches the signed evidence bundle to an **existing**
-  GitHub release, including an existing draft. It creates/publishes no release
-  and performs no Maven Central upload. Existing assets are not overwritten.
-
-The current Redis keyspace v2 change still requires a major release and coordinated
-cold cutover; a successful scan does not waive that migration/version policy.
-
-CI uses a clean build with the selected ref's release settings. Staging creates a
-new directory and checks the scan input hashes again, re-evaluates findings and
-exceptions, and refuses expired database evidence. `manifest.json` records the
-immutable source commit, version, mode and each staged file's coordinate (where
-applicable) and SHA-256. A dirty local trial is explicitly labeled as such and is
-not evidence of a reproducible build of an unmodified commit.
-
-The complete bundle, including the manifest, binaries, classifiers, publication
-metadata, SBOMs, inventory and scan reports, is archived as
-`tiercache-evidence.tar.gz`. Cosign signs that archive; GitHub attests its exact
-bytes. Build/scanning jobs have read-only repository permissions, signing has
-OIDC/attestation permissions, and only the final release-attachment job can write
-release assets. Tool and job deadlines are finite.
-
-## Running locally
-
-Docker is not required for dependency evidence generation. The build requires
-its configured Java toolchain, Python 3.11+ and network access for scanner/database
-installation. The checked-in installer supports Linux x86_64 and macOS arm64.
-
-```bash
-python3 -m unittest discover -s scripts/release -p 'test_*.py' -v
-./gradlew releaseEvidenceInputs
-python3 scripts/release/install_trivy.py /tmp/tiercache-trivy
-python3 scripts/release/evidence.py scan \
-  --trivy /tmp/tiercache-trivy/trivy \
-  --output build/release-scan \
-  --exceptions scripts/release/exceptions.json
-python3 scripts/release/evidence.py stage \
-  --scan build/release-scan --output dist \
-  --ref <exact-commit> --version <version-from-gradle.properties> --mode trial
-python3 scripts/release/evidence.py verify dist
-```
-
-Use a fresh output directory for each attempt; the scanner and stager refuse to
-reuse an existing one. Failure diagnostics remain available. Local checks cannot
-exercise GitHub OIDC signing or prove that a GitHub workflow run succeeded.
-
-## Verifying downloaded and published bytes
-
-First verify the downloaded archive's signature and provenance. Specify the
-trusted **workflow ref** that dispatched the run; it is distinct from the selected
-source ref stored in the manifest.
+Run the following with Cosign and the GitHub CLI installed. Use the trusted
+workflow ref that actually dispatched the release evidence; it is distinct from
+the source commit recorded in the manifest. The `main` workflow ref below is an
+example, not a reason to trust an unexpected signer.
 
 ```bash
 cosign verify-blob \
@@ -128,40 +36,45 @@ cosign verify-blob \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
   tiercache-evidence.tar.gz
 gh attestation verify tiercache-evidence.tar.gz --repo cramen/tier_cache
+```
+
+Then use the verification script from a checkout of the matching TierCache
+release. Run these commands from that checkout with Python 3.11+ and the downloaded
+archive in the current directory:
+
+```bash
 mkdir verified-evidence
 tar -xzf tiercache-evidence.tar.gz -C verified-evidence
 python3 scripts/release/evidence.py verify verified-evidence
 ```
 
-Check `manifest.json` for the intended source commit/version and accepted scan.
-Final bundles and signatures are retained as release assets, rather than relying
-only on the 90-day workflow artifact. Trial artifacts are not release acceptance.
+Use a new extraction directory. Inspect `manifest.json` for the expected commit,
+version and scan acceptance; do not rely only on a successful command exit.
 
-If the maintainer separately builds/publishes to Central, download all matching
-publication files (JARs/classifiers, POM and `.module`) into a directory, then run:
+## Compare Maven Central downloads
+
+If artifacts were built separately for publication, their version strings alone
+do not establish that the candidate evidence covers them. Download the matching
+publication files, including classifiers, POMs and `.module` metadata, then compare:
 
 ```bash
 python3 scripts/release/evidence.py compare-published verified-evidence downloaded-central-files
 ```
 
-Missing or differing bytes fail verification. RC provenance does not automatically
-cover separately rebuilt Central artifacts, even if version strings match.
-Checksums bind bytes, signatures authenticate evidence, provenance describes the
-build invocation, and the CVE scan evaluates a particular dependency graph against
-a dated database. None alone proves the others or guarantees no future CVEs.
+Missing or different bytes fail verification. An attestation of candidate bytes
+does not automatically attest a separately rebuilt Central artifact.
 
+## Interpret dependency results
 
-## Recorded trial evidence — 2026-09-22
+Read the scan timestamp, database identity, findings and reviewed exceptions.
+An incomplete scan is not a clean result. Release acceptance rejects incomplete
+evidence and unexcepted HIGH/CRITICAL findings; lower severities and any exceptions
+remain relevant to your deployment.
 
-[Trial run 35773803950](https://github.com/cramen/tier_cache/actions/runs/35773803950)
-on commit `ad364b4893ccc9d435abd6b194665e5d4da6fd22` passed clean build,
-SBOM completeness, the scanner self-test, dependency acceptance, staging,
-Cosign signing and GitHub attestation. Independent attestation verification and
-all 90 manifest-file checks passed, including 49 publication files and ten SBOMs.
-The dated scan had no HIGH/CRITICAL findings, four MEDIUM findings and no exceptions.
+A Spring BOM or other dependency constraints can select different Lettuce, Netty
+or framework versions. Scan the final resolved application graph as well, and
+check the [platform matrix](compatibility.md) for tested combinations and limits.
+No dated scan guarantees the absence of future vulnerabilities.
 
-This was a `1.5.0-SNAPSHOT` trial. Release attachment was skipped and no Central
-publication occurred. It does not certify later commits, final-mode release upload,
-or a consumer graph changed by an enforced BOM. See [tested consumers and their
-Netty override boundary](compatibility.md#spring-consumers). Generate fresh evidence
-for the actual release candidate; the Redis v2 major-release requirement remains.
+For how maintainers build, scan, sign and attach evidence, see the separate
+[release procedure](../maintenance/release-evidence.md).

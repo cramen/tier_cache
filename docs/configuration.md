@@ -291,8 +291,7 @@ only the currently present fresh lifetime, preserve the store-time physical floo
 and never reinsert an absent mapping. Repeated stale or unknown-metadata reads
 must not reset physical expiry. Caffeine uses absolute retained deadlines to
 preserve that rule even when an internal mapping operation invokes expiry-update
-logic. There is no new configuration switch. The measured contention/allocation
-trade-off is documented in [atomic access refresh](benchmarks/atomic-access-refresh.md).
+logic. This provider capability does not add a configuration property.
 
 
 Trade-offs to weigh before enabling: entries live longer in L1 (memory
@@ -541,4 +540,5 @@ can exhaust it: further repairs remain visibly pending without new attachments.
 Application callbacks should finish promptly and must not block on registration
 of their own lane. See [registration readiness](resource-lifecycle.md#registration-readiness).
 
-See [the dispatcher measurements and six-instance recovery trial](benchmarks/pubsub-dispatch.md) for reproducible evidence and workload limits.
+Monitor dispatch reservations, rejections and recovery using the
+[receiver-pressure metrics](observability.md#pubsub-receiver-pressure).

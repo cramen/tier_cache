@@ -2,8 +2,6 @@
 
 The general VT gate now has two acceptance policies. Cold-start pinning is mandatory diagnostic evidence; its event count alone does not fail validation. Steady-state product-attributed pinning remains strictly zero. Both phases fail on wrong results, worker failures/cancellation, incomplete work, deadline or cleanup failure, invalid runtime selection, or unusable JFR evidence.
 
-This intentionally replaces the former combined startup/steady-state rule. It does not reclassify old failing reports as passes. The previous fixture seeded hot entries before recording, exercised other code paths for the first time during recording, ignored submitted futures and deleted its JFR in finally. The investigation and original recordings are summarized in [the diagnostic report](../diagnostics/convergence-and-java25-pinning.md).
-
 ## Running the complete gate
 
 ```sh
@@ -47,14 +45,3 @@ A product frame is conservative attribution, not proof that frame is the blockin
 ## Harness checks
 
 Java 17 tests cover attribution, positive event decoding, optional fields, zero-event evidence, missing/corrupt/mismatched recordings, missing stacks, disabled/nonzero-threshold settings, JSON escaping, exact worker totals, Errors, cancellation and deadline cleanup. VT phase-failure tests verify original worker failures retain recordings and a JVM mismatch cannot produce a pass or fake recording. Existing recovery and lock-lifecycle policies remain unchanged.
-
-## Acceptance evidence (2026-09-26)
-
-The repeated command completed three full invocations on OpenJDK 21 and three on the installed GraalVM JDK 25. Every invocation ran the two isolated phases, recovery/lock lifecycle checks and negative phase-reporting tests. All six invocations passed; all 12 measured phase JVMs were distinct. Every measured phase completed 100,000 workers and 2,000,000 checked operations with initially absent loader keys and positive loader execution counts.
-
-| JVM | Cold product events, three runs | Steady product events, three runs |
-|---|---|---|
-| OpenJDK 21 | 0 / 0 / 0 | 0 / 0 / 0 |
-| GraalVM JDK 25 | 75 / 46 / 63 | 0 / 0 / 0 |
-
-The Java 17 TCK build passed, including the harness unit tests. An explicit unavailable JDK 999 request failed with an actionable toolchain message and no fallback. The results apply to these runtimes/workloads and preserve the accepted distinction between startup diagnosis and steady-state zero pinning. See [structured results](virtual-thread-validation-results.json); raw JFR/JSON/XML are retained by the documented repeat command.
