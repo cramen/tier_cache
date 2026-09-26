@@ -370,22 +370,21 @@ class LettuceLockProviderCompensationTest {
                 seen.set(t);
             }
         });
-        acquirer.start();
-        if (!setEntered.await(5, TimeUnit.SECONDS)) {
-            throw new AssertionError("the acquire never reached the latched SET");
+        try {
+            acquirer.start();
+            assertTrue(setEntered.await(5, TimeUnit.SECONDS), "acquire reached SET");
+            provider.close();
+            releaseSet.countDown();
+            acquirer.join(5_000);
+            assertTrue(!acquirer.isAlive(), "acquirer must finish");
+            assertTrue(seen.get() instanceof RedisCommandTimeoutException,
+                    "the original timeout surfaces, got " + seen.get());
+            LockShutdownProbe.assertStopped(provider);
+            assertNull(LockShutdownProbe.scheduler(provider), "close prevented scheduler creation");
+        } finally {
+            releaseSet.countDown(); provider.close();
+            try { acquirer.join(5_000); } finally { connection.close(); }
         }
-        provider.close();
-        releaseSet.countDown();
-        acquirer.join(5_000);
-
-        assertTrue(seen.get() instanceof RedisCommandTimeoutException,
-                "the original timeout surfaces, got " + seen.get());
-        assertTrue(provider.isClosed());
-        long compensationThreads = Thread.getAllStackTraces().keySet().stream()
-                .filter(t -> t.getName().startsWith("tiercache-lock-compensation")).count();
-        assertEquals(0, compensationThreads,
-                "no scheduler may be created after close");
-        connection.close();
     }
 
     /**
@@ -422,45 +421,48 @@ class LettuceLockProviderCompensationTest {
             var failure = assertThrows(java.util.concurrent.ExecutionException.class,
                     () -> call.get(5, TimeUnit.SECONDS));
             org.junit.jupiter.api.Assertions.assertSame(original, failure.getCause());
-            assertEquals(0, provider.pendingCompensations());
-        } finally { resume.countDown(); provider.close(); pool.shutdownNow(); connection.close(); }
+            LockShutdownProbe.assertStopped(provider);
+        } finally { resume.countDown(); provider.close(); pool.shutdownNow();
+            try { assertTrue(pool.awaitTermination(5, TimeUnit.SECONDS)); }
+            finally { connection.close(); } }
     }
 
     /**
      * close() and scheduler creation share one lifecycle lock: a close
-     * racing the first ambiguous acquire can never leave a live pool.
+     * racing the first ambiguous acquire must retire its own pool and its
+     * workers must eventually terminate, independently of other providers.
      */
     @Test
     void closeRacingSchedulerPublicationLeavesNoPool() throws Exception {
         for (int round = 0; round < 30; round++) {
             var connection = client.connect();
+            var original = new RedisCommandTimeoutException("simulated client timeout");
             RedisCommands<String, String> failing = proxy(connection, (args, method) -> {
                 if ("set".equals(method.getName()) && args != null && args.length == 3
-                        && args[2] instanceof SetArgs) {
-                    throw new RedisCommandTimeoutException("simulated client timeout");
-                }
+                        && args[2] instanceof SetArgs) throw original;
                 return passthrough();
             });
-            LettuceLockProvider provider = new LettuceLockProvider(connectionTo(failing));
-            java.util.concurrent.CountDownLatch started = new java.util.concurrent.CountDownLatch(1);
+            var provider = new LettuceLockProvider(connectionTo(failing));
+            var started = new java.util.concurrent.CountDownLatch(1);
+            var outcome = new java.util.concurrent.atomic.AtomicReference<Throwable>();
             Thread acquirer = new Thread(() -> {
                 started.countDown();
-                try {
-                    provider.tryLock("race", Duration.ofSeconds(1));
-                } catch (Throwable ignored) {
-                    // expected: the simulated timeout
-                }
+                try { provider.tryLock("race", Duration.ofSeconds(1)); }
+                catch (Throwable failure) { outcome.set(failure); }
             });
-            acquirer.start();
-            started.await(5, TimeUnit.SECONDS);
-            provider.close();
-            acquirer.join(5_000);
-            long live = Thread.getAllStackTraces().keySet().stream()
-                    .filter(t -> t.getName().startsWith("tiercache-lock-compensation")
-                            && t.isAlive())
-                    .count();
-            assertEquals(0, live, "round " + round + ": no live pool after close");
-            connection.close();
+            try {
+                acquirer.start();
+                assertTrue(started.await(5, TimeUnit.SECONDS));
+                provider.close(); acquirer.join(5_000);
+                assertTrue(!acquirer.isAlive(), "round " + round + ": acquirer must finish");
+                assertTrue(outcome.get() == original
+                                || outcome.get() instanceof io.tiercache.internal.LockProviderClosedException,
+                        "unexpected acquisition outcome: " + outcome.get());
+                LockShutdownProbe.assertStopped(provider);
+            } finally {
+                provider.close();
+                try { acquirer.join(5_000); } finally { connection.close(); }
+            }
         }
     }
 
