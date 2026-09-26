@@ -1,0 +1,12 @@
+gradle.projectsEvaluated {
+    def module = gradle.rootProject.project(':tiercache-core')
+    module.tasks.register('exportClosedBreakerJmh') {
+        dependsOn module.tasks.named('jmhJar')
+        doLast {
+            def jar = module.tasks.named('jmhJar').get().archiveFile.get().asFile
+            def destination = new File(module.providers.gradleProperty('breakerClasspathFile').get())
+            destination.parentFile.mkdirs()
+            destination.text = ([jar] + module.configurations.jmhRuntimeClasspath.files.toList()).collect { it.absolutePath }.join(File.pathSeparator)
+        }
+    }
+}

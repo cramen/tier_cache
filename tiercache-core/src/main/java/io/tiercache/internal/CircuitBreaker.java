@@ -107,6 +107,8 @@ public final class CircuitBreaker {
     private int windowPos, windowCount, windowFailures;
     private enum State { CLOSED, OPEN, HALF_OPEN }
     private State state = State.CLOSED;
+    private record Admission(State state, long epoch) { }
+    private volatile Admission admission = new Admission(State.CLOSED, 0);
     private long openedAtNanos, epoch, recoveryDelayNanos;
     private int probesInFlight, probesSucceeded, recoveryFailures;
     private boolean recoveryPending;
@@ -143,6 +145,7 @@ public final class CircuitBreaker {
         probesInFlight = 0;
         probesSucceeded = 0;
         // An actual OPEN episode keeps its original probe wait.
+        publishAdmission();
     }
 
     private void advance() {
@@ -151,24 +154,39 @@ public final class CircuitBreaker {
             state = State.HALF_OPEN;
             probesInFlight = 0;
             probesSucceeded = 0;
+            publishAdmission();
         }
     }
 
+    /** Caller owns the monitor; this volatile write commits the visible transition. */
+    private void publishAdmission() { admission = new Admission(state, epoch); }
+
     /** Whether the breaker is currently OPEN, including its configured wait. */
-    public synchronized boolean isOpen() { advance(); return state == State.OPEN; }
+    public boolean isOpen() {
+        if (admission.state == State.CLOSED) return false;
+        synchronized (this) { advance(); return state == State.OPEN; }
+    }
 
     /** Current state; pending coherence recovery is HALF_OPEN, never CLOSED. */
-    public synchronized BreakerState state() {
-        advance();
-        return switch (state) {
-            case CLOSED -> BreakerState.CLOSED;
-            case OPEN -> BreakerState.OPEN;
-            case HALF_OPEN -> BreakerState.HALF_OPEN;
-        };
+    public BreakerState state() {
+        if (admission.state == State.CLOSED) return BreakerState.CLOSED;
+        synchronized (this) {
+            advance();
+            return switch (state) {
+                case CLOSED -> BreakerState.CLOSED;
+                case OPEN -> BreakerState.OPEN;
+                case HALF_OPEN -> BreakerState.HALF_OPEN;
+            };
+        }
     }
 
     /** Admits one remote attempt without waiting for recovery. */
-    public synchronized boolean tryAcquire() {
+    public boolean tryAcquire() {
+        if (admission.state == State.CLOSED) return true;
+        synchronized (this) { return acquireLocked(); }
+    }
+
+    private boolean acquireLocked() {
         advance();
         if (state == State.CLOSED) return true;
         if (state == State.OPEN || recoveryPending || probesInFlight >= config.probesToClose()) return false;
@@ -177,7 +195,11 @@ public final class CircuitBreaker {
     }
 
     /** Returns an epoch-bound, once-completable admission or null on rejection. */
-    public synchronized Permit tryAcquirePermit() { return tryAcquire() ? new Permit(epoch) : null; }
+    public Permit tryAcquirePermit() {
+        Admission observed = admission;
+        if (observed.state == State.CLOSED) return new Permit(observed.epoch);
+        synchronized (this) { return acquireLocked() ? new Permit(epoch) : null; }
+    }
 
     /** Once-only accounting, including neutral completion of unsupported calls. */
     public final class Permit {
@@ -293,6 +315,7 @@ public final class CircuitBreaker {
         boolean changed = state != State.OPEN;
         state = State.OPEN;
         openedAtNanos = clock.getAsLong();
+        publishAdmission();
         return changed ? listener::onOpen : null;
     }
 
@@ -301,6 +324,7 @@ public final class CircuitBreaker {
         state = State.CLOSED;
         recoveryPending = false;
         windowPos = windowCount = windowFailures = 0;
+        publishAdmission();
         return listener::onClose;
     }
 
