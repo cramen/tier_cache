@@ -23,6 +23,16 @@ jobs:
       - uses: gradle/actions/setup-gradle@v6.3.0
       - name: PIT mutation gate (>=75% on core and invalidation)
         run: ./gradlew pitest
+      - name: Retain mutation reports even when the gate fails
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mutation-reports
+          path: |
+            tiercache-core/build/reports/pitest/
+            tiercache-invalidation/build/reports/pitest/
+          if-no-files-found: warn
+          retention-days: 30
 
   jmh:
     runs-on: ubuntu-latest
